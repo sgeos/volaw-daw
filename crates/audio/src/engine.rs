@@ -1,3 +1,6 @@
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::channel::{clamp_volume, Channel};
 
 /// Number of synthesizer channels.
@@ -54,8 +57,8 @@ pub const NUM_CHANNELS: usize = 8;
 ///   the entire synth and pedal chain.
 /// - **MS-20 Voice**: Virtual Korg MS-20 synthesizer with VCOs, VCFs,
 ///   envelope generators, and VCA.
-/// - **Pedal Chain**: Virtual guitar pedal effects chain that processes
-///   the MS-20 output.
+/// - **Pedal Chain**: Virtual guitar pedal effects chain with 25 effect
+///   types across 5 categories (distortion, modulation, delay, special, utility).
 ///
 /// ## Default Configuration
 ///
@@ -68,6 +71,8 @@ pub struct AudioEngine {
     pub master_volume: f32,
     /// Audio sample rate in Hz.
     pub sample_rate: u32,
+    /// Scratch buffer for per-channel mono rendering.
+    mono_buffer: Vec<f32>,
 }
 
 impl AudioEngine {
@@ -89,6 +94,7 @@ impl AudioEngine {
             ],
             master_volume: 0.8,
             sample_rate,
+            mono_buffer: vec![0.0f32; 1024],
         }
     }
 
@@ -97,14 +103,55 @@ impl AudioEngine {
     /// Called by the platform audio callback at the configured sample rate.
     /// The buffer length must be even (pairs of left and right samples).
     ///
-    /// Current implementation writes silence. Future milestones will
-    /// synthesize audio from the eight channels, running each channel
-    /// through its signal chain (sample input, MS-20 voice, pedal chain)
-    /// and mixing into the stereo output according to per-channel
-    /// left and right volume levels.
+    /// Each enabled channel is processed through its signal chain (sample
+    /// input, MS-20 voice, pedal chain) and mixed into the stereo output
+    /// according to per-channel left and right volume levels. The master
+    /// volume is applied as a final scaling step.
     pub fn render_samples(&mut self, buffer: &mut [f32]) {
-        for sample in buffer.iter_mut() {
-            *sample = 0.0;
+        let num_frames = buffer.len() / 2;
+        if num_frames == 0 {
+            return;
+        }
+
+        // Zero the output buffer
+        for s in buffer.iter_mut() {
+            *s = 0.0;
+        }
+
+        // Ensure scratch buffer is large enough
+        if self.mono_buffer.len() < num_frames {
+            self.mono_buffer.resize(num_frames, 0.0);
+        }
+
+        let sample_rate = self.sample_rate;
+
+        // Process each channel and mix into stereo
+        for ch in &mut self.channels {
+            if !ch.enabled {
+                continue;
+            }
+
+            // Zero the mono scratch buffer for this channel
+            for s in self.mono_buffer[..num_frames].iter_mut() {
+                *s = 0.0;
+            }
+
+            // Run the channel signal chain
+            ch.process(&mut self.mono_buffer[..num_frames], sample_rate);
+
+            // Mix into stereo output with per-channel L/R volumes
+            let vol_l = ch.volume_left;
+            let vol_r = ch.volume_right;
+            for (i, &sample) in self.mono_buffer[..num_frames].iter().enumerate() {
+                buffer[i * 2] += sample * vol_l;
+                buffer[i * 2 + 1] += sample * vol_r;
+            }
+        }
+
+        // Apply master volume
+        let mv = self.master_volume;
+        for s in buffer.iter_mut() {
+            *s *= mv;
         }
     }
 
@@ -232,10 +279,11 @@ mod tests {
     }
 
     #[test]
-    fn render_samples_writes_silence() {
+    fn render_samples_writes_silence_with_stubs() {
         let mut engine = AudioEngine::new(48000);
         let mut buffer = [1.0f32; 64];
         engine.render_samples(&mut buffer);
+        // With synth stubs (all channels write silence), output should be zero
         for sample in &buffer {
             assert!(sample.abs() < f32::EPSILON);
         }
@@ -281,5 +329,22 @@ mod tests {
         let engine = AudioEngine::default();
         assert_eq!(engine.sample_rate, 48000);
         assert_eq!(engine.channels.len(), 8);
+    }
+
+    #[test]
+    fn render_empty_buffer() {
+        let mut engine = AudioEngine::new(48000);
+        let mut buffer = [];
+        engine.render_samples(&mut buffer);
+        // No panic on empty buffer
+    }
+
+    #[test]
+    fn render_grows_mono_buffer() {
+        let mut engine = AudioEngine::new(48000);
+        // Render a large buffer to trigger mono_buffer growth
+        let mut buffer = alloc::vec![0.0f32; 4096];
+        engine.render_samples(&mut buffer);
+        assert!(engine.mono_buffer.len() >= 2048);
     }
 }

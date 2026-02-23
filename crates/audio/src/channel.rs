@@ -86,6 +86,22 @@ impl Channel {
         Self::new(volume, volume)
     }
 
+    /// Process the full signal chain into a mono buffer.
+    ///
+    /// Runs sample input, MS-20 synth, then pedal chain in sequence.
+    /// When the channel is disabled, the buffer is zeroed.
+    pub fn process(&mut self, buffer: &mut [f32], sample_rate: u32) {
+        if !self.enabled {
+            for s in buffer.iter_mut() {
+                *s = 0.0;
+            }
+            return;
+        }
+        self.sample_in.process(buffer);
+        self.synth.process(buffer);
+        self.pedals.process(buffer, sample_rate);
+    }
+
     /// Set the left volume. Clamped to 0.0 to 1.0.
     pub fn set_volume_left(&mut self, volume: f32) {
         self.volume_left = clamp_volume(volume);
@@ -180,5 +196,29 @@ mod tests {
         assert!(!ch.synth.external_input_enabled);
         assert!(!ch.sample_in.active);
         assert!(!ch.pedals.active);
+    }
+
+    #[test]
+    fn disabled_channel_zeros_buffer() {
+        let mut ch = Channel::center(0.5);
+        ch.enabled = false;
+        let mut buffer = [1.0f32; 16];
+        ch.process(&mut buffer, 48000);
+        for s in &buffer {
+            assert!(s.abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn enabled_channel_runs_chain() {
+        let mut ch = Channel::center(0.5);
+        ch.enabled = true;
+        // With stubs (synth writes silence, pedals passthrough),
+        // the output should be silence
+        let mut buffer = [0.5f32; 16];
+        ch.process(&mut buffer, 48000);
+        for s in &buffer {
+            assert!(s.abs() < f32::EPSILON, "Synth stub should write silence");
+        }
     }
 }

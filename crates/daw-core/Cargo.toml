@@ -1,0 +1,11 @@
+[package]
+name = "daw-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+audio = { workspace = true }
+serde = { workspace = true }
+libm = "0.2"
+
+[dev-dependencies]

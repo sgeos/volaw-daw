@@ -1,0 +1,16 @@
+[package]
+name = "daw"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "daw"
+path = "src/main.rs"
+
+[dependencies]
+daw-core = { workspace = true }
+audio = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+sdl3-sys = { version = "0.6", features = ["build-from-source"] }
+sdl3-ttf-sys = { version = "0.6", features = ["build-from-source"] }

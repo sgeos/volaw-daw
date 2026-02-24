@@ -10,22 +10,38 @@ use crate::patch::{ModRoutingConfig, PatchConfig};
 /// architecture (dual VCO, dual EG, HPF, LPF, modulation matrix).
 pub fn preset(name: &str) -> Option<PatchConfig> {
     match name {
+        "accordion" => Some(accordion()),
         "bass" => Some(bass()),
-        "lead" => Some(lead()),
-        "pad" => Some(pad()),
-        "strings" => Some(strings()),
-        "organ" => Some(organ()),
-        "brass" => Some(brass()),
-        "pluck" => Some(pluck()),
         "bell" => Some(bell()),
-        "flute" => Some(flute()),
-        "piano" => Some(piano()),
-        "kick" => Some(kick()),
-        "snare" => Some(snare()),
-        "hihat" => Some(hihat()),
-        "synth_lead" => Some(synth_lead()),
-        "synth_bass" => Some(synth_bass()),
+        "brass" => Some(brass()),
+        "cello" => Some(cello()),
         "choir" => Some(choir()),
+        "clap" => Some(clap()),
+        "clarinet" => Some(clarinet()),
+        "clavinet" => Some(clavinet()),
+        "cowbell" => Some(cowbell()),
+        "cymbal" => Some(cymbal()),
+        "flute" => Some(flute()),
+        "harp" => Some(harp()),
+        "harpsichord" => Some(harpsichord()),
+        "harmonica" => Some(harmonica()),
+        "hihat" => Some(hihat()),
+        "kick" => Some(kick()),
+        "lead" => Some(lead()),
+        "marimba" => Some(marimba()),
+        "oboe" => Some(oboe()),
+        "organ" => Some(organ()),
+        "pad" => Some(pad()),
+        "piano" => Some(piano()),
+        "pluck" => Some(pluck()),
+        "sitar" => Some(sitar()),
+        "snare" => Some(snare()),
+        "strings" => Some(strings()),
+        "synth_bass" => Some(synth_bass()),
+        "synth_lead" => Some(synth_lead()),
+        "tom" => Some(tom()),
+        "trumpet" => Some(trumpet()),
+        "vibraphone" => Some(vibraphone()),
         _ => None,
     }
 }
@@ -33,22 +49,38 @@ pub fn preset(name: &str) -> Option<PatchConfig> {
 /// List all available preset names.
 pub fn preset_names() -> &'static [&'static str] {
     &[
+        "accordion",
         "bass",
         "bell",
         "brass",
+        "cello",
         "choir",
+        "clap",
+        "clarinet",
+        "clavinet",
+        "cowbell",
+        "cymbal",
         "flute",
+        "harmonica",
+        "harp",
+        "harpsichord",
         "hihat",
         "kick",
         "lead",
+        "marimba",
+        "oboe",
         "organ",
         "pad",
         "piano",
         "pluck",
+        "sitar",
         "snare",
         "strings",
         "synth_bass",
         "synth_lead",
+        "tom",
+        "trumpet",
+        "vibraphone",
     ]
 }
 
@@ -415,6 +447,415 @@ fn synth_bass() -> PatchConfig {
             source: String::from("eg2"),
             dest: String::from("lpf_cutoff"),
             depth: 0.7,
+        }],
+        ..PatchConfig::default()
+    }
+}
+
+/// Accordion: pulse wave with slight vibrato, full sustain.
+fn accordion() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Accordion"),
+        vco1_waveform: String::from("square"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 0.7,
+        vco1_pulse_width: 0.4,
+        vco2_waveform: String::from("square"),
+        vco2_scale: String::from("8'"),
+        vco2_level: 0.5,
+        vco2_pulse_width: 0.6,
+        vco2_pitch_fine: 0.04,
+        vco_mix: 0.5,
+        eg2_attack: 0.05,
+        eg2_decay: 0.05,
+        eg2_sustain: 0.95,
+        eg2_release: 0.1,
+        lpf_cutoff: 3500.0,
+        lpf_resonance: 0.4,
+        lfo_rate: 5.5,
+        mod_routings: vec![ModRoutingConfig {
+            source: String::from("lfo"),
+            dest: String::from("vco1_pitch"),
+            depth: 0.008,
+        }],
+        ..PatchConfig::default()
+    }
+}
+
+/// Cello: low sawtooth with slow attack and vibrato.
+fn cello() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Cello"),
+        vco1_waveform: String::from("sawtooth"),
+        vco1_scale: String::from("16'"),
+        vco1_level: 0.7,
+        vco2_waveform: String::from("sawtooth"),
+        vco2_scale: String::from("16'"),
+        vco2_level: 0.5,
+        vco2_pitch_fine: 0.05,
+        vco_mix: 0.5,
+        eg2_attack: 0.4,
+        eg2_decay: 0.2,
+        eg2_sustain: 0.85,
+        eg2_release: 0.6,
+        lpf_cutoff: 2500.0,
+        lpf_resonance: 0.5,
+        lfo_rate: 5.0,
+        mod_routings: vec![ModRoutingConfig {
+            source: String::from("lfo"),
+            dest: String::from("vco1_pitch"),
+            depth: 0.012,
+        }],
+        ..PatchConfig::default()
+    }
+}
+
+/// Hand clap: noise with quick double-strike envelope.
+fn clap() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Clap"),
+        vco1_waveform: String::from("noise"),
+        vco1_level: 1.0,
+        vco2_level: 0.0,
+        eg2_attack: 0.001,
+        eg2_decay: 0.08,
+        eg2_sustain: 0.0,
+        eg2_release: 0.12,
+        hpf_cutoff: 800.0,
+        lpf_cutoff: 6000.0,
+        lpf_resonance: 0.8,
+        ..PatchConfig::default()
+    }
+}
+
+/// Clarinet: square wave with odd harmonics, warm filter.
+fn clarinet() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Clarinet"),
+        vco1_waveform: String::from("square"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 0.9,
+        vco1_pulse_width: 0.5,
+        vco2_waveform: String::from("noise"),
+        vco2_level: 0.03,
+        vco_mix: 0.9,
+        eg2_attack: 0.06,
+        eg2_decay: 0.1,
+        eg2_sustain: 0.8,
+        eg2_release: 0.15,
+        lpf_cutoff: 2200.0,
+        lpf_resonance: 0.6,
+        lfo_rate: 4.5,
+        mod_routings: vec![ModRoutingConfig {
+            source: String::from("lfo"),
+            dest: String::from("vco1_pitch"),
+            depth: 0.01,
+        }],
+        ..PatchConfig::default()
+    }
+}
+
+/// Clavinet: bright percussive pluck, funky character.
+fn clavinet() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Clavinet"),
+        vco1_waveform: String::from("square"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 0.9,
+        vco1_pulse_width: 0.35,
+        vco2_waveform: String::from("sawtooth"),
+        vco2_scale: String::from("8'"),
+        vco2_level: 0.3,
+        vco_mix: 0.7,
+        eg2_attack: 0.001,
+        eg2_decay: 0.5,
+        eg2_sustain: 0.1,
+        eg2_release: 0.15,
+        lpf_cutoff: 5500.0,
+        lpf_resonance: 1.8,
+        mod_routings: vec![ModRoutingConfig {
+            source: String::from("eg2"),
+            dest: String::from("lpf_cutoff"),
+            depth: 0.6,
+        }],
+        ..PatchConfig::default()
+    }
+}
+
+/// Cowbell: two tones via ring modulation, short decay.
+fn cowbell() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Cowbell"),
+        vco1_waveform: String::from("square"),
+        vco1_scale: String::from("4'"),
+        vco1_level: 0.8,
+        vco1_pulse_width: 0.5,
+        vco2_waveform: String::from("ring"),
+        vco2_scale: String::from("2'"),
+        vco2_level: 0.6,
+        vco_mix: 0.4,
+        eg2_attack: 0.001,
+        eg2_decay: 0.3,
+        eg2_sustain: 0.0,
+        eg2_release: 0.1,
+        hpf_cutoff: 500.0,
+        lpf_cutoff: 5000.0,
+        ..PatchConfig::default()
+    }
+}
+
+/// Cymbal: filtered noise with long decay and highpass.
+fn cymbal() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Cymbal"),
+        vco1_waveform: String::from("noise"),
+        vco1_level: 0.9,
+        vco2_waveform: String::from("ring"),
+        vco2_scale: String::from("2'"),
+        vco2_level: 0.3,
+        vco_mix: 0.7,
+        eg2_attack: 0.001,
+        eg2_decay: 1.5,
+        eg2_sustain: 0.0,
+        eg2_release: 1.0,
+        hpf_cutoff: 4000.0,
+        lpf_cutoff: 14000.0,
+        ..PatchConfig::default()
+    }
+}
+
+/// Harp: bright pluck with longer sustain and high cutoff.
+fn harp() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Harp"),
+        vco1_waveform: String::from("triangle"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 0.8,
+        vco2_waveform: String::from("sawtooth"),
+        vco2_scale: String::from("4'"),
+        vco2_level: 0.2,
+        vco_mix: 0.8,
+        eg2_attack: 0.001,
+        eg2_decay: 1.2,
+        eg2_sustain: 0.0,
+        eg2_release: 0.8,
+        lpf_cutoff: 6000.0,
+        lpf_resonance: 0.4,
+        mod_routings: vec![ModRoutingConfig {
+            source: String::from("eg2"),
+            dest: String::from("lpf_cutoff"),
+            depth: 0.5,
+        }],
+        ..PatchConfig::default()
+    }
+}
+
+/// Harpsichord: bright, thin, quick attack and decay.
+fn harpsichord() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Harpsichord"),
+        vco1_waveform: String::from("square"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 0.7,
+        vco1_pulse_width: 0.15,
+        vco2_waveform: String::from("square"),
+        vco2_scale: String::from("4'"),
+        vco2_level: 0.4,
+        vco2_pulse_width: 0.2,
+        vco_mix: 0.6,
+        eg2_attack: 0.001,
+        eg2_decay: 0.6,
+        eg2_sustain: 0.05,
+        eg2_release: 0.2,
+        lpf_cutoff: 7000.0,
+        lpf_resonance: 0.3,
+        ..PatchConfig::default()
+    }
+}
+
+/// Harmonica: square wave with breath noise.
+fn harmonica() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Harmonica"),
+        vco1_waveform: String::from("square"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 0.8,
+        vco1_pulse_width: 0.45,
+        vco2_waveform: String::from("noise"),
+        vco2_level: 0.08,
+        vco_mix: 0.85,
+        eg2_attack: 0.04,
+        eg2_decay: 0.1,
+        eg2_sustain: 0.75,
+        eg2_release: 0.1,
+        lpf_cutoff: 2800.0,
+        lpf_resonance: 0.7,
+        lfo_rate: 5.0,
+        mod_routings: vec![ModRoutingConfig {
+            source: String::from("lfo"),
+            dest: String::from("vco1_pitch"),
+            depth: 0.018,
+        }],
+        ..PatchConfig::default()
+    }
+}
+
+/// Marimba: sine with quick decay, warm character.
+fn marimba() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Marimba"),
+        vco1_waveform: String::from("sine"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 0.9,
+        vco2_waveform: String::from("triangle"),
+        vco2_scale: String::from("4'"),
+        vco2_level: 0.2,
+        vco_mix: 0.8,
+        eg2_attack: 0.001,
+        eg2_decay: 0.6,
+        eg2_sustain: 0.0,
+        eg2_release: 0.3,
+        lpf_cutoff: 4500.0,
+        lpf_resonance: 0.3,
+        ..PatchConfig::default()
+    }
+}
+
+/// Oboe: narrow pulse wave with vibrato, nasal character.
+fn oboe() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Oboe"),
+        vco1_waveform: String::from("square"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 0.9,
+        vco1_pulse_width: 0.2,
+        vco2_waveform: String::from("noise"),
+        vco2_level: 0.02,
+        vco_mix: 0.95,
+        eg2_attack: 0.08,
+        eg2_decay: 0.1,
+        eg2_sustain: 0.8,
+        eg2_release: 0.15,
+        lpf_cutoff: 2000.0,
+        lpf_resonance: 1.0,
+        lfo_rate: 5.5,
+        mod_routings: vec![ModRoutingConfig {
+            source: String::from("lfo"),
+            dest: String::from("vco1_pitch"),
+            depth: 0.012,
+        }],
+        ..PatchConfig::default()
+    }
+}
+
+/// Sitar: resonant pluck with high filter Q, twangy character.
+fn sitar() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Sitar"),
+        vco1_waveform: String::from("sawtooth"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 0.9,
+        vco2_waveform: String::from("square"),
+        vco2_scale: String::from("8'"),
+        vco2_level: 0.3,
+        vco2_pulse_width: 0.15,
+        vco_mix: 0.7,
+        eg2_attack: 0.001,
+        eg2_decay: 1.5,
+        eg2_sustain: 0.05,
+        eg2_release: 0.8,
+        lpf_cutoff: 3000.0,
+        lpf_resonance: 2.5,
+        mod_routings: vec![ModRoutingConfig {
+            source: String::from("eg2"),
+            dest: String::from("lpf_cutoff"),
+            depth: 0.9,
+        }],
+        ..PatchConfig::default()
+    }
+}
+
+/// Tom drum: sine with pitch sweep, medium decay.
+fn tom() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Tom"),
+        vco1_waveform: String::from("sine"),
+        vco1_scale: String::from("16'"),
+        vco1_level: 1.0,
+        vco2_level: 0.0,
+        eg2_attack: 0.001,
+        eg2_decay: 0.35,
+        eg2_sustain: 0.0,
+        eg2_release: 0.15,
+        lpf_cutoff: 800.0,
+        lpf_resonance: 0.6,
+        mod_routings: vec![ModRoutingConfig {
+            source: String::from("eg2"),
+            dest: String::from("vco1_pitch"),
+            depth: 0.5,
+        }],
+        ..PatchConfig::default()
+    }
+}
+
+/// Trumpet: bright sawtooth with pronounced filter sweep attack.
+fn trumpet() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Trumpet"),
+        vco1_waveform: String::from("sawtooth"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 1.0,
+        vco2_waveform: String::from("square"),
+        vco2_scale: String::from("8'"),
+        vco2_level: 0.2,
+        vco2_pulse_width: 0.4,
+        vco_mix: 0.8,
+        eg2_attack: 0.04,
+        eg2_decay: 0.1,
+        eg2_sustain: 0.85,
+        eg2_release: 0.15,
+        lpf_cutoff: 2000.0,
+        lpf_resonance: 0.6,
+        lfo_rate: 5.0,
+        mod_routings: vec![
+            ModRoutingConfig {
+                source: String::from("eg2"),
+                dest: String::from("lpf_cutoff"),
+                depth: 0.8,
+            },
+            ModRoutingConfig {
+                source: String::from("lfo"),
+                dest: String::from("vco1_pitch"),
+                depth: 0.008,
+            },
+        ],
+        ..PatchConfig::default()
+    }
+}
+
+/// Vibraphone: sine with slow tremolo, long sustain.
+fn vibraphone() -> PatchConfig {
+    PatchConfig {
+        name: String::from("Vibraphone"),
+        vco1_waveform: String::from("sine"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 0.9,
+        vco2_waveform: String::from("triangle"),
+        vco2_scale: String::from("8'"),
+        vco2_level: 0.15,
+        vco2_pitch_fine: 0.01,
+        vco_mix: 0.85,
+        eg2_attack: 0.001,
+        eg2_decay: 2.0,
+        eg2_sustain: 0.1,
+        eg2_release: 1.5,
+        lpf_cutoff: 5000.0,
+        lpf_resonance: 0.3,
+        lfo_rate: 4.5,
+        mod_routings: vec![ModRoutingConfig {
+            source: String::from("lfo"),
+            dest: String::from("vca_level"),
+            depth: 0.15,
         }],
         ..PatchConfig::default()
     }

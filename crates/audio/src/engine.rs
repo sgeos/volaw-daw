@@ -73,6 +73,10 @@ pub struct AudioEngine {
     pub sample_rate: u32,
     /// Scratch buffer for per-channel mono rendering.
     mono_buffer: Vec<f64>,
+    /// Scratch buffer for per-channel left stereo output.
+    left_buffer: Vec<f64>,
+    /// Scratch buffer for per-channel right stereo output.
+    right_buffer: Vec<f64>,
 }
 
 impl AudioEngine {
@@ -95,6 +99,8 @@ impl AudioEngine {
             master_volume: 0.8,
             sample_rate,
             mono_buffer: vec![0.0f64; 1024],
+            left_buffer: vec![0.0f64; 1024],
+            right_buffer: vec![0.0f64; 1024],
         }
     }
 
@@ -103,52 +109,69 @@ impl AudioEngine {
     /// Called by the platform audio callback at the configured sample rate.
     /// The buffer length must be even (pairs of left and right samples).
     ///
-    /// Each enabled channel is processed through its signal chain (sample
-    /// input, MS-20 voice, pedal chain) and mixed into the stereo output
-    /// according to per-channel left and right volume levels. The master
-    /// volume is applied as a final scaling step.
+    /// Each enabled channel is processed through its full signal chain:
+    /// sample input, MS-20 voice, pre-positional pedals (mono), positional
+    /// stage (mono to stereo), post-positional pedals (per speaker), and
+    /// volume trim. The master volume is applied as a final scaling step.
     pub fn render_samples(&mut self, buffer: &mut [f64]) {
         let num_frames = buffer.len() / 2;
         if num_frames == 0 {
             return;
         }
 
-        // Zero the output buffer
+        // Zero the output buffer.
         for s in buffer.iter_mut() {
             *s = 0.0;
         }
 
-        // Ensure scratch buffer is large enough
+        // Ensure scratch buffers are large enough.
         if self.mono_buffer.len() < num_frames {
             self.mono_buffer.resize(num_frames, 0.0);
+        }
+        if self.left_buffer.len() < num_frames {
+            self.left_buffer.resize(num_frames, 0.0);
+        }
+        if self.right_buffer.len() < num_frames {
+            self.right_buffer.resize(num_frames, 0.0);
         }
 
         let sample_rate = self.sample_rate;
 
-        // Process each channel and mix into stereo
+        // Process each channel through the full stereo signal chain.
         for ch in &mut self.channels {
             if !ch.enabled {
                 continue;
             }
 
-            // Zero the mono scratch buffer for this channel
+            // Zero the scratch buffers for this channel.
             for s in self.mono_buffer[..num_frames].iter_mut() {
                 *s = 0.0;
             }
+            for s in self.left_buffer[..num_frames].iter_mut() {
+                *s = 0.0;
+            }
+            for s in self.right_buffer[..num_frames].iter_mut() {
+                *s = 0.0;
+            }
 
-            // Run the channel signal chain
-            ch.process(&mut self.mono_buffer[..num_frames], sample_rate);
+            // Run the full stereo signal chain (mono stages, positional
+            // split, post-positional pedals, volume trim all applied
+            // inside Channel::process_stereo).
+            ch.process_stereo(
+                &mut self.mono_buffer[..num_frames],
+                &mut self.left_buffer[..num_frames],
+                &mut self.right_buffer[..num_frames],
+                sample_rate,
+            );
 
-            // Mix into stereo output with per-channel L/R volumes
-            let vol_l = ch.volume_left;
-            let vol_r = ch.volume_right;
-            for (i, &sample) in self.mono_buffer[..num_frames].iter().enumerate() {
-                buffer[i * 2] += sample * vol_l;
-                buffer[i * 2 + 1] += sample * vol_r;
+            // Mix channel stereo output into the interleaved output buffer.
+            for i in 0..num_frames {
+                buffer[i * 2] += self.left_buffer[i];
+                buffer[i * 2 + 1] += self.right_buffer[i];
             }
         }
 
-        // Apply master volume
+        // Apply master volume.
         let mv = self.master_volume;
         for s in buffer.iter_mut() {
             *s *= mv;

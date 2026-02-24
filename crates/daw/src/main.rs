@@ -202,7 +202,12 @@ struct DawState {
     /// Per-channel preset index into `presets::preset_names()`. None means
     /// the channel uses a custom (non-preset) patch.
     preset_indices: [Option<usize>; 8],
+    /// Undo stack: each entry is (channel_index, track_snapshot_before_edit).
+    undo_stack: Vec<(usize, MidiTrack)>,
 }
+
+/// Maximum undo history depth.
+const MAX_UNDO_DEPTH: usize = 64;
 
 impl DawState {
     fn new(engine: Arc<Mutex<AudioEngine>>) -> Self {
@@ -225,6 +230,7 @@ impl DawState {
             active_notes: [None; 8],
             prev_ticks: 0,
             preset_indices: [None; 8],
+            undo_stack: Vec::new(),
         }
     }
 
@@ -409,6 +415,7 @@ impl DawState {
             DawInput::Click(mx, my) => self.handle_click(mx, my),
             DawInput::Delete => self.delete_selected_note(),
             DawInput::Save => self.save(),
+            DawInput::Undo => self.undo(),
             DawInput::Cancel => {
                 self.selected_note = None;
             }
@@ -464,6 +471,7 @@ impl DawState {
 
             // No existing note hit. Place a new note.
             if (LOWEST_NOTE..LOWEST_NOTE + VISIBLE_NOTE_RANGE).contains(&pitch) {
+                self.push_undo();
                 let new_note = MidiNote {
                     tick,
                     duration: self.snap_ticks,
@@ -480,6 +488,24 @@ impl DawState {
                     .position(|n| n.tick == tick && n.pitch == pitch);
                 self.selected_note = idx;
             }
+        }
+    }
+
+    /// Save a snapshot of the current channel track to the undo stack.
+    fn push_undo(&mut self) {
+        let ch = self.selected_channel;
+        if self.undo_stack.len() >= MAX_UNDO_DEPTH {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push((ch, self.tracks[ch].clone()));
+    }
+
+    /// Undo the last edit operation by restoring the track snapshot.
+    fn undo(&mut self) {
+        if let Some((ch, snapshot)) = self.undo_stack.pop() {
+            self.tracks[ch] = snapshot;
+            self.selected_note = None;
+            self.status_message = Some(format!("Undo (Ch{})", ch + 1));
         }
     }
 
@@ -527,9 +553,9 @@ impl DawState {
     /// Delete the currently selected note, if any.
     fn delete_selected_note(&mut self) {
         if let Some(idx) = self.selected_note {
-            let track = &mut self.tracks[self.selected_channel];
-            if idx < track.notes.len() {
-                track.notes.remove(idx);
+            if idx < self.tracks[self.selected_channel].notes.len() {
+                self.push_undo();
+                self.tracks[self.selected_channel].notes.remove(idx);
             }
             self.selected_note = None;
         }

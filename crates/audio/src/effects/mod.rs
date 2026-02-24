@@ -66,8 +66,8 @@ pub enum Pedal {
 
 impl Pedal {
     /// Process a mono audio buffer through this effect.
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: u32) {
-        let sr = sample_rate as f32;
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: u32) {
+        let sr = sample_rate as f64;
         match self {
             Pedal::Overdrive(p) => p.process(buffer, sr),
             Pedal::Distortion(p) => p.process(buffer, sr),

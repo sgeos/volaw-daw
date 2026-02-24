@@ -14,21 +14,21 @@ use crate::dsp::envelope::EnvelopeFollower;
 #[derive(Debug, Clone)]
 pub struct AutoWah {
     /// Envelope sensitivity (0.0 to 1.0).
-    pub sensitivity: f32,
+    pub sensitivity: f64,
     /// Minimum filter frequency in Hz.
-    pub min_freq: f32,
+    pub min_freq: f64,
     /// Maximum filter frequency in Hz.
-    pub max_freq: f32,
+    pub max_freq: f64,
     /// Bandpass Q factor.
-    pub q: f32,
+    pub q: f64,
     /// Wet/dry mix.
-    pub mix: f32,
+    pub mix: f64,
     envelope: EnvelopeFollower,
     filter: Biquad,
 }
 
 impl AutoWah {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f64) -> Self {
         Self {
             sensitivity: 0.7,
             min_freq: 200.0,
@@ -40,7 +40,7 @@ impl AutoWah {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: f64) {
         for sample in buffer.iter_mut() {
             let dry = *sample;
             let env = self.envelope.tick(dry);
@@ -66,20 +66,20 @@ impl AutoWah {
 #[derive(Debug, Clone)]
 pub struct WahManual {
     /// Pedal position (0.0 = heel down, 1.0 = toe down).
-    pub position: f32,
+    pub position: f64,
     /// Minimum filter frequency in Hz.
-    pub min_freq: f32,
+    pub min_freq: f64,
     /// Maximum filter frequency in Hz.
-    pub max_freq: f32,
+    pub max_freq: f64,
     /// Bandpass Q factor.
-    pub q: f32,
+    pub q: f64,
     /// Wet/dry mix.
-    pub mix: f32,
+    pub mix: f64,
     filter: Biquad,
 }
 
 impl WahManual {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f64) -> Self {
         Self {
             position: 0.5,
             min_freq: 200.0,
@@ -90,7 +90,7 @@ impl WahManual {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: f64) {
         let freq = self.min_freq + (self.max_freq - self.min_freq) * self.position;
         self.filter
             .set_coefficients(BiquadType::Bandpass, freq, self.q, sample_rate);
@@ -109,7 +109,7 @@ impl WahManual {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::f32::consts::PI;
+    use core::f64::consts::PI;
 
     #[test]
     fn auto_wah_responds_to_dynamics() {
@@ -117,15 +117,15 @@ mod tests {
         wah.sensitivity = 1.0;
         wah.mix = 1.0;
         // Feed loud signal
-        let mut loud = [0.8f32; 128];
+        let mut loud = [0.8f64; 128];
         wah.process(&mut loud, 48000.0);
         wah.reset();
         // Feed quiet signal
-        let mut quiet = [0.05f32; 128];
+        let mut quiet = [0.05f64; 128];
         wah.process(&mut quiet, 48000.0);
         // Loud signal should produce different output due to envelope tracking
-        let loud_avg: f32 = loud[64..].iter().map(|s| libm::fabsf(*s)).sum::<f32>() / 64.0;
-        let quiet_avg: f32 = quiet[64..].iter().map(|s| libm::fabsf(*s)).sum::<f32>() / 64.0;
+        let loud_avg: f64 = loud[64..].iter().map(|s| libm::fabs(*s)).sum::<f64>() / 64.0;
+        let quiet_avg: f64 = quiet[64..].iter().map(|s| libm::fabs(*s)).sum::<f64>() / 64.0;
         assert!(loud_avg > quiet_avg);
     }
 
@@ -134,10 +134,10 @@ mod tests {
         let sr = 48000.0;
         let freq = 1000.0;
         // Generate test tone
-        let mut buf_heel = [0.0f32; 256];
-        let mut buf_toe = [0.0f32; 256];
+        let mut buf_heel = [0.0f64; 256];
+        let mut buf_toe = [0.0f64; 256];
         for i in 0..256 {
-            let val = libm::sinf(2.0 * PI * freq * i as f32 / sr);
+            let val = libm::sin(2.0 * PI * freq * i as f64 / sr);
             buf_heel[i] = val;
             buf_toe[i] = val;
         }
@@ -152,10 +152,10 @@ mod tests {
         wah_toe.process(&mut buf_toe, sr);
 
         // Different positions should produce different amplitudes for same tone
-        let rms_heel: f32 =
-            libm::sqrtf(buf_heel[128..].iter().map(|s| s * s).sum::<f32>() / 128.0);
-        let rms_toe: f32 =
-            libm::sqrtf(buf_toe[128..].iter().map(|s| s * s).sum::<f32>() / 128.0);
+        let rms_heel: f64 =
+            libm::sqrt(buf_heel[128..].iter().map(|s| s * s).sum::<f64>() / 128.0);
+        let rms_toe: f64 =
+            libm::sqrt(buf_toe[128..].iter().map(|s| s * s).sum::<f64>() / 128.0);
         assert!(
             (rms_heel - rms_toe).abs() > 0.001,
             "Different positions should produce different tones"

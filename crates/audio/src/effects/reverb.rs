@@ -11,13 +11,13 @@ use crate::dsp::delay_line::DelayLine;
 #[derive(Debug, Clone)]
 struct CombFilter {
     delay: DelayLine,
-    feedback: f32,
-    damping: f32,
-    prev_filtered: f32,
+    feedback: f64,
+    damping: f64,
+    prev_filtered: f64,
 }
 
 impl CombFilter {
-    fn new(delay_samples: usize, feedback: f32, damping: f32) -> Self {
+    fn new(delay_samples: usize, feedback: f64, damping: f64) -> Self {
         Self {
             delay: DelayLine::new(delay_samples + 1),
             feedback,
@@ -27,7 +27,7 @@ impl CombFilter {
     }
 
     #[inline]
-    fn tick(&mut self, input: f32) -> f32 {
+    fn tick(&mut self, input: f64) -> f64 {
         let delayed = self.delay.read_integer(self.delay.len() - 1);
         // One-pole lowpass in feedback path for damping
         let filtered = delayed * (1.0 - self.damping) + self.prev_filtered * self.damping;
@@ -46,11 +46,11 @@ impl CombFilter {
 #[derive(Debug, Clone)]
 struct SchroederAllpass {
     delay: DelayLine,
-    gain: f32,
+    gain: f64,
 }
 
 impl SchroederAllpass {
-    fn new(delay_samples: usize, gain: f32) -> Self {
+    fn new(delay_samples: usize, gain: f64) -> Self {
         Self {
             delay: DelayLine::new(delay_samples + 1),
             gain,
@@ -58,7 +58,7 @@ impl SchroederAllpass {
     }
 
     #[inline]
-    fn tick(&mut self, input: f32) -> f32 {
+    fn tick(&mut self, input: f64) -> f64 {
         let delayed = self.delay.read_integer(self.delay.len() - 1);
         let v = input + self.gain * delayed;
         let output = delayed - self.gain * v;
@@ -81,10 +81,10 @@ struct ReverbCore {
 impl ReverbCore {
     fn new(
         comb_delays: [usize; 4],
-        comb_feedback: f32,
-        damping: f32,
+        comb_feedback: f64,
+        damping: f64,
         ap_delays: [usize; 2],
-        ap_gain: f32,
+        ap_gain: f64,
     ) -> Self {
         Self {
             combs: [
@@ -100,9 +100,9 @@ impl ReverbCore {
         }
     }
 
-    fn tick(&mut self, input: f32) -> f32 {
+    fn tick(&mut self, input: f64) -> f64 {
         // Parallel comb filters
-        let mut sum = 0.0f32;
+        let mut sum = 0.0f64;
         for comb in &mut self.combs {
             sum += comb.tick(input);
         }
@@ -126,7 +126,7 @@ impl ReverbCore {
 }
 
 /// Milliseconds to samples at a given sample rate.
-fn ms_to_samples(ms: f32, sample_rate: f32) -> usize {
+fn ms_to_samples(ms: f64, sample_rate: f64) -> usize {
     (ms * 0.001 * sample_rate) as usize
 }
 
@@ -136,16 +136,16 @@ fn ms_to_samples(ms: f32, sample_rate: f32) -> usize {
 #[derive(Debug, Clone)]
 pub struct PlateReverb {
     /// Decay time (0.0 = short, 1.0 = long).
-    pub decay: f32,
+    pub decay: f64,
     /// High-frequency damping (0.0 = bright, 1.0 = dark).
-    pub damping: f32,
+    pub damping: f64,
     /// Wet/dry mix.
-    pub mix: f32,
+    pub mix: f64,
     core: ReverbCore,
 }
 
 impl PlateReverb {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f64) -> Self {
         let feedback = 0.7;
         let damp = 0.3;
         Self {
@@ -170,7 +170,7 @@ impl PlateReverb {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], _sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], _sample_rate: f64) {
         // Scale feedback by decay parameter
         let fb = 0.5 + self.decay * 0.45;
         for comb in &mut self.core.combs {
@@ -193,16 +193,16 @@ impl PlateReverb {
 #[derive(Debug, Clone)]
 pub struct HallReverb {
     /// Decay time (0.0 = short, 1.0 = long).
-    pub decay: f32,
+    pub decay: f64,
     /// High-frequency damping.
-    pub damping: f32,
+    pub damping: f64,
     /// Wet/dry mix.
-    pub mix: f32,
+    pub mix: f64,
     core: ReverbCore,
 }
 
 impl HallReverb {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f64) -> Self {
         Self {
             decay: 0.6,
             damping: 0.4,
@@ -225,7 +225,7 @@ impl HallReverb {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], _sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], _sample_rate: f64) {
         let fb = 0.5 + self.decay * 0.47;
         for comb in &mut self.core.combs {
             comb.feedback = fb;
@@ -247,16 +247,16 @@ impl HallReverb {
 #[derive(Debug, Clone)]
 pub struct RoomReverb {
     /// Decay time (0.0 = tight, 1.0 = loose).
-    pub decay: f32,
+    pub decay: f64,
     /// High-frequency damping.
-    pub damping: f32,
+    pub damping: f64,
     /// Wet/dry mix.
-    pub mix: f32,
+    pub mix: f64,
     core: ReverbCore,
 }
 
 impl RoomReverb {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f64) -> Self {
         Self {
             decay: 0.3,
             damping: 0.5,
@@ -279,7 +279,7 @@ impl RoomReverb {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], _sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], _sample_rate: f64) {
         let fb = 0.3 + self.decay * 0.5;
         for comb in &mut self.core.combs {
             comb.feedback = fb;
@@ -305,11 +305,11 @@ mod tests {
     fn plate_reverb_produces_output() {
         let mut rev = PlateReverb::new(48000.0);
         rev.mix = 1.0;
-        let mut buf = alloc::vec![0.0f32; 9600];
+        let mut buf = alloc::vec![0.0f64; 9600];
         buf[0] = 1.0;
         rev.process(&mut buf, 48000.0);
         // Reverb tail should have energy
-        let tail_energy: f32 = buf[4800..].iter().map(|s| s * s).sum();
+        let tail_energy: f64 = buf[4800..].iter().map(|s| s * s).sum();
         assert!(tail_energy > 1e-6, "Reverb should produce a tail");
     }
 
@@ -322,16 +322,16 @@ mod tests {
         room.decay = 0.3;
         room.mix = 1.0;
 
-        let mut hall_buf = alloc::vec![0.0f32; 19200]; // 400ms
-        let mut room_buf = alloc::vec![0.0f32; 19200];
+        let mut hall_buf = alloc::vec![0.0f64; 19200]; // 400ms
+        let mut room_buf = alloc::vec![0.0f64; 19200];
         hall_buf[0] = 1.0;
         room_buf[0] = 1.0;
 
         hall.process(&mut hall_buf, 48000.0);
         room.process(&mut room_buf, 48000.0);
 
-        let hall_tail: f32 = hall_buf[14400..].iter().map(|s| s * s).sum();
-        let room_tail: f32 = room_buf[14400..].iter().map(|s| s * s).sum();
+        let hall_tail: f64 = hall_buf[14400..].iter().map(|s| s * s).sum();
+        let room_tail: f64 = room_buf[14400..].iter().map(|s| s * s).sum();
         assert!(
             hall_tail > room_tail,
             "Hall should have longer tail than room"
@@ -342,7 +342,7 @@ mod tests {
     fn reverb_zero_mix_passthrough() {
         let mut rev = PlateReverb::new(48000.0);
         rev.mix = 0.0;
-        let mut buf = [0.5f32; 64];
+        let mut buf = [0.5f64; 64];
         rev.process(&mut buf, 48000.0);
         for s in &buf {
             assert!((s - 0.5).abs() < 1e-5);
@@ -354,7 +354,7 @@ mod tests {
         let mut rev = HallReverb::new(48000.0);
         rev.decay = 1.0;
         rev.mix = 0.5;
-        let mut buf = alloc::vec![0.0f32; 48000];
+        let mut buf = alloc::vec![0.0f64; 48000];
         buf[0] = 1.0;
         rev.process(&mut buf, 48000.0);
         for s in &buf {

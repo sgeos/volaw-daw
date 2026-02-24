@@ -32,7 +32,7 @@ impl SampleInput {
     ///
     /// Stub: no-op passthrough. When active in a future implementation,
     /// this will mix sample audio into the buffer.
-    pub fn process(&mut self, _buffer: &mut [f32]) {
+    pub fn process(&mut self, _buffer: &mut [f64]) {
         // Stub: passthrough, no modification
     }
 }
@@ -56,11 +56,11 @@ mod tests {
     #[test]
     fn process_is_passthrough() {
         let mut input = SampleInput::new();
-        let mut buffer = [0.5f32; 16];
+        let mut buffer = [0.5f64; 16];
         let original = buffer;
         input.process(&mut buffer);
         for (a, b) in buffer.iter().zip(original.iter()) {
-            assert!((a - b).abs() < f32::EPSILON);
+            assert!((a - b).abs() < f64::EPSILON);
         }
     }
 

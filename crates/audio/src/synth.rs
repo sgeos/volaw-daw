@@ -38,7 +38,7 @@ impl Ms20Voice {
     /// Process a mono audio buffer in place.
     ///
     /// Stub: writes silence regardless of input.
-    pub fn process(&mut self, buffer: &mut [f32]) {
+    pub fn process(&mut self, buffer: &mut [f64]) {
         for sample in buffer.iter_mut() {
             *sample = 0.0;
         }
@@ -64,10 +64,10 @@ mod tests {
     #[test]
     fn process_writes_silence() {
         let mut voice = Ms20Voice::new();
-        let mut buffer = [1.0f32; 32];
+        let mut buffer = [1.0f64; 32];
         voice.process(&mut buffer);
         for sample in &buffer {
-            assert!(sample.abs() < f32::EPSILON);
+            assert!(sample.abs() < f64::EPSILON);
         }
     }
 

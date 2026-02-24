@@ -4,7 +4,7 @@
 //! effect parameters like delay time (chorus, flanger), filter
 //! frequency (phaser, auto-wah), and amplitude (tremolo, auto-pan).
 
-use core::f32::consts::PI;
+use core::f64::consts::PI;
 
 /// LFO waveform shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub enum LfoWaveform {
 /// Low-frequency oscillator with configurable waveform.
 #[derive(Debug, Clone)]
 pub struct Lfo {
-    phase: f32,
+    phase: f64,
     pub waveform: LfoWaveform,
 }
 
@@ -33,7 +33,7 @@ impl Lfo {
 
     /// Advance by one sample and return the current value in [-1.0, 1.0].
     #[inline]
-    pub fn tick(&mut self, rate_hz: f32, sample_rate: f32) -> f32 {
+    pub fn tick(&mut self, rate_hz: f64, sample_rate: f64) -> f64 {
         let value = self.evaluate();
         self.phase += rate_hz / sample_rate;
         if self.phase >= 1.0 {
@@ -43,9 +43,9 @@ impl Lfo {
     }
 
     /// Return the current value without advancing phase.
-    fn evaluate(&self) -> f32 {
+    fn evaluate(&self) -> f64 {
         match self.waveform {
-            LfoWaveform::Sine => libm::sinf(2.0 * PI * self.phase),
+            LfoWaveform::Sine => libm::sin(2.0 * PI * self.phase),
             LfoWaveform::Triangle => {
                 if self.phase < 0.25 {
                     4.0 * self.phase
@@ -94,7 +94,7 @@ mod tests {
     fn square_starts_positive() {
         let mut lfo = Lfo::new(LfoWaveform::Square);
         let val = lfo.tick(1.0, 48000.0);
-        assert!((val - 1.0).abs() < f32::EPSILON);
+        assert!((val - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -9,25 +9,25 @@ use crate::dsp::biquad::{Biquad, BiquadType};
 #[derive(Debug, Clone)]
 pub struct Eq {
     /// Low band gain in dB (-12.0 to 12.0).
-    pub low_gain_db: f32,
+    pub low_gain_db: f64,
     /// Mid band gain in dB (-12.0 to 12.0).
-    pub mid_gain_db: f32,
+    pub mid_gain_db: f64,
     /// High band gain in dB (-12.0 to 12.0).
-    pub high_gain_db: f32,
+    pub high_gain_db: f64,
     /// Low band frequency in Hz.
-    pub low_freq: f32,
+    pub low_freq: f64,
     /// Mid band frequency in Hz.
-    pub mid_freq: f32,
+    pub mid_freq: f64,
     /// High band frequency in Hz.
-    pub high_freq: f32,
+    pub high_freq: f64,
     low_filter: Biquad,
     mid_filter: Biquad,
     high_filter: Biquad,
-    cached_sample_rate: f32,
+    cached_sample_rate: f64,
 }
 
 impl Eq {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f64) -> Self {
         Self {
             low_gain_db: 0.0,
             mid_gain_db: 0.0,
@@ -57,7 +57,7 @@ impl Eq {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: f64) {
         self.update_coefficients(sample_rate);
         for sample in buffer.iter_mut() {
             let mut s = *sample;
@@ -68,7 +68,7 @@ impl Eq {
         }
     }
 
-    fn update_coefficients(&mut self, sample_rate: f32) {
+    fn update_coefficients(&mut self, sample_rate: f64) {
         self.low_filter.set_coefficients(
             BiquadType::LowShelf {
                 gain_db: self.low_gain_db,
@@ -109,15 +109,15 @@ impl Eq {
 #[derive(Debug, Clone)]
 pub struct Volume {
     /// Gain level (0.0 = silence, 1.0 = unity, 2.0 = +6dB).
-    pub gain: f32,
+    pub gain: f64,
 }
 
 impl Volume {
-    pub fn new(_sample_rate: f32) -> Self {
+    pub fn new(_sample_rate: f64) -> Self {
         Self { gain: 1.0 }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], _sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], _sample_rate: f64) {
         let g = self.gain;
         for sample in buffer.iter_mut() {
             *sample *= g;
@@ -136,15 +136,15 @@ impl Volume {
 #[derive(Debug, Clone)]
 pub struct Buffer {
     /// Gain (typically 0.9 to 1.1).
-    pub gain: f32,
+    pub gain: f64,
 }
 
 impl Buffer {
-    pub fn new(_sample_rate: f32) -> Self {
+    pub fn new(_sample_rate: f64) -> Self {
         Self { gain: 1.0 }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], _sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], _sample_rate: f64) {
         let g = self.gain;
         for sample in buffer.iter_mut() {
             *sample *= g;
@@ -166,7 +166,7 @@ mod tests {
         eq.low_gain_db = 0.0;
         eq.mid_gain_db = 0.0;
         eq.high_gain_db = 0.0;
-        let mut buf = [0.5f32; 128];
+        let mut buf = [0.5f64; 128];
         eq.process(&mut buf, 48000.0);
         // With zero gain on all bands, output should be close to input
         // (after filter settling)
@@ -183,9 +183,9 @@ mod tests {
         eq.mid_gain_db = 12.0;
         eq.high_gain_db = 12.0;
         // Feed a test signal
-        let mut buf = [0.1f32; 256];
+        let mut buf = [0.1f64; 256];
         eq.process(&mut buf, sr);
-        let avg_out: f32 = buf[128..].iter().map(|s| libm::fabsf(*s)).sum::<f32>() / 128.0;
+        let avg_out: f64 = buf[128..].iter().map(|s| libm::fabs(*s)).sum::<f64>() / 128.0;
         assert!(avg_out > 0.1, "Boosted EQ should increase level");
     }
 
@@ -193,10 +193,10 @@ mod tests {
     fn volume_scales_signal() {
         let mut vol = Volume::new(48000.0);
         vol.gain = 0.5;
-        let mut buf = [1.0f32; 16];
+        let mut buf = [1.0f64; 16];
         vol.process(&mut buf, 48000.0);
         for s in &buf {
-            assert!((s - 0.5).abs() < f32::EPSILON);
+            assert!((s - 0.5).abs() < f64::EPSILON);
         }
     }
 
@@ -204,20 +204,20 @@ mod tests {
     fn volume_zero_silences() {
         let mut vol = Volume::new(48000.0);
         vol.gain = 0.0;
-        let mut buf = [0.8f32; 16];
+        let mut buf = [0.8f64; 16];
         vol.process(&mut buf, 48000.0);
         for s in &buf {
-            assert!(s.abs() < f32::EPSILON);
+            assert!(s.abs() < f64::EPSILON);
         }
     }
 
     #[test]
     fn buffer_unity_gain() {
         let mut buf_pedal = Buffer::new(48000.0);
-        let mut buf = [0.7f32; 16];
+        let mut buf = [0.7f64; 16];
         buf_pedal.process(&mut buf, 48000.0);
         for s in &buf {
-            assert!((s - 0.7).abs() < f32::EPSILON);
+            assert!((s - 0.7).abs() < f64::EPSILON);
         }
     }
 
@@ -225,7 +225,7 @@ mod tests {
     fn buffer_slight_boost() {
         let mut buf_pedal = Buffer::new(48000.0);
         buf_pedal.gain = 1.05;
-        let mut buf = [0.5f32; 16];
+        let mut buf = [0.5f64; 16];
         buf_pedal.process(&mut buf, 48000.0);
         for s in &buf {
             assert!((s - 0.525).abs() < 1e-5);

@@ -3,7 +3,7 @@ use crate::sample::SampleInput;
 use crate::synth::Ms20Voice;
 
 /// Clamp a volume value to the range 0.0 to 1.0.
-pub(crate) fn clamp_volume(v: f32) -> f32 {
+pub(crate) fn clamp_volume(v: f64) -> f64 {
     v.clamp(0.0, 1.0)
 }
 
@@ -43,9 +43,9 @@ pub(crate) fn clamp_volume(v: f32) -> f32 {
 /// - Megadrive YM2612 (6 FM channels)
 pub struct Channel {
     /// Left speaker volume (0.0 to 1.0, clamped on set).
-    pub volume_left: f32,
+    pub volume_left: f64,
     /// Right speaker volume (0.0 to 1.0, clamped on set).
-    pub volume_right: f32,
+    pub volume_right: f64,
     /// Whether this channel is producing audio.
     pub enabled: bool,
     /// Virtual Korg MS-20 synthesizer voice.
@@ -60,7 +60,7 @@ impl Channel {
     /// Create a new channel with the given stereo volumes.
     ///
     /// Both volumes are clamped to the range 0.0 to 1.0.
-    pub fn new(volume_left: f32, volume_right: f32) -> Self {
+    pub fn new(volume_left: f64, volume_right: f64) -> Self {
         Self {
             volume_left: clamp_volume(volume_left),
             volume_right: clamp_volume(volume_right),
@@ -72,17 +72,17 @@ impl Channel {
     }
 
     /// Create a channel routed to the left speaker only.
-    pub fn left(volume: f32) -> Self {
+    pub fn left(volume: f64) -> Self {
         Self::new(volume, 0.0)
     }
 
     /// Create a channel routed to the right speaker only.
-    pub fn right(volume: f32) -> Self {
+    pub fn right(volume: f64) -> Self {
         Self::new(0.0, volume)
     }
 
     /// Create a channel routed to both speakers equally.
-    pub fn center(volume: f32) -> Self {
+    pub fn center(volume: f64) -> Self {
         Self::new(volume, volume)
     }
 
@@ -90,7 +90,7 @@ impl Channel {
     ///
     /// Runs sample input, MS-20 synth, then pedal chain in sequence.
     /// When the channel is disabled, the buffer is zeroed.
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: u32) {
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: u32) {
         if !self.enabled {
             for s in buffer.iter_mut() {
                 *s = 0.0;
@@ -103,17 +103,17 @@ impl Channel {
     }
 
     /// Set the left volume. Clamped to 0.0 to 1.0.
-    pub fn set_volume_left(&mut self, volume: f32) {
+    pub fn set_volume_left(&mut self, volume: f64) {
         self.volume_left = clamp_volume(volume);
     }
 
     /// Set the right volume. Clamped to 0.0 to 1.0.
-    pub fn set_volume_right(&mut self, volume: f32) {
+    pub fn set_volume_right(&mut self, volume: f64) {
         self.volume_right = clamp_volume(volume);
     }
 
     /// Set both volumes simultaneously. Both clamped to 0.0 to 1.0.
-    pub fn set_volume(&mut self, left: f32, right: f32) {
+    pub fn set_volume(&mut self, left: f64, right: f64) {
         self.volume_left = clamp_volume(left);
         self.volume_right = clamp_volume(right);
     }
@@ -132,61 +132,61 @@ mod tests {
     #[test]
     fn left_channel() {
         let ch = Channel::left(0.8);
-        assert!((ch.volume_left - 0.8).abs() < f32::EPSILON);
-        assert!(ch.volume_right.abs() < f32::EPSILON);
+        assert!((ch.volume_left - 0.8).abs() < f64::EPSILON);
+        assert!(ch.volume_right.abs() < f64::EPSILON);
         assert!(ch.enabled);
     }
 
     #[test]
     fn right_channel() {
         let ch = Channel::right(0.7);
-        assert!(ch.volume_left.abs() < f32::EPSILON);
-        assert!((ch.volume_right - 0.7).abs() < f32::EPSILON);
+        assert!(ch.volume_left.abs() < f64::EPSILON);
+        assert!((ch.volume_right - 0.7).abs() < f64::EPSILON);
     }
 
     #[test]
     fn center_channel() {
         let ch = Channel::center(0.5);
-        assert!((ch.volume_left - 0.5).abs() < f32::EPSILON);
-        assert!((ch.volume_right - 0.5).abs() < f32::EPSILON);
+        assert!((ch.volume_left - 0.5).abs() < f64::EPSILON);
+        assert!((ch.volume_right - 0.5).abs() < f64::EPSILON);
     }
 
     #[test]
     fn volume_clamping() {
         let ch = Channel::new(1.5, -0.5);
-        assert!((ch.volume_left - 1.0).abs() < f32::EPSILON);
-        assert!(ch.volume_right.abs() < f32::EPSILON);
+        assert!((ch.volume_left - 1.0).abs() < f64::EPSILON);
+        assert!(ch.volume_right.abs() < f64::EPSILON);
     }
 
     #[test]
     fn set_volume_left_clamps() {
         let mut ch = Channel::center(0.5);
         ch.set_volume_left(2.0);
-        assert!((ch.volume_left - 1.0).abs() < f32::EPSILON);
+        assert!((ch.volume_left - 1.0).abs() < f64::EPSILON);
         ch.set_volume_left(-1.0);
-        assert!(ch.volume_left.abs() < f32::EPSILON);
+        assert!(ch.volume_left.abs() < f64::EPSILON);
     }
 
     #[test]
     fn set_volume_right_clamps() {
         let mut ch = Channel::center(0.5);
         ch.set_volume_right(2.0);
-        assert!((ch.volume_right - 1.0).abs() < f32::EPSILON);
+        assert!((ch.volume_right - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn set_volume_both() {
         let mut ch = Channel::center(0.5);
         ch.set_volume(0.3, 0.7);
-        assert!((ch.volume_left - 0.3).abs() < f32::EPSILON);
-        assert!((ch.volume_right - 0.7).abs() < f32::EPSILON);
+        assert!((ch.volume_left - 0.3).abs() < f64::EPSILON);
+        assert!((ch.volume_right - 0.7).abs() < f64::EPSILON);
     }
 
     #[test]
     fn default_is_center() {
         let ch = Channel::default();
-        assert!((ch.volume_left - 0.8).abs() < f32::EPSILON);
-        assert!((ch.volume_right - 0.8).abs() < f32::EPSILON);
+        assert!((ch.volume_left - 0.8).abs() < f64::EPSILON);
+        assert!((ch.volume_right - 0.8).abs() < f64::EPSILON);
         assert!(ch.enabled);
     }
 
@@ -202,10 +202,10 @@ mod tests {
     fn disabled_channel_zeros_buffer() {
         let mut ch = Channel::center(0.5);
         ch.enabled = false;
-        let mut buffer = [1.0f32; 16];
+        let mut buffer = [1.0f64; 16];
         ch.process(&mut buffer, 48000);
         for s in &buffer {
-            assert!(s.abs() < f32::EPSILON);
+            assert!(s.abs() < f64::EPSILON);
         }
     }
 
@@ -215,10 +215,10 @@ mod tests {
         ch.enabled = true;
         // With stubs (synth writes silence, pedals passthrough),
         // the output should be silence
-        let mut buffer = [0.5f32; 16];
+        let mut buffer = [0.5f64; 16];
         ch.process(&mut buffer, 48000);
         for s in &buffer {
-            assert!(s.abs() < f32::EPSILON, "Synth stub should write silence");
+            assert!(s.abs() < f64::EPSILON, "Synth stub should write silence");
         }
     }
 }

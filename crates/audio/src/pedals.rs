@@ -66,7 +66,7 @@ impl PedalChain {
     /// Process a mono audio buffer through all pedals in order.
     ///
     /// When inactive or empty, the buffer is left unchanged (passthrough).
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: u32) {
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: u32) {
         if !self.active || self.pedals.is_empty() {
             return;
         }
@@ -106,11 +106,11 @@ mod tests {
         let mut chain = PedalChain::new();
         chain.push(Pedal::Volume(Volume::new(48000.0)));
         // Chain has pedals but is inactive
-        let mut buffer = [0.75f32; 16];
+        let mut buffer = [0.75f64; 16];
         let original = buffer;
         chain.process(&mut buffer, 48000);
         for (a, b) in buffer.iter().zip(original.iter()) {
-            assert!((a - b).abs() < f32::EPSILON);
+            assert!((a - b).abs() < f64::EPSILON);
         }
     }
 
@@ -118,11 +118,11 @@ mod tests {
     fn active_empty_chain_is_passthrough() {
         let mut chain = PedalChain::new();
         chain.active = true;
-        let mut buffer = [0.5f32; 16];
+        let mut buffer = [0.5f64; 16];
         let original = buffer;
         chain.process(&mut buffer, 48000);
         for (a, b) in buffer.iter().zip(original.iter()) {
-            assert!((a - b).abs() < f32::EPSILON);
+            assert!((a - b).abs() < f64::EPSILON);
         }
     }
 
@@ -134,10 +134,10 @@ mod tests {
         vol.gain = 0.5;
         chain.push(Pedal::Volume(vol));
 
-        let mut buffer = [1.0f32; 16];
+        let mut buffer = [1.0f64; 16];
         chain.process(&mut buffer, 48000);
         for s in &buffer {
-            assert!((s - 0.5).abs() < f32::EPSILON);
+            assert!((s - 0.5).abs() < f64::EPSILON);
         }
     }
 
@@ -154,7 +154,7 @@ mod tests {
         vol2.gain = 2.0;
         chain.push(Pedal::Volume(vol2));
         // Net effect should be unity
-        let mut buffer = [0.6f32; 16];
+        let mut buffer = [0.6f64; 16];
         chain.process(&mut buffer, 48000);
         for s in &buffer {
             assert!((s - 0.6).abs() < 1e-5);

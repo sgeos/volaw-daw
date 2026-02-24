@@ -12,16 +12,16 @@ use crate::dsp::delay_line::DelayLine;
 #[derive(Debug, Clone)]
 pub struct DigitalDelay {
     /// Delay time in milliseconds (10 to 2000).
-    pub time_ms: f32,
+    pub time_ms: f64,
     /// Feedback amount (0.0 to 0.95).
-    pub feedback: f32,
+    pub feedback: f64,
     /// Wet/dry mix.
-    pub mix: f32,
+    pub mix: f64,
     delay: DelayLine,
 }
 
 impl DigitalDelay {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f64) -> Self {
         Self {
             time_ms: 300.0,
             feedback: 0.4,
@@ -30,7 +30,7 @@ impl DigitalDelay {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: f64) {
         let delay_samples = self.time_ms * 0.001 * sample_rate;
         let fb = self.feedback.clamp(0.0, 0.95);
         for sample in buffer.iter_mut() {
@@ -52,19 +52,19 @@ impl DigitalDelay {
 #[derive(Debug, Clone)]
 pub struct AnalogDelay {
     /// Delay time in milliseconds.
-    pub time_ms: f32,
+    pub time_ms: f64,
     /// Feedback amount (0.0 to 0.95).
-    pub feedback: f32,
+    pub feedback: f64,
     /// Feedback filter tone (0.0 = dark, 1.0 = bright).
-    pub tone: f32,
+    pub tone: f64,
     /// Wet/dry mix.
-    pub mix: f32,
+    pub mix: f64,
     delay: DelayLine,
     filter: Biquad,
 }
 
 impl AnalogDelay {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f64) -> Self {
         Self {
             time_ms: 300.0,
             feedback: 0.4,
@@ -75,7 +75,7 @@ impl AnalogDelay {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: f64) {
         let delay_samples = self.time_ms * 0.001 * sample_rate;
         let fb = self.feedback.clamp(0.0, 0.95);
         let cutoff = 800.0 + self.tone * 4000.0;
@@ -103,17 +103,17 @@ impl AnalogDelay {
 #[derive(Debug, Clone)]
 pub struct PingPongDelay {
     /// Delay time in milliseconds per side.
-    pub time_ms: f32,
+    pub time_ms: f64,
     /// Feedback amount (0.0 to 0.95).
-    pub feedback: f32,
+    pub feedback: f64,
     /// Wet/dry mix.
-    pub mix: f32,
+    pub mix: f64,
     delay_a: DelayLine,
     delay_b: DelayLine,
 }
 
 impl PingPongDelay {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f64) -> Self {
         Self {
             time_ms: 250.0,
             feedback: 0.4,
@@ -123,7 +123,7 @@ impl PingPongDelay {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: f64) {
         let delay_samples = self.time_ms * 0.001 * sample_rate;
         let fb = self.feedback.clamp(0.0, 0.95);
         for sample in buffer.iter_mut() {
@@ -155,14 +155,14 @@ mod tests {
         delay.feedback = 0.0;
         delay.mix = 1.0;
         // Send an impulse
-        let mut buf = alloc::vec![0.0f32; 9600]; // 200ms
+        let mut buf = alloc::vec![0.0f64; 9600]; // 200ms
         buf[0] = 1.0;
         delay.process(&mut buf, sr);
         // Echo should appear at ~100ms = sample 4800
-        let echo_region: f32 = buf[4750..4850]
+        let echo_region: f64 = buf[4750..4850]
             .iter()
-            .map(|s| libm::fabsf(*s))
-            .fold(0.0f32, f32::max);
+            .map(|s| libm::fabs(*s))
+            .fold(0.0f64, f64::max);
         assert!(echo_region > 0.5, "Expected echo at 100ms");
     }
 
@@ -174,7 +174,7 @@ mod tests {
         delay.feedback = 0.8;
         delay.tone = 0.2;
         delay.mix = 0.5;
-        let mut buf = alloc::vec![0.0f32; 4800];
+        let mut buf = alloc::vec![0.0f64; 4800];
         buf[0] = 1.0;
         delay.process(&mut buf, sr);
         // Should produce decaying echoes
@@ -190,14 +190,14 @@ mod tests {
         pp.time_ms = 50.0;
         pp.feedback = 0.5;
         pp.mix = 1.0;
-        let mut buf = alloc::vec![0.0f32; 9600];
+        let mut buf = alloc::vec![0.0f64; 9600];
         buf[0] = 1.0;
         pp.process(&mut buf, sr);
         // First echo from delay_a at ~50ms, second from delay_b at ~100ms
-        let echo1: f32 = buf[2350..2450]
+        let echo1: f64 = buf[2350..2450]
             .iter()
-            .map(|s| libm::fabsf(*s))
-            .fold(0.0f32, f32::max);
+            .map(|s| libm::fabs(*s))
+            .fold(0.0f64, f64::max);
         assert!(echo1 > 0.1, "Expected first echo");
     }
 
@@ -208,12 +208,12 @@ mod tests {
         delay.time_ms = 50.0;
         delay.feedback = 0.5;
         delay.mix = 1.0;
-        let mut buf = alloc::vec![0.0f32; 19200]; // 400ms
+        let mut buf = alloc::vec![0.0f64; 19200]; // 400ms
         buf[0] = 1.0;
         delay.process(&mut buf, sr);
         // Energy should decrease over time
-        let energy_first_half: f32 = buf[..9600].iter().map(|s| s * s).sum();
-        let energy_second_half: f32 = buf[9600..].iter().map(|s| s * s).sum();
+        let energy_first_half: f64 = buf[..9600].iter().map(|s| s * s).sum();
+        let energy_second_half: f64 = buf[9600..].iter().map(|s| s * s).sum();
         assert!(energy_first_half > energy_second_half);
     }
 }

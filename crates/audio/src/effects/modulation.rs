@@ -3,7 +3,7 @@
 //! These effects use LFOs to modulate delay times, filter frequencies,
 //! or amplitude to create movement and animation in the sound.
 
-use core::f32::consts::PI;
+use core::f64::consts::PI;
 
 use crate::dsp::delay_line::DelayLine;
 use crate::dsp::lfo::{Lfo, LfoWaveform};
@@ -15,18 +15,18 @@ use crate::dsp::lfo::{Lfo, LfoWaveform};
 #[derive(Debug, Clone)]
 pub struct Chorus {
     /// LFO rate in Hz (0.1 to 5.0).
-    pub rate_hz: f32,
+    pub rate_hz: f64,
     /// Modulation depth in milliseconds (1.0 to 10.0).
-    pub depth_ms: f32,
+    pub depth_ms: f64,
     /// Wet/dry mix (0.0 to 1.0).
-    pub mix: f32,
+    pub mix: f64,
     lfo: Lfo,
     delay: DelayLine,
-    base_delay_ms: f32,
+    base_delay_ms: f64,
 }
 
 impl Chorus {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f64) -> Self {
         Self {
             rate_hz: 1.0,
             depth_ms: 5.0,
@@ -38,7 +38,7 @@ impl Chorus {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: f64) {
         let samples_per_ms = sample_rate * 0.001;
         for sample in buffer.iter_mut() {
             let lfo_val = self.lfo.tick(self.rate_hz, sample_rate);
@@ -64,21 +64,21 @@ impl Chorus {
 #[derive(Debug, Clone)]
 pub struct Flanger {
     /// LFO rate in Hz (0.1 to 5.0).
-    pub rate_hz: f32,
+    pub rate_hz: f64,
     /// Modulation depth in milliseconds (0.5 to 5.0).
-    pub depth_ms: f32,
+    pub depth_ms: f64,
     /// Feedback amount (-0.95 to 0.95).
-    pub feedback: f32,
+    pub feedback: f64,
     /// Wet/dry mix.
-    pub mix: f32,
+    pub mix: f64,
     lfo: Lfo,
     delay: DelayLine,
-    base_delay_ms: f32,
-    prev_output: f32,
+    base_delay_ms: f64,
+    prev_output: f64,
 }
 
 impl Flanger {
-    pub fn new(sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f64) -> Self {
         Self {
             rate_hz: 0.5,
             depth_ms: 2.0,
@@ -91,7 +91,7 @@ impl Flanger {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: f64) {
         let samples_per_ms = sample_rate * 0.001;
         let fb = self.feedback.clamp(-0.95, 0.95);
         for sample in buffer.iter_mut() {
@@ -120,23 +120,23 @@ impl Flanger {
 #[derive(Debug, Clone)]
 pub struct Phaser {
     /// LFO rate in Hz (0.1 to 5.0).
-    pub rate_hz: f32,
+    pub rate_hz: f64,
     /// Sweep depth (0.0 to 1.0).
-    pub depth: f32,
+    pub depth: f64,
     /// Feedback (-0.95 to 0.95).
-    pub feedback: f32,
+    pub feedback: f64,
     /// Wet/dry mix.
-    pub mix: f32,
+    pub mix: f64,
     /// Number of allpass stages (2, 4, 6, or 8).
     pub stages: usize,
     lfo: Lfo,
     /// First-order allpass state: (x_z1, y_z1) per stage.
-    allpass_state: [(f32, f32); 8],
-    prev_output: f32,
+    allpass_state: [(f64, f64); 8],
+    prev_output: f64,
 }
 
 impl Phaser {
-    pub fn new(_sample_rate: f32) -> Self {
+    pub fn new(_sample_rate: f64) -> Self {
         Self {
             rate_hz: 0.5,
             depth: 0.7,
@@ -149,7 +149,7 @@ impl Phaser {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: f64) {
         let fb = self.feedback.clamp(-0.95, 0.95);
         let active_stages = self.stages.min(8);
         for sample in buffer.iter_mut() {
@@ -184,8 +184,8 @@ impl Phaser {
 }
 
 /// Compute a first-order allpass coefficient for a given break frequency.
-fn allpass_coefficient(freq_hz: f32, sample_rate: f32) -> f32 {
-    let t = libm::tanf(PI * freq_hz / sample_rate);
+fn allpass_coefficient(freq_hz: f64, sample_rate: f64) -> f64 {
+    let t = libm::tan(PI * freq_hz / sample_rate);
     (t - 1.0) / (t + 1.0)
 }
 
@@ -195,16 +195,16 @@ fn allpass_coefficient(freq_hz: f32, sample_rate: f32) -> f32 {
 #[derive(Debug, Clone)]
 pub struct Tremolo {
     /// LFO rate in Hz (0.5 to 20.0).
-    pub rate_hz: f32,
+    pub rate_hz: f64,
     /// Modulation depth (0.0 = no effect, 1.0 = full modulation).
-    pub depth: f32,
+    pub depth: f64,
     /// LFO waveform for modulation shape.
     pub waveform: LfoWaveform,
     lfo: Lfo,
 }
 
 impl Tremolo {
-    pub fn new(_sample_rate: f32) -> Self {
+    pub fn new(_sample_rate: f64) -> Self {
         Self {
             rate_hz: 4.0,
             depth: 0.5,
@@ -213,7 +213,7 @@ impl Tremolo {
         }
     }
 
-    pub fn process(&mut self, buffer: &mut [f32], sample_rate: f32) {
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: f64) {
         self.lfo.waveform = self.waveform;
         for sample in buffer.iter_mut() {
             let lfo_val = self.lfo.tick(self.rate_hz, sample_rate);
@@ -232,10 +232,10 @@ impl Tremolo {
 mod tests {
     use super::*;
 
-    fn sine_buffer(freq: f32, sample_rate: f32, len: usize) -> alloc::vec::Vec<f32> {
-        let mut buf = alloc::vec![0.0f32; len];
+    fn sine_buffer(freq: f64, sample_rate: f64, len: usize) -> alloc::vec::Vec<f64> {
+        let mut buf = alloc::vec![0.0f64; len];
         for (i, sample) in buf.iter_mut().enumerate() {
-            *sample = libm::sinf(2.0 * PI * freq * i as f32 / sample_rate);
+            *sample = libm::sin(2.0 * PI * freq * i as f64 / sample_rate);
         }
         buf
     }
@@ -245,9 +245,9 @@ mod tests {
         let mut chorus = Chorus::new(48000.0);
         chorus.mix = 0.5;
         let mut buf = sine_buffer(440.0, 48000.0, 512);
-        let dry_energy: f32 = buf.iter().map(|s| s * s).sum();
+        let dry_energy: f64 = buf.iter().map(|s| s * s).sum();
         chorus.process(&mut buf, 48000.0);
-        let wet_energy: f32 = buf.iter().map(|s| s * s).sum();
+        let wet_energy: f64 = buf.iter().map(|s| s * s).sum();
         // With chorus mixing, energy should change
         assert!((dry_energy - wet_energy).abs() > 0.01);
     }
@@ -282,10 +282,10 @@ mod tests {
         let mut trem = Tremolo::new(48000.0);
         trem.rate_hz = 10.0;
         trem.depth = 1.0;
-        let mut buf = [0.5f32; 4800]; // 100ms at 48kHz = one full LFO cycle
+        let mut buf = [0.5f64; 4800]; // 100ms at 48kHz = one full LFO cycle
         trem.process(&mut buf, 48000.0);
-        let min_val = buf.iter().copied().fold(f32::MAX, f32::min);
-        let max_val = buf.iter().copied().fold(f32::MIN, f32::max);
+        let min_val = buf.iter().copied().fold(f64::MAX, f64::min);
+        let max_val = buf.iter().copied().fold(f64::MIN, f64::max);
         // With depth=1.0, the signal should vary between ~0 and ~0.5
         assert!(max_val > 0.4);
         assert!(min_val < 0.1);

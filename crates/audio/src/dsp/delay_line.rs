@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 /// Circular buffer delay line.
 #[derive(Debug, Clone)]
 pub struct DelayLine {
-    buffer: Vec<f32>,
+    buffer: Vec<f64>,
     write_pos: usize,
 }
 
@@ -27,14 +27,14 @@ impl DelayLine {
     }
 
     /// Create a delay line sized for a given maximum time in milliseconds.
-    pub fn from_time(max_ms: f32, sample_rate: f32) -> Self {
+    pub fn from_time(max_ms: f64, sample_rate: f64) -> Self {
         let samples = (max_ms * 0.001 * sample_rate) as usize + 1;
         Self::new(samples)
     }
 
     /// Write a sample and advance the write pointer.
     #[inline]
-    pub fn write(&mut self, sample: f32) {
+    pub fn write(&mut self, sample: f64) {
         self.buffer[self.write_pos] = sample;
         self.write_pos += 1;
         if self.write_pos >= self.buffer.len() {
@@ -47,15 +47,15 @@ impl DelayLine {
     /// A delay of 0.0 returns the most recently written sample.
     /// The delay is clamped to valid range.
     #[inline]
-    pub fn read(&self, delay_samples: f32) -> f32 {
+    pub fn read(&self, delay_samples: f64) -> f64 {
         let len = self.buffer.len();
-        let max_delay = (len - 1) as f32;
+        let max_delay = (len - 1) as f64;
         let clamped = delay_samples.clamp(0.0, max_delay);
         let floor = clamped as usize;
-        let frac = clamped - floor as f32;
+        let frac = clamped - floor as f64;
 
         let idx0 = self.read_index(floor);
-        if frac < f32::EPSILON {
+        if frac < f64::EPSILON {
             return self.buffer[idx0];
         }
         let idx1 = self.read_index(floor + 1);
@@ -64,7 +64,7 @@ impl DelayLine {
 
     /// Read at an integer delay position (no interpolation).
     #[inline]
-    pub fn read_integer(&self, delay_samples: usize) -> f32 {
+    pub fn read_integer(&self, delay_samples: usize) -> f64 {
         let idx = self.read_index(delay_samples.min(self.buffer.len() - 1));
         self.buffer[idx]
     }
@@ -103,7 +103,7 @@ mod tests {
     fn write_and_read_zero_delay() {
         let mut dl = DelayLine::new(16);
         dl.write(0.75);
-        assert!((dl.read(0.0) - 0.75).abs() < f32::EPSILON);
+        assert!((dl.read(0.0) - 0.75).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -112,9 +112,9 @@ mod tests {
         dl.write(1.0);
         dl.write(2.0);
         dl.write(3.0);
-        assert!((dl.read_integer(0) - 3.0).abs() < f32::EPSILON);
-        assert!((dl.read_integer(1) - 2.0).abs() < f32::EPSILON);
-        assert!((dl.read_integer(2) - 1.0).abs() < f32::EPSILON);
+        assert!((dl.read_integer(0) - 3.0).abs() < f64::EPSILON);
+        assert!((dl.read_integer(1) - 2.0).abs() < f64::EPSILON);
+        assert!((dl.read_integer(2) - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -131,11 +131,11 @@ mod tests {
     fn wraps_around() {
         let mut dl = DelayLine::new(4);
         for i in 0..8 {
-            dl.write(i as f32);
+            dl.write(i as f64);
         }
         // Most recent sample should be 7.0
-        assert!((dl.read(0.0) - 7.0).abs() < f32::EPSILON);
-        assert!((dl.read_integer(3) - 4.0).abs() < f32::EPSILON);
+        assert!((dl.read(0.0) - 7.0).abs() < f64::EPSILON);
+        assert!((dl.read_integer(3) - 4.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -144,8 +144,8 @@ mod tests {
         dl.write(1.0);
         dl.write(2.0);
         dl.reset();
-        assert!(dl.read(0.0).abs() < f32::EPSILON);
-        assert!(dl.read_integer(1).abs() < f32::EPSILON);
+        assert!(dl.read(0.0).abs() < f64::EPSILON);
+        assert!(dl.read_integer(1).abs() < f64::EPSILON);
     }
 
     #[test]

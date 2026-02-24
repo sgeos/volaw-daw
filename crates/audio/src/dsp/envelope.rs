@@ -7,15 +7,15 @@
 /// Amplitude envelope follower with configurable attack and release times.
 #[derive(Debug, Clone)]
 pub struct EnvelopeFollower {
-    level: f32,
-    attack_coeff: f32,
-    release_coeff: f32,
+    level: f64,
+    attack_coeff: f64,
+    release_coeff: f64,
 }
 
 impl EnvelopeFollower {
     /// Create a new envelope follower with the given attack and release
     /// times in milliseconds.
-    pub fn new(attack_ms: f32, release_ms: f32, sample_rate: f32) -> Self {
+    pub fn new(attack_ms: f64, release_ms: f64, sample_rate: f64) -> Self {
         Self {
             level: 0.0,
             attack_coeff: Self::time_constant(attack_ms, sample_rate),
@@ -24,17 +24,17 @@ impl EnvelopeFollower {
     }
 
     /// Compute the one-pole smoothing coefficient for a given time constant.
-    fn time_constant(ms: f32, sample_rate: f32) -> f32 {
+    fn time_constant(ms: f64, sample_rate: f64) -> f64 {
         if ms <= 0.0 || sample_rate <= 0.0 {
             return 0.0;
         }
-        libm::expf(-1.0 / (ms * 0.001 * sample_rate))
+        libm::exp(-1.0 / (ms * 0.001 * sample_rate))
     }
 
     /// Process a single sample and return the current envelope level.
     #[inline]
-    pub fn tick(&mut self, input: f32) -> f32 {
-        let abs_input = libm::fabsf(input);
+    pub fn tick(&mut self, input: f64) -> f64 {
+        let abs_input = libm::fabs(input);
         let coeff = if abs_input > self.level {
             self.attack_coeff
         } else {
@@ -45,13 +45,13 @@ impl EnvelopeFollower {
     }
 
     /// Update attack and release times.
-    pub fn set_times(&mut self, attack_ms: f32, release_ms: f32, sample_rate: f32) {
+    pub fn set_times(&mut self, attack_ms: f64, release_ms: f64, sample_rate: f64) {
         self.attack_coeff = Self::time_constant(attack_ms, sample_rate);
         self.release_coeff = Self::time_constant(release_ms, sample_rate);
     }
 
     /// Get the current envelope level.
-    pub fn level(&self) -> f32 {
+    pub fn level(&self) -> f64 {
         self.level
     }
 
@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn starts_at_zero() {
         let env = EnvelopeFollower::new(1.0, 50.0, 48000.0);
-        assert!(env.level().abs() < f32::EPSILON);
+        assert!(env.level().abs() < f64::EPSILON);
     }
 
     #[test]
@@ -102,6 +102,6 @@ mod tests {
         env.tick(1.0);
         env.tick(1.0);
         env.reset();
-        assert!(env.level().abs() < f32::EPSILON);
+        assert!(env.level().abs() < f64::EPSILON);
     }
 }

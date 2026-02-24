@@ -68,11 +68,11 @@ pub struct AudioEngine {
     /// The eight synthesizer channels.
     pub channels: [Channel; NUM_CHANNELS],
     /// Global master volume applied after channel mixing (0.0 to 1.0).
-    pub master_volume: f32,
+    pub master_volume: f64,
     /// Audio sample rate in Hz.
     pub sample_rate: u32,
     /// Scratch buffer for per-channel mono rendering.
-    mono_buffer: Vec<f32>,
+    mono_buffer: Vec<f64>,
 }
 
 impl AudioEngine {
@@ -94,11 +94,11 @@ impl AudioEngine {
             ],
             master_volume: 0.8,
             sample_rate,
-            mono_buffer: vec![0.0f32; 1024],
+            mono_buffer: vec![0.0f64; 1024],
         }
     }
 
-    /// Fill a stereo interleaved f32 sample buffer (L, R, L, R, ...).
+    /// Fill a stereo interleaved f64 sample buffer (L, R, L, R, ...).
     ///
     /// Called by the platform audio callback at the configured sample rate.
     /// The buffer length must be even (pairs of left and right samples).
@@ -107,7 +107,7 @@ impl AudioEngine {
     /// input, MS-20 voice, pedal chain) and mixed into the stereo output
     /// according to per-channel left and right volume levels. The master
     /// volume is applied as a final scaling step.
-    pub fn render_samples(&mut self, buffer: &mut [f32]) {
+    pub fn render_samples(&mut self, buffer: &mut [f64]) {
         let num_frames = buffer.len() / 2;
         if num_frames == 0 {
             return;
@@ -155,11 +155,34 @@ impl AudioEngine {
         }
     }
 
+    /// Fill a stereo interleaved f32 buffer for SDL3 interoperability.
+    ///
+    /// Renders internally at f64 precision and converts to f32 on output.
+    /// This is the primary entry point for platform audio callbacks that
+    /// require f32 output (such as SDL3).
+    pub fn render_samples_f32(&mut self, buffer: &mut [f32]) {
+        let num_frames = buffer.len() / 2;
+        if num_frames == 0 {
+            return;
+        }
+
+        // Allocate or reuse an f64 staging buffer.
+        let total_samples = buffer.len();
+        let mut f64_buf = vec![0.0_f64; total_samples];
+
+        self.render_samples(&mut f64_buf);
+
+        // Convert f64 to f32 for the output.
+        for (out, &val) in buffer.iter_mut().zip(f64_buf.iter()) {
+            *out = val as f32;
+        }
+    }
+
     /// Set the left volume for a specific channel.
     ///
     /// Volume is clamped to the range 0.0 to 1.0.
     /// Out-of-bounds channel indices are silently ignored.
-    pub fn set_channel_volume_left(&mut self, channel: usize, volume: f32) {
+    pub fn set_channel_volume_left(&mut self, channel: usize, volume: f64) {
         if channel < NUM_CHANNELS {
             self.channels[channel].set_volume_left(volume);
         }
@@ -169,7 +192,7 @@ impl AudioEngine {
     ///
     /// Volume is clamped to the range 0.0 to 1.0.
     /// Out-of-bounds channel indices are silently ignored.
-    pub fn set_channel_volume_right(&mut self, channel: usize, volume: f32) {
+    pub fn set_channel_volume_right(&mut self, channel: usize, volume: f64) {
         if channel < NUM_CHANNELS {
             self.channels[channel].set_volume_right(volume);
         }
@@ -179,7 +202,7 @@ impl AudioEngine {
     ///
     /// Both volumes are clamped to the range 0.0 to 1.0.
     /// Out-of-bounds channel indices are silently ignored.
-    pub fn set_channel_volume(&mut self, channel: usize, left: f32, right: f32) {
+    pub fn set_channel_volume(&mut self, channel: usize, left: f64, right: f64) {
         if channel < NUM_CHANNELS {
             self.channels[channel].set_volume(left, right);
         }
@@ -195,7 +218,7 @@ impl AudioEngine {
     }
 
     /// Set the global master volume. Clamped to 0.0 to 1.0.
-    pub fn set_master_volume(&mut self, volume: f32) {
+    pub fn set_master_volume(&mut self, volume: f64) {
         self.master_volume = clamp_volume(volume);
     }
 }
@@ -215,25 +238,25 @@ mod tests {
         let engine = AudioEngine::new(48000);
         // Left channels (0-2)
         for i in 0..3 {
-            assert!((engine.channels[i].volume_left - 0.8).abs() < f32::EPSILON);
-            assert!(engine.channels[i].volume_right.abs() < f32::EPSILON);
+            assert!((engine.channels[i].volume_left - 0.8).abs() < f64::EPSILON);
+            assert!(engine.channels[i].volume_right.abs() < f64::EPSILON);
         }
         // Right channels (3-5)
         for i in 3..6 {
-            assert!(engine.channels[i].volume_left.abs() < f32::EPSILON);
-            assert!((engine.channels[i].volume_right - 0.8).abs() < f32::EPSILON);
+            assert!(engine.channels[i].volume_left.abs() < f64::EPSILON);
+            assert!((engine.channels[i].volume_right - 0.8).abs() < f64::EPSILON);
         }
         // Center SFX channels (6-7)
         for i in 6..8 {
-            assert!((engine.channels[i].volume_left - 0.8).abs() < f32::EPSILON);
-            assert!((engine.channels[i].volume_right - 0.8).abs() < f32::EPSILON);
+            assert!((engine.channels[i].volume_left - 0.8).abs() < f64::EPSILON);
+            assert!((engine.channels[i].volume_right - 0.8).abs() < f64::EPSILON);
         }
     }
 
     #[test]
     fn default_volume() {
         let engine = AudioEngine::new(48000);
-        assert!((engine.master_volume - 0.8).abs() < f32::EPSILON);
+        assert!((engine.master_volume - 0.8).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -248,24 +271,24 @@ mod tests {
     fn set_channel_volume_left_clamps() {
         let mut engine = AudioEngine::new(48000);
         engine.set_channel_volume_left(0, 1.5);
-        assert!((engine.channels[0].volume_left - 1.0).abs() < f32::EPSILON);
+        assert!((engine.channels[0].volume_left - 1.0).abs() < f64::EPSILON);
         engine.set_channel_volume_left(0, -0.5);
-        assert!(engine.channels[0].volume_left.abs() < f32::EPSILON);
+        assert!(engine.channels[0].volume_left.abs() < f64::EPSILON);
     }
 
     #[test]
     fn set_channel_volume_right_clamps() {
         let mut engine = AudioEngine::new(48000);
         engine.set_channel_volume_right(3, 2.0);
-        assert!((engine.channels[3].volume_right - 1.0).abs() < f32::EPSILON);
+        assert!((engine.channels[3].volume_right - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
     fn set_channel_volume_both() {
         let mut engine = AudioEngine::new(48000);
         engine.set_channel_volume(6, 0.3, 0.7);
-        assert!((engine.channels[6].volume_left - 0.3).abs() < f32::EPSILON);
-        assert!((engine.channels[6].volume_right - 0.7).abs() < f32::EPSILON);
+        assert!((engine.channels[6].volume_left - 0.3).abs() < f64::EPSILON);
+        assert!((engine.channels[6].volume_right - 0.7).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -281,11 +304,11 @@ mod tests {
     #[test]
     fn render_samples_writes_silence_with_stubs() {
         let mut engine = AudioEngine::new(48000);
-        let mut buffer = [1.0f32; 64];
+        let mut buffer = [1.0f64; 64];
         engine.render_samples(&mut buffer);
         // With synth stubs (all channels write silence), output should be zero
         for sample in &buffer {
-            assert!(sample.abs() < f32::EPSILON);
+            assert!(sample.abs() < f64::EPSILON);
         }
     }
 
@@ -306,9 +329,9 @@ mod tests {
     fn master_volume_clamping() {
         let mut engine = AudioEngine::new(48000);
         engine.set_master_volume(2.0);
-        assert!((engine.master_volume - 1.0).abs() < f32::EPSILON);
+        assert!((engine.master_volume - 1.0).abs() < f64::EPSILON);
         engine.set_master_volume(-1.0);
-        assert!(engine.master_volume.abs() < f32::EPSILON);
+        assert!(engine.master_volume.abs() < f64::EPSILON);
     }
 
     #[test]
@@ -343,7 +366,7 @@ mod tests {
     fn render_grows_mono_buffer() {
         let mut engine = AudioEngine::new(48000);
         // Render a large buffer to trigger mono_buffer growth
-        let mut buffer = alloc::vec![0.0f32; 4096];
+        let mut buffer = alloc::vec![0.0f64; 4096];
         engine.render_samples(&mut buffer);
         assert!(engine.mono_buffer.len() >= 2048);
     }

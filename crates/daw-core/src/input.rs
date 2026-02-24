@@ -34,4 +34,10 @@ pub enum DawInput {
     ZoomIn,
     /// Zoom out.
     ZoomOut,
+    /// Cycle to the next preset on the selected channel.
+    NextPreset,
+    /// Cycle to the previous preset on the selected channel.
+    PrevPreset,
+    /// Toggle mute on the selected channel.
+    ToggleMute,
 }

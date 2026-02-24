@@ -9,10 +9,13 @@ use std::sync::{Arc, Mutex};
 
 use std::path::PathBuf;
 
+use audio::modmatrix::{ModDest, ModRouting, ModSource};
+use audio::vco::{Scale, Waveform};
 use audio::AudioEngine;
 use daw_core::input::DawInput;
 use daw_core::midi::{MidiNote, MidiTrack};
 use daw_core::patch::{EffectChainConfig, PatchConfig};
+use daw_core::presets;
 use daw_core::project::DawProject;
 use daw_core::render::{
     self as colors, BG_DARK, BG_PANEL, BG_TRACK, CHANNEL_COLORS, GRID_BAR, GRID_BEAT, GRID_LINE,
@@ -52,6 +55,124 @@ const DEFAULT_VELOCITY: u8 = 100;
 /// Default project root directory.
 const PROJECT_ROOT: &str = "daw_projects";
 
+/// Parse a waveform name string into the audio engine Waveform enum.
+fn parse_waveform(s: &str) -> Waveform {
+    match s {
+        "triangle" => Waveform::Triangle,
+        "sawtooth" => Waveform::Sawtooth,
+        "square" => Waveform::PwSquare,
+        "sine" => Waveform::Sine,
+        "noise" => Waveform::WhiteNoise,
+        "ring" => Waveform::RingModulator,
+        _ => Waveform::Sawtooth,
+    }
+}
+
+/// Parse an organ pipe scale string into the audio engine Scale enum.
+fn parse_scale(s: &str) -> Scale {
+    match s {
+        "32'" => Scale::Feet32,
+        "16'" => Scale::Feet16,
+        "8'" => Scale::Feet8,
+        "4'" => Scale::Feet4,
+        "2'" => Scale::Feet2,
+        _ => Scale::Feet8,
+    }
+}
+
+/// Parse a modulation source name into the engine ModSource enum.
+fn parse_mod_source(s: &str) -> Option<ModSource> {
+    match s {
+        "eg1" => Some(ModSource::Eg1),
+        "eg2" => Some(ModSource::Eg2),
+        "lfo" => Some(ModSource::Lfo),
+        "velocity" => Some(ModSource::Velocity),
+        "key_track" => Some(ModSource::KeyTrack),
+        _ => None,
+    }
+}
+
+/// Parse a modulation destination name into the engine ModDest enum.
+fn parse_mod_dest(s: &str) -> Option<ModDest> {
+    match s {
+        "hpf_cutoff" => Some(ModDest::HpfCutoff),
+        "lpf_cutoff" => Some(ModDest::LpfCutoff),
+        "lpf_resonance" => Some(ModDest::LpfResonance),
+        "vco1_pitch" => Some(ModDest::Vco1Pitch),
+        "vco2_pitch" => Some(ModDest::Vco2Pitch),
+        "vca_level" => Some(ModDest::VcaLevel),
+        "pwm_width" => Some(ModDest::PwmWidth),
+        _ => None,
+    }
+}
+
+/// Apply a PatchConfig to the audio engine channel synth.
+///
+/// Maps daw-core configuration strings to audio engine enum types and
+/// writes all synthesizer parameters directly to the Ms20Voice fields.
+fn apply_patch_to_engine(engine: &mut AudioEngine, channel: usize, patch: &PatchConfig) {
+    let synth = &mut engine.channels[channel].synth;
+
+    // VCO1.
+    synth.vco1.waveform = parse_waveform(&patch.vco1_waveform);
+    synth.vco1.scale = parse_scale(&patch.vco1_scale);
+    synth.vco1.pitch_fine = patch.vco1_pitch_fine;
+    synth.vco1.level = patch.vco1_level;
+    synth.vco1.pulse_width = patch.vco1_pulse_width;
+    synth.vco1.quantization = patch.vco1_quantization;
+
+    // VCO2.
+    synth.vco2.waveform = parse_waveform(&patch.vco2_waveform);
+    synth.vco2.scale = parse_scale(&patch.vco2_scale);
+    synth.vco2.pitch_fine = patch.vco2_pitch_fine;
+    synth.vco2.level = patch.vco2_level;
+    synth.vco2.pulse_width = patch.vco2_pulse_width;
+    synth.vco2.quantization = patch.vco2_quantization;
+
+    // VCO mix.
+    synth.vco_mix = patch.vco_mix;
+
+    // EG1 (HPF envelope).
+    synth.eg1.attack = patch.eg1_attack;
+    synth.eg1.decay = patch.eg1_decay;
+    synth.eg1.sustain = patch.eg1_sustain;
+    synth.eg1.release = patch.eg1_release;
+
+    // EG2 (LPF and VCA envelope).
+    synth.eg2.attack = patch.eg2_attack;
+    synth.eg2.decay = patch.eg2_decay;
+    synth.eg2.sustain = patch.eg2_sustain;
+    synth.eg2.release = patch.eg2_release;
+
+    // Filters.
+    synth.hpf.cutoff = patch.hpf_cutoff;
+    synth.hpf.resonance = patch.hpf_resonance;
+    synth.lpf.cutoff = patch.lpf_cutoff;
+    synth.lpf.resonance = patch.lpf_resonance;
+
+    // LFO.
+    synth.lfo_rate = patch.lfo_rate;
+
+    // Pitch glide.
+    synth.glide.enabled = patch.glide_enabled;
+    synth.glide.time = patch.glide_time;
+
+    // Modulation matrix: clear defaults and apply patch routings.
+    synth.mod_matrix.clear();
+    for routing_cfg in &patch.mod_routings {
+        if let (Some(src), Some(dst)) = (
+            parse_mod_source(&routing_cfg.source),
+            parse_mod_dest(&routing_cfg.dest),
+        ) {
+            synth.mod_matrix.add_routing(ModRouting {
+                source: src,
+                dest: dst,
+                depth: routing_cfg.depth,
+            });
+        }
+    }
+}
+
 /// DAW application state.
 struct DawState {
     project: DawProject,
@@ -78,6 +199,9 @@ struct DawState {
     active_notes: [Option<usize>; 8],
     /// Previous transport tick position (for detecting tick advancement).
     prev_ticks: u64,
+    /// Per-channel preset index into `presets::preset_names()`. None means
+    /// the channel uses a custom (non-preset) patch.
+    preset_indices: [Option<usize>; 8],
 }
 
 impl DawState {
@@ -100,6 +224,7 @@ impl DawState {
             status_message: None,
             active_notes: [None; 8],
             prev_ticks: 0,
+            preset_indices: [None; 8],
         }
     }
 
@@ -287,6 +412,13 @@ impl DawState {
             DawInput::Cancel => {
                 self.selected_note = None;
             }
+            DawInput::NextPreset => self.cycle_preset(1),
+            DawInput::PrevPreset => self.cycle_preset(-1),
+            DawInput::ToggleMute => {
+                let ch = self.selected_channel;
+                self.project.channels[ch].muted = !self.project.channels[ch].muted;
+                self.sync_engine_channels();
+            }
             _ => {}
         }
     }
@@ -351,6 +483,47 @@ impl DawState {
         }
     }
 
+    /// Cycle the preset on the selected channel by the given offset (+1 or -1).
+    ///
+    /// On the first press, if the channel has no preset index, starts at the
+    /// first preset. Wraps around at both ends of the preset list.
+    fn cycle_preset(&mut self, offset: i32) {
+        let names = presets::preset_names();
+        if names.is_empty() {
+            return;
+        }
+        let ch = self.selected_channel;
+        let current = self.preset_indices[ch].unwrap_or(0);
+        let next = if offset > 0 {
+            (current + 1) % names.len()
+        } else if current == 0 {
+            names.len() - 1
+        } else {
+            current - 1
+        };
+        let name = names[next];
+        if let Some(patch) = presets::preset(name) {
+            self.patches[ch] = patch;
+            self.preset_indices[ch] = Some(next);
+            self.project.channels[ch].name = String::from(name);
+            if let Ok(mut engine) = self.engine.try_lock() {
+                apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+            }
+            self.status_message = Some(format!("Ch{}: {}", ch + 1, name));
+        }
+    }
+
+    /// Apply all channel patches to the audio engine. Called after loading
+    /// a project to synchronize saved patch data with the engine state.
+    fn apply_all_patches(&self) {
+        let Ok(mut engine) = self.engine.try_lock() else {
+            return;
+        };
+        for ch in 0..8 {
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+        }
+    }
+
     /// Delete the currently selected note, if any.
     fn delete_selected_note(&mut self) {
         if let Some(idx) = self.selected_note {
@@ -412,8 +585,8 @@ impl DawState {
             renderer.draw_text(msg, screen_w - 620.0, 12.0, FontSize::Small, TEXT_ACCENT);
         } else {
             renderer.draw_text(
-                "Space=Play  S=Stop  1-8=Ch  Click=Note  Del=Remove  Ctrl+S=Save  Q=Quit",
-                screen_w - 660.0,
+                "Space=Play  S=Stop  1-8=Ch  P=Preset  M=Mute  Click=Note  Del=Remove  Ctrl+S=Save",
+                screen_w - 720.0,
                 12.0,
                 FontSize::Small,
                 TEXT_SECONDARY,
@@ -593,6 +766,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut project_root = PROJECT_ROOT.to_string();
     let mut load_name: Option<String> = None;
+    let mut import_midi: Option<String> = None;
+    let mut import_channel: usize = 0;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -602,6 +777,14 @@ fn main() {
             }
             "--project" if i + 1 < args.len() => {
                 load_name = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--import-midi" if i + 1 < args.len() => {
+                import_midi = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--import-channel" if i + 1 < args.len() => {
+                import_channel = args[i + 1].parse::<usize>().unwrap_or(0);
                 i += 2;
             }
             _ => {
@@ -662,12 +845,63 @@ fn main() {
         }
     }
 
-    // Sync channel configuration to the audio engine.
+    // Import MIDI file if requested.
+    if let Some(midi_path) = import_midi {
+        match std::fs::read(&midi_path) {
+            Ok(midi_data) => {
+                match daw_core::smf::parse_smf(&midi_data) {
+                    Ok(smf_result) => {
+                        eprintln!("[INFO] MIDI import: {}", daw_core::smf::describe_import(&smf_result));
+
+                        // Import tracks into DAW channels starting at import_channel.
+                        // Skip empty tracks (e.g., tempo conductor track in Type 1 files).
+                        let mut ch = import_channel;
+                        for smf_track in &smf_result.tracks {
+                            if smf_track.notes.is_empty() || ch >= 8 {
+                                continue;
+                            }
+                            state.tracks[ch] = smf_track.clone();
+                            // Apply monophonic autofix if the imported track has overlaps.
+                            if !state.tracks[ch].is_monophonic() {
+                                eprintln!("[INFO] Ch{}: autofix monophonic (latest-note strategy)", ch + 1);
+                                state.tracks[ch].autofix(daw_core::midi::AutofixStrategy::LatestNote);
+                            }
+                            eprintln!(
+                                "[INFO] Ch{}: imported {} notes",
+                                ch + 1,
+                                state.tracks[ch].notes.len()
+                            );
+                            ch += 1;
+                        }
+
+                        // Update ticks per beat if they differ.
+                        if smf_result.ticks_per_beat != state.project.ticks_per_beat {
+                            eprintln!(
+                                "[INFO] Adjusting ticks per beat: {} -> {}",
+                                state.project.ticks_per_beat,
+                                smf_result.ticks_per_beat
+                            );
+                            state.project.ticks_per_beat = smf_result.ticks_per_beat;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[ERROR] MIDI import failed: {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[ERROR] Could not read MIDI file {midi_path}: {e}");
+            }
+        }
+    }
+
+    // Sync channel configuration and patches to the audio engine.
     state.sync_engine_channels();
+    state.apply_all_patches();
     state.transport.tempo = state.project.tempo;
 
     println!("[INFO] DAW started: {WINDOW_WIDTH}x{WINDOW_HEIGHT} @ {SAMPLE_RATE}Hz");
-    println!("[INFO] Controls: Space=Play/Pause, S=Stop, 1-8=Channel, +/-=Zoom, Ctrl+S=Save, Q=Quit");
+    println!("[INFO] Controls: Space=Play/Pause, S=Stop, 1-8=Ch, P=Preset, Shift+P=Prev, M=Mute, Ctrl+S=Save, Q=Quit");
 
     // Main event loop.
     let mut event = unsafe { std::mem::zeroed::<sdl3_sys::events::SDL_Event>() };

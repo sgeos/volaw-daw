@@ -8,6 +8,7 @@ pub mod platform;
 pub mod presets;
 pub mod project;
 pub mod render;
+pub mod smf;
 pub mod transport;
 
 pub use input::DawInput;

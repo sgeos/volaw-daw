@@ -2,6 +2,7 @@ use daw_core::input::DawInput;
 use sdl3_sys::events::*;
 use sdl3_sys::keycode::SDL_KMOD_CTRL;
 use sdl3_sys::keycode::SDL_KMOD_GUI;
+use sdl3_sys::keycode::SDL_KMOD_SHIFT;
 use sdl3_sys::scancode::*;
 
 /// Translate an SDL3 event into a DAW input event.
@@ -26,8 +27,12 @@ pub unsafe fn translate_event(event: &SDL_Event) -> Option<DawInput> {
         // Check for modifier key combinations (Ctrl or Cmd on macOS).
         let has_ctrl = (key.r#mod.0 & SDL_KMOD_CTRL.0) != 0
             || (key.r#mod.0 & SDL_KMOD_GUI.0) != 0;
+        let has_shift = (key.r#mod.0 & SDL_KMOD_SHIFT.0) != 0;
         if has_ctrl {
             return translate_ctrl_scancode(key.scancode);
+        }
+        if has_shift {
+            return translate_shift_scancode(key.scancode);
         }
         return translate_scancode(key.scancode);
     }
@@ -62,6 +67,13 @@ fn translate_ctrl_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
     }
 }
 
+fn translate_shift_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
+    match scancode {
+        SDL_SCANCODE_P => Some(DawInput::PrevPreset),
+        _ => None,
+    }
+}
+
 fn translate_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
     match scancode {
         SDL_SCANCODE_Q => Some(DawInput::Quit),
@@ -85,6 +97,9 @@ fn translate_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
         SDL_SCANCODE_6 => Some(DawInput::SelectChannel(5)),
         SDL_SCANCODE_7 => Some(DawInput::SelectChannel(6)),
         SDL_SCANCODE_8 => Some(DawInput::SelectChannel(7)),
+        // Preset cycling and mute toggle.
+        SDL_SCANCODE_P => Some(DawInput::NextPreset),
+        SDL_SCANCODE_M => Some(DawInput::ToggleMute),
         _ => None,
     }
 }

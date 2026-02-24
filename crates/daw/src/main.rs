@@ -8,11 +8,11 @@ use std::sync::{Arc, Mutex};
 
 use audio::AudioEngine;
 use daw_core::input::DawInput;
-use daw_core::midi::MidiTrack;
+use daw_core::midi::{MidiNote, MidiTrack};
 use daw_core::project::DawProject;
 use daw_core::render::{
     self as colors, BG_DARK, BG_PANEL, BG_TRACK, CHANNEL_COLORS, GRID_BAR, GRID_BEAT, GRID_LINE,
-    KEY_BLACK, KEY_LABEL, KEY_WHITE, PLAYHEAD, TEXT_ACCENT,
+    KEY_BLACK, KEY_LABEL, KEY_WHITE, NOTE_SELECTED, PLAYHEAD, TEXT_ACCENT,
     TEXT_PRIMARY, TEXT_SECONDARY,
 };
 use daw_core::render::{Color, FontSize, Renderer};
@@ -39,6 +39,12 @@ const LOWEST_NOTE: u8 = 36; // C2
 /// Pixels per beat at zoom level 1.0.
 const BASE_PIXELS_PER_BEAT: f32 = 80.0;
 
+/// Default note duration in ticks (one beat).
+const DEFAULT_NOTE_DURATION: u64 = 480;
+
+/// Default note velocity.
+const DEFAULT_VELOCITY: u8 = 100;
+
 /// DAW application state.
 struct DawState {
     project: DawProject,
@@ -51,6 +57,10 @@ struct DawState {
     zoom: f32,
     tracks: [MidiTrack; 8],
     running: bool,
+    /// Index of the currently selected note in the active channel, if any.
+    selected_note: Option<usize>,
+    /// Snap quantization in ticks. Notes snap to this grid. Default is one beat (480).
+    snap_ticks: u64,
 }
 
 impl DawState {
@@ -65,7 +75,28 @@ impl DawState {
             zoom: 1.0,
             tracks: core::array::from_fn(|_| MidiTrack::new()),
             running: true,
+            selected_note: None,
+            snap_ticks: DEFAULT_NOTE_DURATION,
         }
+    }
+
+    /// Compute the tick width in pixels for the current zoom level.
+    fn tick_width(&self) -> f32 {
+        let ppb = BASE_PIXELS_PER_BEAT * self.zoom;
+        ppb / self.project.ticks_per_beat as f32
+    }
+
+    /// Convert a pixel x-coordinate on the grid to a tick value, snapped to the grid.
+    fn x_to_tick(&self, x: f32) -> u64 {
+        let raw_tick = ((x - PIANO_KEY_WIDTH + self.scroll_x) / self.tick_width()).max(0.0) as u64;
+        // Snap to the nearest grid boundary.
+        (raw_tick / self.snap_ticks) * self.snap_ticks
+    }
+
+    /// Convert a pixel y-coordinate on the grid to a MIDI pitch value.
+    fn y_to_pitch(&self, y: f32, roll_y: f32) -> u8 {
+        let relative = ((y - roll_y + self.scroll_y) / NOTE_HEIGHT) as u8;
+        (LOWEST_NOTE + VISIBLE_NOTE_RANGE - 1).saturating_sub(relative)
     }
 
     fn handle_input(&mut self, input: DawInput) {
@@ -82,6 +113,7 @@ impl DawState {
             DawInput::SelectChannel(ch) => {
                 if (ch as usize) < 8 {
                     self.selected_channel = ch as usize;
+                    self.selected_note = None;
                 }
             }
             DawInput::ZoomIn => {
@@ -97,7 +129,83 @@ impl DawState {
             DawInput::Scroll(delta) => {
                 self.scroll_y = (self.scroll_y - delta as f32 * 20.0).max(0.0);
             }
+            DawInput::Click(mx, my) => self.handle_click(mx, my),
+            DawInput::Delete => self.delete_selected_note(),
+            DawInput::Cancel => {
+                self.selected_note = None;
+            }
             _ => {}
+        }
+    }
+
+    /// Handle a mouse click. If over the grid area, either select an existing
+    /// note or place a new one. If over the channel bar, select a channel.
+    fn handle_click(&mut self, mx: f32, my: f32) {
+        let roll_y = TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT;
+
+        // Channel bar click.
+        if my >= TOOLBAR_HEIGHT && my < roll_y {
+            let tab_w = WINDOW_WIDTH as f32 / 8.0;
+            let ch = (mx / tab_w) as usize;
+            if ch < 8 {
+                self.selected_channel = ch;
+                self.selected_note = None;
+            }
+            return;
+        }
+
+        // Piano roll grid click (to the right of the piano keys).
+        if my >= roll_y && mx >= PIANO_KEY_WIDTH {
+            let tick = self.x_to_tick(mx);
+            let pitch = self.y_to_pitch(my, roll_y);
+
+            // Check if clicking on an existing note.
+            let tw = self.tick_width();
+            let track = &self.tracks[self.selected_channel];
+            for (i, note) in track.notes.iter().enumerate() {
+                let note_x = PIANO_KEY_WIDTH + note.tick as f32 * tw - self.scroll_x;
+                let note_w = note.duration as f32 * tw;
+                let note_y = self.note_to_y(note.pitch, roll_y);
+
+                if mx >= note_x
+                    && mx <= note_x + note_w
+                    && my >= note_y
+                    && my <= note_y + NOTE_HEIGHT
+                {
+                    self.selected_note = Some(i);
+                    return;
+                }
+            }
+
+            // No existing note hit. Place a new note.
+            if (LOWEST_NOTE..LOWEST_NOTE + VISIBLE_NOTE_RANGE).contains(&pitch) {
+                let new_note = MidiNote {
+                    tick,
+                    duration: self.snap_ticks,
+                    pitch,
+                    velocity: DEFAULT_VELOCITY,
+                };
+                self.tracks[self.selected_channel].notes.push(new_note);
+                self.tracks[self.selected_channel].sort();
+
+                // Select the newly placed note.
+                let idx = self.tracks[self.selected_channel]
+                    .notes
+                    .iter()
+                    .position(|n| n.tick == tick && n.pitch == pitch);
+                self.selected_note = idx;
+            }
+        }
+    }
+
+    /// Delete the currently selected note, if any.
+    fn delete_selected_note(&mut self) {
+        if let Some(idx) = self.selected_note {
+            let track = &mut self.tracks[self.selected_channel];
+            if idx < track.notes.len() {
+                track.notes.remove(idx);
+            }
+            self.selected_note = None;
         }
     }
 
@@ -147,7 +255,7 @@ impl DawState {
 
         // Key hints.
         renderer.draw_text(
-            "Space=Play  S=Stop  1-8=Channel  +/-=Zoom  Arrows=Scroll  Q=Quit",
+            "Space=Play  S=Stop  1-8=Ch  Click=Note  Del=Remove  +/-=Zoom  Q=Quit",
             screen_w - 620.0,
             12.0,
             FontSize::Small,
@@ -259,7 +367,7 @@ impl DawState {
         // Render notes for the selected channel.
         let track = &self.tracks[self.selected_channel];
         let ch_color = CHANNEL_COLORS[self.selected_channel];
-        for note in &track.notes {
+        for (i, note) in track.notes.iter().enumerate() {
             let note_y = self.note_to_y(note.pitch, roll_y);
             let note_x = PIANO_KEY_WIDTH + note.tick as f32 * tick_width - self.scroll_x;
             let note_w = note.duration as f32 * tick_width;
@@ -271,8 +379,15 @@ impl DawState {
                 continue;
             }
 
-            renderer.fill_rect(note_x, note_y, note_w, NOTE_HEIGHT - 1.0, ch_color);
-            renderer.draw_rect(note_x, note_y, note_w, NOTE_HEIGHT - 1.0, Color::rgba(255, 255, 255, 40));
+            let is_selected = self.selected_note == Some(i);
+            let fill_color = if is_selected { NOTE_SELECTED } else { ch_color };
+            renderer.fill_rect(note_x, note_y, note_w, NOTE_HEIGHT - 1.0, fill_color);
+            let border = if is_selected {
+                Color::rgba(255, 255, 255, 180)
+            } else {
+                Color::rgba(255, 255, 255, 40)
+            };
+            renderer.draw_rect(note_x, note_y, note_w, NOTE_HEIGHT - 1.0, border);
         }
 
         // Playhead.

@@ -74,6 +74,10 @@ struct DawState {
     project_root: PathBuf,
     /// Status message displayed temporarily.
     status_message: Option<String>,
+    /// Per-channel: index of the currently playing note, if any.
+    active_notes: [Option<usize>; 8],
+    /// Previous transport tick position (for detecting tick advancement).
+    prev_ticks: u64,
 }
 
 impl DawState {
@@ -94,6 +98,8 @@ impl DawState {
             snap_ticks: DEFAULT_NOTE_DURATION,
             project_root: PathBuf::from(PROJECT_ROOT),
             status_message: None,
+            active_notes: [None; 8],
+            prev_ticks: 0,
         }
     }
 
@@ -136,6 +142,90 @@ impl DawState {
         }
     }
 
+    /// Advance playback by one frame. Scans all channels for note start/end
+    /// events in the tick range since the last frame. Sends note_on/note_off
+    /// to the audio engine via the shared Arc<Mutex>.
+    fn advance_playback(&mut self) {
+        if !self.transport.playing {
+            return;
+        }
+
+        // Advance transport by approximately one frame of audio samples.
+        let samples_per_frame = self.transport.sample_rate / 60;
+        self.transport.advance_samples(samples_per_frame);
+
+        let current_ticks = self.transport.position_ticks;
+        let prev_ticks = self.prev_ticks;
+        self.prev_ticks = current_ticks;
+
+        // Lock the engine to send note events.
+        let Ok(mut engine) = self.engine.try_lock() else {
+            return;
+        };
+
+        for ch in 0..8 {
+            if self.project.channels[ch].muted {
+                continue;
+            }
+
+            let track = &self.tracks[ch];
+
+            // Check if the currently active note should end.
+            if let Some(note_idx) = self.active_notes[ch] {
+                if note_idx < track.notes.len() {
+                    let note = &track.notes[note_idx];
+                    let note_end = note.tick + note.duration;
+                    if current_ticks >= note_end {
+                        engine.channels[ch].synth.note_off();
+                        self.active_notes[ch] = None;
+                    }
+                } else {
+                    self.active_notes[ch] = None;
+                }
+            }
+
+            // Check if a new note should start in the tick range [prev_ticks, current_ticks).
+            for (i, note) in track.notes.iter().enumerate() {
+                if note.tick >= prev_ticks && note.tick < current_ticks {
+                    let freq = MidiTrack::note_to_freq(note.pitch);
+                    let vel = note.velocity as f64 / 127.0;
+                    engine.channels[ch].synth.note_on_with_velocity(freq, vel);
+                    engine.channels[ch].enabled = true;
+                    self.active_notes[ch] = Some(i);
+                }
+            }
+        }
+    }
+
+    /// Stop all active notes across all channels.
+    fn stop_all_notes(&mut self) {
+        let Ok(mut engine) = self.engine.try_lock() else {
+            return;
+        };
+        for ch in 0..8 {
+            if self.active_notes[ch].is_some() {
+                engine.channels[ch].synth.note_off();
+                self.active_notes[ch] = None;
+            }
+        }
+    }
+
+    /// Synchronize project channel settings (volume, pan, mute) to the audio engine.
+    fn sync_engine_channels(&self) {
+        let Ok(mut engine) = self.engine.try_lock() else {
+            return;
+        };
+        for ch in 0..8 {
+            let conf = &self.project.channels[ch];
+            let vol = conf.volume;
+            // Simple stereo pan: pan = -1.0 (left) to 1.0 (right), 0.0 center.
+            let left = vol * (1.0 - conf.pan.max(0.0));
+            let right = vol * (1.0 + conf.pan.min(0.0));
+            engine.channels[ch].set_volume(left, right);
+            engine.channels[ch].enabled = !conf.muted;
+        }
+    }
+
     /// Compute the tick width in pixels for the current zoom level.
     fn tick_width(&self) -> f32 {
         let ppb = BASE_PIXELS_PER_BEAT * self.zoom;
@@ -161,11 +251,17 @@ impl DawState {
             DawInput::TogglePlay => {
                 if self.transport.playing {
                     self.transport.stop();
+                    self.stop_all_notes();
                 } else {
+                    self.prev_ticks = self.transport.position_ticks;
                     self.transport.play();
                 }
             }
-            DawInput::Stop => self.transport.reset(),
+            DawInput::Stop => {
+                self.transport.reset();
+                self.stop_all_notes();
+                self.prev_ticks = 0;
+            }
             DawInput::SelectChannel(ch) => {
                 if (ch as usize) < 8 {
                     self.selected_channel = ch as usize;
@@ -566,6 +662,10 @@ fn main() {
         }
     }
 
+    // Sync channel configuration to the audio engine.
+    state.sync_engine_channels();
+    state.transport.tempo = state.project.tempo;
+
     println!("[INFO] DAW started: {WINDOW_WIDTH}x{WINDOW_HEIGHT} @ {SAMPLE_RATE}Hz");
     println!("[INFO] Controls: Space=Play/Pause, S=Stop, 1-8=Channel, +/-=Zoom, Ctrl+S=Save, Q=Quit");
 
@@ -578,6 +678,9 @@ fn main() {
                 state.handle_input(input);
             }
         }
+
+        // Advance playback (note events to audio engine).
+        state.advance_playback();
 
         // Render.
         state.render(&mut renderer);

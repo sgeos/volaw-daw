@@ -9,6 +9,7 @@ pub mod pedals;
 pub mod position;
 pub mod sample;
 pub mod synth;
+pub mod vco;
 
 pub use channel::Channel;
 pub use effects::Pedal;
@@ -17,3 +18,4 @@ pub use pedals::PedalChain;
 pub use position::PositionalStage;
 pub use sample::SampleInput;
 pub use synth::Ms20Voice;
+pub use vco::{Scale, Vco, Waveform};

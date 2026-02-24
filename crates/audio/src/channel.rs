@@ -136,7 +136,7 @@ impl Channel {
 
         // Mono signal chain: sample input, MS-20 synth, pre-positional pedals.
         self.sample_in.process(&mut mono_buf[..len]);
-        self.synth.process(&mut mono_buf[..len]);
+        self.synth.process(&mut mono_buf[..len], sample_rate);
         self.pre_pedals.process(&mut mono_buf[..len], sample_rate);
 
         // Mono-to-stereo split via positional stage.

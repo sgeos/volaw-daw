@@ -1,3 +1,4 @@
+mod save_load;
 mod sdl_audio;
 mod sdl_input;
 #[allow(dead_code)]
@@ -6,9 +7,12 @@ mod sdl_renderer;
 
 use std::sync::{Arc, Mutex};
 
+use std::path::PathBuf;
+
 use audio::AudioEngine;
 use daw_core::input::DawInput;
 use daw_core::midi::{MidiNote, MidiTrack};
+use daw_core::patch::{EffectChainConfig, PatchConfig};
 use daw_core::project::DawProject;
 use daw_core::render::{
     self as colors, BG_DARK, BG_PANEL, BG_TRACK, CHANNEL_COLORS, GRID_BAR, GRID_BEAT, GRID_LINE,
@@ -45,6 +49,9 @@ const DEFAULT_NOTE_DURATION: u64 = 480;
 /// Default note velocity.
 const DEFAULT_VELOCITY: u8 = 100;
 
+/// Default project root directory.
+const PROJECT_ROOT: &str = "daw_projects";
+
 /// DAW application state.
 struct DawState {
     project: DawProject,
@@ -56,11 +63,17 @@ struct DawState {
     scroll_y: f32,
     zoom: f32,
     tracks: [MidiTrack; 8],
+    patches: [PatchConfig; 8],
+    effects: [EffectChainConfig; 8],
     running: bool,
     /// Index of the currently selected note in the active channel, if any.
     selected_note: Option<usize>,
     /// Snap quantization in ticks. Notes snap to this grid. Default is one beat (480).
     snap_ticks: u64,
+    /// Project root directory for save/load.
+    project_root: PathBuf,
+    /// Status message displayed temporarily.
+    status_message: Option<String>,
 }
 
 impl DawState {
@@ -74,9 +87,52 @@ impl DawState {
             scroll_y: (VISIBLE_NOTE_RANGE as f32 / 2.0) * NOTE_HEIGHT,
             zoom: 1.0,
             tracks: core::array::from_fn(|_| MidiTrack::new()),
+            patches: core::array::from_fn(|_| PatchConfig::default()),
+            effects: core::array::from_fn(|_| EffectChainConfig::default()),
             running: true,
             selected_note: None,
             snap_ticks: DEFAULT_NOTE_DURATION,
+            project_root: PathBuf::from(PROJECT_ROOT),
+            status_message: None,
+        }
+    }
+
+    /// Assign default file references for any channels that do not have them.
+    fn ensure_file_references(&mut self) {
+        for i in 0..8 {
+            let ch = &mut self.project.channels[i];
+            if ch.patch_file.is_empty() {
+                ch.patch_file = format!("ch{}_patch.toml", i + 1);
+            }
+            if ch.effect_chain_file.is_empty() {
+                ch.effect_chain_file = format!("ch{}_effects.toml", i + 1);
+            }
+            if ch.midi_file.is_empty() {
+                ch.midi_file = format!("ch{}.toml", i + 1);
+            }
+        }
+    }
+
+    /// Save the project to disk.
+    fn save(&mut self) {
+        self.ensure_file_references();
+        let filename = self.project.name.replace(' ', "_").to_lowercase();
+        match save_load::save_project(
+            &self.project_root,
+            &filename,
+            &self.project,
+            &self.tracks,
+            &self.patches,
+            &self.effects,
+        ) {
+            Ok(path) => {
+                self.status_message = Some(format!("Saved: {}", path.display()));
+                eprintln!("[INFO] Project saved to {}", path.display());
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Save failed: {e}"));
+                eprintln!("[ERROR] Save failed: {e}");
+            }
         }
     }
 
@@ -131,6 +187,7 @@ impl DawState {
             }
             DawInput::Click(mx, my) => self.handle_click(mx, my),
             DawInput::Delete => self.delete_selected_note(),
+            DawInput::Save => self.save(),
             DawInput::Cancel => {
                 self.selected_note = None;
             }
@@ -249,18 +306,23 @@ impl DawState {
         let tempo_text = format!("{:.0} BPM", self.project.tempo);
         renderer.draw_text(&tempo_text, 500.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
 
-        // Zoom display.
-        let zoom_text = format!("x{:.1}", self.zoom);
-        renderer.draw_text(&zoom_text, 620.0, 8.0, FontSize::Small, TEXT_SECONDARY);
+        // Zoom and note count display.
+        let note_count = self.tracks[self.selected_channel].notes.len();
+        let info_text = format!("x{:.1}  Notes: {note_count}", self.zoom);
+        renderer.draw_text(&info_text, 620.0, 8.0, FontSize::Small, TEXT_SECONDARY);
 
-        // Key hints.
-        renderer.draw_text(
-            "Space=Play  S=Stop  1-8=Ch  Click=Note  Del=Remove  +/-=Zoom  Q=Quit",
-            screen_w - 620.0,
-            12.0,
-            FontSize::Small,
-            TEXT_SECONDARY,
-        );
+        // Status message or key hints.
+        if let Some(ref msg) = self.status_message {
+            renderer.draw_text(msg, screen_w - 620.0, 12.0, FontSize::Small, TEXT_ACCENT);
+        } else {
+            renderer.draw_text(
+                "Space=Play  S=Stop  1-8=Ch  Click=Note  Del=Remove  Ctrl+S=Save  Q=Quit",
+                screen_w - 660.0,
+                12.0,
+                FontSize::Small,
+                TEXT_SECONDARY,
+            );
+        }
     }
 
     fn render_channel_bar<R: Renderer>(&self, renderer: &mut R, screen_w: f32) {
@@ -431,6 +493,28 @@ impl DawState {
 }
 
 fn main() {
+    // Parse command line arguments.
+    let args: Vec<String> = std::env::args().collect();
+    let mut project_root = PROJECT_ROOT.to_string();
+    let mut load_name: Option<String> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--root" if i + 1 < args.len() => {
+                project_root = args[i + 1].clone();
+                i += 2;
+            }
+            "--project" if i + 1 < args.len() => {
+                load_name = Some(args[i + 1].clone());
+                i += 2;
+            }
+            _ => {
+                eprintln!("[WARN] Unknown argument: {}", args[i]);
+                i += 1;
+            }
+        }
+    }
+
     // Initialize SDL3.
     let font_path = if std::path::Path::new(FONT_PATH).exists() {
         FONT_PATH.to_string()
@@ -463,11 +547,27 @@ fn main() {
         audio_bridge.resume();
     }
 
-    // Create DAW state.
+    // Create DAW state, optionally loading a project.
     let mut state = DawState::new(engine_arc);
+    state.project_root = PathBuf::from(&project_root);
+
+    if let Some(name) = load_name {
+        match save_load::load_project(&state.project_root, &name) {
+            Ok((project, tracks, patches, effects)) => {
+                state.project = project;
+                state.tracks = tracks;
+                state.patches = patches;
+                state.effects = effects;
+                eprintln!("[INFO] Loaded project: {name}");
+            }
+            Err(e) => {
+                eprintln!("[ERROR] Failed to load project {name}: {e}");
+            }
+        }
+    }
 
     println!("[INFO] DAW started: {WINDOW_WIDTH}x{WINDOW_HEIGHT} @ {SAMPLE_RATE}Hz");
-    println!("[INFO] Controls: Space=Play/Pause, S=Stop, 1-8=Channel, +/-=Zoom, Q=Quit");
+    println!("[INFO] Controls: Space=Play/Pause, S=Stop, 1-8=Channel, +/-=Zoom, Ctrl+S=Save, Q=Quit");
 
     // Main event loop.
     let mut event = unsafe { std::mem::zeroed::<sdl3_sys::events::SDL_Event>() };

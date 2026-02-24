@@ -1,5 +1,7 @@
 use daw_core::input::DawInput;
 use sdl3_sys::events::*;
+use sdl3_sys::keycode::SDL_KMOD_CTRL;
+use sdl3_sys::keycode::SDL_KMOD_GUI;
 use sdl3_sys::scancode::*;
 
 /// Translate an SDL3 event into a DAW input event.
@@ -20,6 +22,12 @@ pub unsafe fn translate_event(event: &SDL_Event) -> Option<DawInput> {
         let key = unsafe { &event.key };
         if key.repeat {
             return None;
+        }
+        // Check for modifier key combinations (Ctrl or Cmd on macOS).
+        let has_ctrl = (key.r#mod.0 & SDL_KMOD_CTRL.0) != 0
+            || (key.r#mod.0 & SDL_KMOD_GUI.0) != 0;
+        if has_ctrl {
+            return translate_ctrl_scancode(key.scancode);
         }
         return translate_scancode(key.scancode);
     }
@@ -43,6 +51,15 @@ pub unsafe fn translate_event(event: &SDL_Event) -> Option<DawInput> {
     }
 
     None
+}
+
+fn translate_ctrl_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
+    match scancode {
+        SDL_SCANCODE_S => Some(DawInput::Save),
+        SDL_SCANCODE_Z => Some(DawInput::Undo),
+        SDL_SCANCODE_Q => Some(DawInput::Quit),
+        _ => None,
+    }
 }
 
 fn translate_scancode(scancode: SDL_Scancode) -> Option<DawInput> {

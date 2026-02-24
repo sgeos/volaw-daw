@@ -5,6 +5,7 @@ pub mod input;
 pub mod midi;
 pub mod patch;
 pub mod platform;
+pub mod presets;
 pub mod project;
 pub mod render;
 pub mod transport;

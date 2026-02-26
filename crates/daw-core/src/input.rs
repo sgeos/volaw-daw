@@ -72,4 +72,10 @@ pub enum DawInput {
     Quantize,
     /// Toggle loop mode on/off.
     ToggleLoop,
+    /// Transpose selected notes up one octave (Shift+Up).
+    ShiftUp,
+    /// Transpose selected notes down one octave (Shift+Down).
+    ShiftDown,
+    /// Duplicate selected notes (Ctrl+D).
+    Duplicate,
 }

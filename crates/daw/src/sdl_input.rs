@@ -87,6 +87,7 @@ fn translate_ctrl_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
         SDL_SCANCODE_Y => Some(DawInput::Redo),
         SDL_SCANCODE_C => Some(DawInput::Copy),
         SDL_SCANCODE_V => Some(DawInput::Paste),
+        SDL_SCANCODE_D => Some(DawInput::Duplicate),
         SDL_SCANCODE_Q => Some(DawInput::Quit),
         _ => None,
     }
@@ -99,6 +100,8 @@ fn translate_shift_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
         SDL_SCANCODE_LEFT => Some(DawInput::ShiftLeft),
         SDL_SCANCODE_RIGHT => Some(DawInput::ShiftRight),
         SDL_SCANCODE_G => Some(DawInput::Quantize),
+        SDL_SCANCODE_UP => Some(DawInput::ShiftUp),
+        SDL_SCANCODE_DOWN => Some(DawInput::ShiftDown),
         _ => None,
     }
 }

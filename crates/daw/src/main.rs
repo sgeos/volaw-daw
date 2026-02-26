@@ -763,26 +763,42 @@ impl DawState {
             // Piano roll inputs.
             DawInput::Left => {
                 if self.current_page == DawPage::PianoRoll {
-                    self.scroll_x = (self.scroll_x - 20.0).max(0.0);
+                    if !self.selected_notes.is_empty() {
+                        self.nudge_notes(-(self.snap_ticks as i64));
+                    } else {
+                        self.scroll_x = (self.scroll_x - 20.0).max(0.0);
+                    }
                 } else {
                     self.current_page = self.current_page.setup_left();
                 }
             }
             DawInput::Right => {
                 if self.current_page == DawPage::PianoRoll {
-                    self.scroll_x += 20.0;
+                    if !self.selected_notes.is_empty() {
+                        self.nudge_notes(self.snap_ticks as i64);
+                    } else {
+                        self.scroll_x += 20.0;
+                    }
                 } else {
                     self.current_page = self.current_page.setup_right();
                 }
             }
             DawInput::Up => {
                 if self.current_page == DawPage::PianoRoll {
-                    self.scroll_y = (self.scroll_y - 20.0).max(0.0);
+                    if !self.selected_notes.is_empty() {
+                        self.transpose_notes(1);
+                    } else {
+                        self.scroll_y = (self.scroll_y - 20.0).max(0.0);
+                    }
                 }
             }
             DawInput::Down => {
                 if self.current_page == DawPage::PianoRoll {
-                    self.scroll_y += 20.0;
+                    if !self.selected_notes.is_empty() {
+                        self.transpose_notes(-1);
+                    } else {
+                        self.scroll_y += 20.0;
+                    }
                 }
             }
             DawInput::Scroll(delta) => {
@@ -877,7 +893,18 @@ impl DawState {
             DawInput::TempoUp => self.adjust_tempo(1.0),
             DawInput::TempoDown => self.adjust_tempo(-1.0),
             DawInput::Quantize => self.quantize_notes(),
+            DawInput::Duplicate => self.duplicate_notes(),
             DawInput::ToggleLoop => self.toggle_loop(),
+            DawInput::ShiftUp => {
+                if self.current_page == DawPage::PianoRoll && !self.selected_notes.is_empty() {
+                    self.transpose_notes(12);
+                }
+            }
+            DawInput::ShiftDown => {
+                if self.current_page == DawPage::PianoRoll && !self.selected_notes.is_empty() {
+                    self.transpose_notes(-12);
+                }
+            }
             DawInput::MouseMove(mx, my) => {
                 self.last_mouse = (mx, my);
                 if let Some(ref target) = self.dragging_param {
@@ -1197,6 +1224,104 @@ impl DawState {
         self.project.tempo = (self.project.tempo + delta).clamp(20.0, 300.0);
         self.transport.tempo = self.project.tempo;
         self.status_message = Some(format!("{:.0} BPM", self.project.tempo));
+    }
+
+    /// Nudge selected notes horizontally by a tick delta.
+    /// Clamps so no note goes below tick 0.
+    fn nudge_notes(&mut self, delta_ticks: i64) {
+        if self.selected_notes.is_empty() || self.current_page != DawPage::PianoRoll {
+            return;
+        }
+        // Check if any note would go below 0.
+        let ch = self.selected_channel;
+        let min_tick = self
+            .selected_notes
+            .iter()
+            .filter_map(|&idx| self.tracks[ch].notes.get(idx))
+            .map(|n| n.tick)
+            .min()
+            .unwrap_or(0);
+        if (min_tick as i64 + delta_ticks) < 0 {
+            return;
+        }
+        self.push_undo();
+        let indices = self.selected_notes.clone();
+        // Nudge all selected notes and capture their new (tick, pitch) for re-selection.
+        let mut nudged: Vec<(u64, u8)> = Vec::new();
+        for &idx in &indices {
+            if let Some(note) = self.tracks[ch].notes.get_mut(idx) {
+                note.tick = (note.tick as i64 + delta_ticks) as u64;
+                nudged.push((note.tick, note.pitch));
+            }
+        }
+        self.tracks[ch].sort();
+        // Re-find selected notes after sort using tick+pitch identity.
+        self.selected_notes.clear();
+        for (i, note) in self.tracks[ch].notes.iter().enumerate() {
+            if nudged.iter().any(|&(t, p)| t == note.tick && p == note.pitch) {
+                self.selected_notes.push(i);
+            }
+        }
+    }
+
+    /// Transpose selected notes by a number of semitones.
+    /// Clamps to MIDI range (0-127).
+    fn transpose_notes(&mut self, semitones: i8) {
+        if self.selected_notes.is_empty() || self.current_page != DawPage::PianoRoll {
+            return;
+        }
+        self.push_undo();
+        let ch = self.selected_channel;
+        let indices = self.selected_notes.clone();
+        for &idx in &indices {
+            if let Some(note) = self.tracks[ch].notes.get_mut(idx) {
+                let new_pitch = (note.pitch as i16 + semitones as i16).clamp(0, 127) as u8;
+                note.pitch = new_pitch;
+            }
+        }
+        let dir = if semitones > 0 { "up" } else { "down" };
+        let amount = semitones.unsigned_abs();
+        let unit = if amount == 12 { "octave" } else { "semitone(s)" };
+        let display = if amount == 12 { 1 } else { amount };
+        self.status_message = Some(format!("Transpose {dir} {display} {unit}"));
+    }
+
+    /// Duplicate selected notes, offset by one grid unit to the right.
+    fn duplicate_notes(&mut self) {
+        if self.selected_notes.is_empty() || self.current_page != DawPage::PianoRoll {
+            return;
+        }
+        self.push_undo();
+        let ch = self.selected_channel;
+        let offset = self.snap_ticks;
+        let indices = self.selected_notes.clone();
+        let mut new_notes: Vec<MidiNote> = Vec::new();
+        for &idx in &indices {
+            if let Some(note) = self.tracks[ch].notes.get(idx) {
+                new_notes.push(MidiNote {
+                    tick: note.tick + offset,
+                    duration: note.duration,
+                    pitch: note.pitch,
+                    velocity: note.velocity,
+                });
+            }
+        }
+        let count = new_notes.len();
+        for note in &new_notes {
+            self.tracks[ch].notes.push(*note);
+        }
+        self.tracks[ch].sort();
+        // Select the duplicated notes.
+        self.selected_notes.clear();
+        for (i, note) in self.tracks[ch].notes.iter().enumerate() {
+            if new_notes
+                .iter()
+                .any(|n| n.tick == note.tick && n.pitch == note.pitch)
+            {
+                self.selected_notes.push(i);
+            }
+        }
+        self.status_message = Some(format!("Duplicated {count} note(s)"));
     }
 
     /// Quantize selected notes (or all notes if none selected) to the current grid.

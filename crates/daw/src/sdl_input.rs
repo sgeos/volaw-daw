@@ -101,6 +101,7 @@ fn translate_shift_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
         SDL_SCANCODE_LEFT => Some(DawInput::ShiftLeft),
         SDL_SCANCODE_RIGHT => Some(DawInput::ShiftRight),
         SDL_SCANCODE_G => Some(DawInput::Quantize),
+        SDL_SCANCODE_T => Some(DawInput::CycleTimeSig),
         SDL_SCANCODE_UP => Some(DawInput::ShiftUp),
         SDL_SCANCODE_DOWN => Some(DawInput::ShiftDown),
         _ => None,

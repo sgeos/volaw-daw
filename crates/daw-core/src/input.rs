@@ -84,4 +84,6 @@ pub enum DawInput {
     ToggleSolo,
     /// Reset transport to the beginning.
     Home,
+    /// Cycle time signature (Shift+T): 4/4 -> 3/4 -> 6/4 -> 5/4 -> 7/4 -> 4/4.
+    CycleTimeSig,
 }

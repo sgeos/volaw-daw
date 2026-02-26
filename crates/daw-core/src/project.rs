@@ -20,6 +20,9 @@ pub struct DawProject {
     /// Ticks per beat (MIDI resolution).
     #[serde(default = "default_ticks_per_beat")]
     pub ticks_per_beat: u16,
+    /// Beats per bar (time signature numerator). Default is 4 (for 4/4 time).
+    #[serde(default = "default_beats_per_bar")]
+    pub beats_per_bar: u8,
     /// Per-channel configuration.
     pub channels: [ChannelConfig; NUM_CHANNELS],
     /// Timed events (PCM sample triggers, etc.).
@@ -89,6 +92,10 @@ fn default_ticks_per_beat() -> u16 {
     480
 }
 
+fn default_beats_per_bar() -> u8 {
+    4
+}
+
 fn default_volume() -> f64 {
     0.8
 }
@@ -124,6 +131,7 @@ impl Default for DawProject {
             name: String::from("Untitled"),
             tempo: default_tempo(),
             ticks_per_beat: default_ticks_per_beat(),
+            beats_per_bar: default_beats_per_bar(),
             channels,
             events: Vec::new(),
         }

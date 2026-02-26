@@ -941,6 +941,7 @@ impl DawState {
             DawInput::SelectAll => self.select_all_notes(),
             DawInput::ToggleLoop => self.toggle_loop(),
             DawInput::ToggleSolo => self.toggle_solo(),
+            DawInput::CycleTimeSig => self.cycle_time_sig(),
             DawInput::Home => {
                 self.transport.reset();
                 self.stop_all_notes();
@@ -1272,15 +1273,16 @@ impl DawState {
     /// 1/1 (whole) -> 1/2 -> 1/4 -> 1/8 -> 1/16 -> 1/32 -> 1/1.
     fn cycle_grid(&mut self) {
         let tpb = self.project.ticks_per_beat as u64;
-        // Grid subdivisions in ticks: whole, half, quarter, eighth, sixteenth, thirty-second.
-        let subdivisions = [tpb * 4, tpb * 2, tpb, tpb / 2, tpb / 4, tpb / 8];
+        let tpbar = self.transport.ticks_per_bar();
+        // Grid subdivisions in ticks: whole bar, half, quarter, eighth, sixteenth, thirty-second.
+        let subdivisions = [tpbar, tpb * 2, tpb, tpb / 2, tpb / 4, tpb / 8];
         let current_idx = subdivisions.iter().position(|&s| s == self.snap_ticks);
         let next_idx = match current_idx {
             Some(i) => (i + 1) % subdivisions.len(),
             None => 2, // Default to quarter note if current value is non-standard.
         };
         self.snap_ticks = subdivisions[next_idx];
-        let label = grid_label(self.snap_ticks, tpb);
+        let label = grid_label(self.snap_ticks, tpb, tpbar);
         self.status_message = Some(format!("Grid: {label}"));
     }
 
@@ -1441,28 +1443,43 @@ impl DawState {
         self.sync_engine_channels();
     }
 
+    /// Cycle through common time signatures: 4/4 -> 3/4 -> 6/4 -> 5/4 -> 7/4 -> 4/4.
+    fn cycle_time_sig(&mut self) {
+        let signatures: &[u8] = &[4, 3, 6, 5, 7];
+        let current_idx = signatures
+            .iter()
+            .position(|&s| s == self.project.beats_per_bar);
+        let next_idx = match current_idx {
+            Some(i) => (i + 1) % signatures.len(),
+            None => 0,
+        };
+        let bpb = signatures[next_idx];
+        self.project.beats_per_bar = bpb;
+        self.transport.beats_per_bar = bpb;
+        self.status_message = Some(format!("{bpb}/4 Time"));
+    }
+
     /// Toggle loop mode. When enabling, auto-set the loop region to cover
     /// all notes in the current channel track.
     fn toggle_loop(&mut self) {
         self.transport.loop_enabled = !self.transport.loop_enabled;
         if self.transport.loop_enabled {
             let ch = self.selected_channel;
-            let tpb = self.project.ticks_per_beat as u64;
-            let ticks_per_bar = tpb * 4;
+            let tpbar = self.transport.ticks_per_bar();
             if !self.tracks[ch].notes.is_empty() {
                 let max_end = self.tracks[ch]
                     .notes
                     .iter()
                     .map(|n| n.tick + n.duration)
                     .max()
-                    .unwrap_or(ticks_per_bar);
+                    .unwrap_or(tpbar);
                 // Round up to the next bar boundary.
-                let bars = max_end.div_ceil(ticks_per_bar);
+                let bars = max_end.div_ceil(tpbar);
                 self.transport.loop_start = 0;
-                self.transport.loop_end = bars * ticks_per_bar;
+                self.transport.loop_end = bars * tpbar;
             } else {
                 self.transport.loop_start = 0;
-                self.transport.loop_end = ticks_per_bar * 4; // Default 4 bars.
+                self.transport.loop_end = tpbar * 4; // Default 4 bars.
             }
             self.status_message = Some(String::from("Loop ON"));
         } else {
@@ -2811,13 +2828,17 @@ impl DawState {
         let tempo_text = format!("{:.0} BPM", self.project.tempo);
         renderer.draw_text(&tempo_text, 620.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
 
+        // Time signature display.
+        let ts_text = format!("{}/4", self.project.beats_per_bar);
+        renderer.draw_text(&ts_text, 720.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
+
         // Grid subdivision display.
-        let grid_text = grid_label(self.snap_ticks, self.project.ticks_per_beat as u64);
-        renderer.draw_text(grid_text, 740.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
+        let grid_text = grid_label(self.snap_ticks, self.project.ticks_per_beat as u64, self.transport.ticks_per_bar());
+        renderer.draw_text(grid_text, 780.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
 
         // Loop indicator.
         if self.transport.loop_enabled {
-            renderer.draw_text("LOOP", 900.0, 8.0, FontSize::Medium, LOOP_MARKER);
+            renderer.draw_text("LOOP", 950.0, 8.0, FontSize::Medium, LOOP_MARKER);
         }
 
         // Status message, selected note info, or page-specific hints.
@@ -2942,7 +2963,7 @@ impl DawState {
                 continue;
             }
 
-            let ticks_per_bar = self.project.ticks_per_beat as u64 * 4;
+            let ticks_per_bar = self.transport.ticks_per_bar();
             let color = if tick.is_multiple_of(ticks_per_bar) {
                 GRID_BAR
             } else if tick.is_multiple_of(self.project.ticks_per_beat as u64) {
@@ -3508,9 +3529,9 @@ fn draw_section_panel<R: Renderer>(
 
 /// Check whether a parameter label represents a frequency (for log mapping).
 /// Return a human-readable label for a grid subdivision.
-fn grid_label(snap_ticks: u64, ticks_per_beat: u64) -> &'static str {
-    if snap_ticks == ticks_per_beat * 4 {
-        "1/1 (Whole)"
+fn grid_label(snap_ticks: u64, ticks_per_beat: u64, ticks_per_bar: u64) -> &'static str {
+    if snap_ticks == ticks_per_bar {
+        "1/1 (Bar)"
     } else if snap_ticks == ticks_per_beat * 2 {
         "1/2 (Half)"
     } else if snap_ticks == ticks_per_beat {
@@ -3910,6 +3931,8 @@ fn main() {
     if let Some(name) = load_name {
         match save_load::load_project(&state.project_root, &name) {
             Ok((project, tracks, patches, effects)) => {
+                state.transport.tempo = project.tempo;
+                state.transport.beats_per_bar = project.beats_per_bar;
                 state.project = project;
                 state.tracks = tracks;
                 state.patches = patches;
@@ -3982,6 +4005,7 @@ fn main() {
     state.apply_all_patches();
     state.apply_all_effects();
     state.transport.tempo = state.project.tempo;
+    state.transport.beats_per_bar = state.project.beats_per_bar;
 
     println!("[INFO] DAW started: {WINDOW_WIDTH}x{WINDOW_HEIGHT} @ {SAMPLE_RATE}Hz");
     println!("[INFO] Controls: Space=Play/Pause, S=Stop, 1-8=Ch, P=Preset, Shift+P=Prev, M=Mute, Ctrl+S=Save, Q=Quit");

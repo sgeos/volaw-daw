@@ -28,6 +28,9 @@ pub unsafe fn translate_event(event: &SDL_Event) -> Option<DawInput> {
         let has_ctrl = (key.r#mod.0 & SDL_KMOD_CTRL.0) != 0
             || (key.r#mod.0 & SDL_KMOD_GUI.0) != 0;
         let has_shift = (key.r#mod.0 & SDL_KMOD_SHIFT.0) != 0;
+        if has_ctrl && has_shift {
+            return translate_ctrl_shift_scancode(key.scancode);
+        }
         if has_ctrl {
             return translate_ctrl_scancode(key.scancode);
         }
@@ -70,10 +73,18 @@ pub unsafe fn translate_event(event: &SDL_Event) -> Option<DawInput> {
     None
 }
 
+fn translate_ctrl_shift_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
+    match scancode {
+        SDL_SCANCODE_Z => Some(DawInput::Redo),
+        _ => None,
+    }
+}
+
 fn translate_ctrl_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
     match scancode {
         SDL_SCANCODE_S => Some(DawInput::Save),
         SDL_SCANCODE_Z => Some(DawInput::Undo),
+        SDL_SCANCODE_Y => Some(DawInput::Redo),
         SDL_SCANCODE_C => Some(DawInput::Copy),
         SDL_SCANCODE_V => Some(DawInput::Paste),
         SDL_SCANCODE_Q => Some(DawInput::Quit),

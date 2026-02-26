@@ -409,6 +409,8 @@ struct DawState {
     preset_indices: [Option<usize>; 8],
     /// Undo stack of reversible actions.
     undo_stack: Vec<UndoAction>,
+    /// Redo stack: filled when undoing, cleared on any new edit.
+    redo_stack: Vec<UndoAction>,
     /// Pending parameter undo: captures the pre-drag value for continuous edits.
     /// Flushed to the undo stack on mouse-up or when the drag target changes.
     pending_param_undo: Option<UndoAction>,
@@ -456,6 +458,7 @@ impl DawState {
             prev_ticks: 0,
             preset_indices: [None; 8],
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             pending_param_undo: None,
             scripts: core::array::from_fn(|_| None),
             dragging_param: None,
@@ -728,6 +731,7 @@ impl DawState {
             }
             DawInput::Save => self.save(),
             DawInput::Undo => self.undo(),
+            DawInput::Redo => self.redo(),
             DawInput::NextPreset => self.cycle_preset(1),
             DawInput::PrevPreset => self.cycle_preset(-1),
             DawInput::ToggleMute => {
@@ -991,12 +995,13 @@ impl DawState {
         });
     }
 
-    /// Push any undo action onto the stack.
+    /// Push any undo action onto the stack. Clears the redo stack.
     fn push_undo_action(&mut self, action: UndoAction) {
         if self.undo_stack.len() >= MAX_UNDO_DEPTH {
             self.undo_stack.remove(0);
         }
         self.undo_stack.push(action);
+        self.redo_stack.clear();
     }
 
     /// Flush the pending parameter undo to the stack if present.
@@ -1021,51 +1026,112 @@ impl DawState {
         });
     }
 
+    /// Capture the current state corresponding to an undo action (for redo).
+    fn capture_inverse(&self, action: &UndoAction) -> UndoAction {
+        match action {
+            UndoAction::Track { channel, .. } => UndoAction::Track {
+                channel: *channel,
+                snapshot: self.tracks[*channel].clone(),
+            },
+            UndoAction::SynthParam { channel, param, .. } => UndoAction::SynthParam {
+                channel: *channel,
+                param: *param,
+                old_value: self.get_synth_param_value(*channel, *param),
+            },
+            UndoAction::PedalParam {
+                channel,
+                chain,
+                pedal_idx,
+                param_idx,
+                ..
+            } => UndoAction::PedalParam {
+                channel: *channel,
+                chain: *chain,
+                pedal_idx: *pedal_idx,
+                param_idx: *param_idx,
+                old_value: self.effects[*channel]
+                    .get_pedal_param(*chain, *pedal_idx, *param_idx)
+                    .unwrap_or(0.0),
+            },
+            UndoAction::PedalChain { channel, chain, .. } => {
+                let old_pedals = match chain {
+                    0 => self.effects[*channel].pre_pedals.clone(),
+                    1 => self.effects[*channel].post_pedals_left.clone(),
+                    2 => self.effects[*channel].post_pedals_right.clone(),
+                    _ => Vec::new(),
+                };
+                UndoAction::PedalChain {
+                    channel: *channel,
+                    chain: *chain,
+                    old_pedals,
+                }
+            }
+        }
+    }
+
+    /// Apply an undo/redo action, restoring the stored state.
+    fn apply_action(&mut self, action: &UndoAction) {
+        match action {
+            UndoAction::Track { channel, snapshot } => {
+                self.tracks[*channel] = snapshot.clone();
+                self.clear_note_selection();
+            }
+            UndoAction::SynthParam {
+                channel,
+                param,
+                old_value,
+            } => {
+                self.set_synth_param(*channel, *param, *old_value);
+            }
+            UndoAction::PedalParam {
+                channel,
+                chain,
+                pedal_idx,
+                param_idx,
+                old_value,
+            } => {
+                self.set_pedal_param(*channel, *chain, *pedal_idx, *param_idx, *old_value);
+            }
+            UndoAction::PedalChain {
+                channel,
+                chain,
+                old_pedals,
+            } => {
+                let pedals = match chain {
+                    0 => &mut self.effects[*channel].pre_pedals,
+                    1 => &mut self.effects[*channel].post_pedals_left,
+                    2 => &mut self.effects[*channel].post_pedals_right,
+                    _ => return,
+                };
+                *pedals = old_pedals.clone();
+                self.rebuild_engine_chain(*channel, *chain);
+                self.selected_pedal = None;
+            }
+        }
+    }
+
     /// Undo the last edit operation.
     fn undo(&mut self) {
         self.flush_pending_undo();
         if let Some(action) = self.undo_stack.pop() {
-            match action {
-                UndoAction::Track { channel, snapshot } => {
-                    self.tracks[channel] = snapshot;
-                    self.clear_note_selection();
-                    self.status_message = Some(format!("Undo track (Ch{})", channel + 1));
-                }
-                UndoAction::SynthParam {
-                    channel,
-                    param,
-                    old_value,
-                } => {
-                    self.set_synth_param(channel, param, old_value);
-                    self.status_message = Some(format!("Undo param (Ch{})", channel + 1));
-                }
-                UndoAction::PedalParam {
-                    channel,
-                    chain,
-                    pedal_idx,
-                    param_idx,
-                    old_value,
-                } => {
-                    self.set_pedal_param(channel, chain, pedal_idx, param_idx, old_value);
-                    self.status_message = Some(format!("Undo pedal param (Ch{})", channel + 1));
-                }
-                UndoAction::PedalChain {
-                    channel,
-                    chain,
-                    old_pedals,
-                } => {
-                    let pedals = match chain {
-                        0 => &mut self.effects[channel].pre_pedals,
-                        1 => &mut self.effects[channel].post_pedals_left,
-                        2 => &mut self.effects[channel].post_pedals_right,
-                        _ => return,
-                    };
-                    *pedals = old_pedals;
-                    self.rebuild_engine_chain(channel, chain);
-                    self.selected_pedal = None;
-                    self.status_message = Some(format!("Undo pedal chain (Ch{})", channel + 1));
-                }
+            let redo_action = self.capture_inverse(&action);
+            self.apply_action(&action);
+            self.redo_stack.push(redo_action);
+            self.status_message = Some(String::from("Undo"));
+        }
+    }
+
+    /// Redo the last undone operation.
+    fn redo(&mut self) {
+        if let Some(action) = self.redo_stack.pop() {
+            let undo_action = self.capture_inverse(&action);
+            self.apply_action(&action);
+            // Push directly to avoid clearing redo stack.
+            if self.undo_stack.len() >= MAX_UNDO_DEPTH {
+                self.undo_stack.remove(0);
             }
+            self.undo_stack.push(undo_action);
+            self.status_message = Some(String::from("Redo"));
         }
     }
 
@@ -1638,15 +1704,20 @@ impl DawState {
         self.status_message = Some(format!("Copied {count} note(s)"));
     }
 
-    /// Paste notes from the clipboard at the current scroll position.
+    /// Paste notes from the clipboard at the playhead (if playing or non-zero)
+    /// or the current scroll position.
     fn paste_notes(&mut self) {
         if self.clipboard.is_empty() || self.current_page != DawPage::PianoRoll {
             return;
         }
         self.push_undo();
         let ch = self.selected_channel;
-        // Paste at the current scroll position, snapped to grid.
-        let paste_tick = self.x_to_tick(PIANO_KEY_WIDTH + self.scroll_x);
+        // Paste at playhead when transport has a non-zero position, otherwise at scroll edge.
+        let paste_tick = if self.transport.position_ticks > 0 {
+            self.transport.position_ticks
+        } else {
+            self.x_to_tick(PIANO_KEY_WIDTH + self.scroll_x)
+        };
         let mut new_indices = Vec::new();
         for clip_note in &self.clipboard {
             let note = MidiNote {

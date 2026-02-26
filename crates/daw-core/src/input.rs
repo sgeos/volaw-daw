@@ -32,6 +32,8 @@ pub enum DawInput {
     Save,
     /// Undo last action (Ctrl+Z).
     Undo,
+    /// Redo last undone action (Ctrl+Shift+Z or Ctrl+Y).
+    Redo,
     /// Zoom in.
     ZoomIn,
     /// Zoom out.

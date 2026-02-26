@@ -40,6 +40,12 @@ pub unsafe fn translate_event(event: &SDL_Event) -> Option<DawInput> {
     // Mouse click events.
     if event_type == SDL_EventType::MOUSE_BUTTON_DOWN.0 {
         let button = unsafe { &event.button };
+        // Check for Shift modifier on click for multi-select.
+        let mods = unsafe { sdl3_sys::keyboard::SDL_GetModState() };
+        let has_shift = (mods.0 & SDL_KMOD_SHIFT.0) != 0;
+        if has_shift {
+            return Some(DawInput::ShiftClick(button.x, button.y));
+        }
         return Some(DawInput::Click(button.x, button.y));
     }
 
@@ -68,6 +74,8 @@ fn translate_ctrl_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
     match scancode {
         SDL_SCANCODE_S => Some(DawInput::Save),
         SDL_SCANCODE_Z => Some(DawInput::Undo),
+        SDL_SCANCODE_C => Some(DawInput::Copy),
+        SDL_SCANCODE_V => Some(DawInput::Paste),
         SDL_SCANCODE_Q => Some(DawInput::Quit),
         _ => None,
     }

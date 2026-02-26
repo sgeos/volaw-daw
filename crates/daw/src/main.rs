@@ -389,8 +389,11 @@ struct DawState {
     running: bool,
     /// Current page/view being displayed.
     current_page: DawPage,
-    /// Index of the currently selected note in the active channel, if any.
-    selected_note: Option<usize>,
+    /// Indices of currently selected notes in the active channel.
+    /// The last element is the "primary" selection for edge-dragging.
+    selected_notes: Vec<usize>,
+    /// Clipboard for note copy/paste. Tick values are relative to the earliest note.
+    clipboard: Vec<MidiNote>,
     /// Snap quantization in ticks. Notes snap to this grid. Default is one beat (480).
     snap_ticks: u64,
     /// Project root directory for save/load.
@@ -444,7 +447,8 @@ impl DawState {
             effects: core::array::from_fn(|_| EffectChainConfig::default()),
             running: true,
             current_page: DawPage::PianoRoll,
-            selected_note: None,
+            selected_notes: Vec::new(),
+            clipboard: Vec::new(),
             snap_ticks: DEFAULT_NOTE_DURATION,
             project_root: PathBuf::from(PROJECT_ROOT),
             status_message: None,
@@ -460,6 +464,36 @@ impl DawState {
             selected_pedal: None,
             pedal_picker_open: false,
             pedal_picker_chain: 0,
+        }
+    }
+
+    /// Get the primary (last) selected note index, if any.
+    fn primary_selected_note(&self) -> Option<usize> {
+        self.selected_notes.last().copied()
+    }
+
+    /// Check if a note index is in the selection.
+    fn is_note_selected(&self, idx: usize) -> bool {
+        self.selected_notes.contains(&idx)
+    }
+
+    /// Clear the note selection.
+    fn clear_note_selection(&mut self) {
+        self.selected_notes.clear();
+    }
+
+    /// Set single note selection, replacing any existing selection.
+    fn select_note(&mut self, idx: usize) {
+        self.selected_notes.clear();
+        self.selected_notes.push(idx);
+    }
+
+    /// Toggle a note in the selection (Shift+click behavior).
+    fn toggle_note_selection(&mut self, idx: usize) {
+        if let Some(pos) = self.selected_notes.iter().position(|&i| i == idx) {
+            self.selected_notes.remove(pos);
+        } else {
+            self.selected_notes.push(idx);
         }
     }
 
@@ -689,7 +723,7 @@ impl DawState {
             DawInput::SelectChannel(ch) => {
                 if (ch as usize) < 8 {
                     self.selected_channel = ch as usize;
-                    self.selected_note = None;
+                    self.clear_note_selection();
                 }
             }
             DawInput::Save => self.save(),
@@ -709,10 +743,13 @@ impl DawState {
                 } else if self.current_page != DawPage::PianoRoll {
                     self.current_page = DawPage::PianoRoll;
                 } else {
-                    self.selected_note = None;
+                    self.clear_note_selection();
                 }
             }
             DawInput::Click(mx, my) => self.handle_click(mx, my),
+            DawInput::ShiftClick(mx, my) => self.handle_shift_click(mx, my),
+            DawInput::Copy => self.copy_selected_notes(),
+            DawInput::Paste => self.paste_notes(),
             DawInput::MouseUp(_, _) => {
                 self.flush_pending_undo();
                 self.dragging_param = None;
@@ -746,13 +783,24 @@ impl DawState {
             }
             DawInput::Scroll(delta) => {
                 if self.current_page == DawPage::PianoRoll {
-                    // If a note is selected, scroll adjusts velocity.
-                    if let Some(idx) = self.selected_note {
+                    // If notes are selected, scroll adjusts velocity.
+                    if !self.selected_notes.is_empty() {
                         let ch = self.selected_channel;
-                        if let Some(note) = self.tracks[ch].notes.get_mut(idx) {
-                            let new_vel = (note.velocity as i32 + delta * 4).clamp(1, 127) as u8;
-                            note.velocity = new_vel;
-                            self.status_message = Some(format!("Vel: {}", new_vel));
+                        let mut last_vel = 0u8;
+                        for &idx in &self.selected_notes.clone() {
+                            if let Some(note) = self.tracks[ch].notes.get_mut(idx) {
+                                let new_vel =
+                                    (note.velocity as i32 + delta * 4).clamp(1, 127) as u8;
+                                note.velocity = new_vel;
+                                last_vel = new_vel;
+                            }
+                        }
+                        let count = self.selected_notes.len();
+                        if count == 1 {
+                            self.status_message = Some(format!("Vel: {last_vel}"));
+                        } else {
+                            self.status_message =
+                                Some(format!("Vel: {last_vel} ({count} notes)"));
                         }
                     } else {
                         self.scroll_y = (self.scroll_y - delta as f32 * 20.0).max(0.0);
@@ -776,7 +824,7 @@ impl DawState {
             }
             DawInput::Delete => {
                 if self.current_page == DawPage::PianoRoll {
-                    self.delete_selected_note();
+                    self.delete_selected_notes();
                 } else if self.current_page == DawPage::MonoChain
                     || self.current_page == DawPage::StereoChain
                 {
@@ -839,7 +887,7 @@ impl DawState {
             let ch = (mx / tab_w) as usize;
             if ch < 8 {
                 self.selected_channel = ch;
-                self.selected_note = None;
+                self.clear_note_selection();
             }
             return;
         }
@@ -900,7 +948,7 @@ impl DawState {
                     && my >= note_y
                     && my <= note_y + NOTE_HEIGHT
                 {
-                    self.selected_note = Some(i);
+                    self.select_note(i);
                     // If click is near the right edge, start a duration drag.
                     if mx >= note_x + note_w - edge_zone {
                         self.push_undo();
@@ -927,7 +975,9 @@ impl DawState {
                     .notes
                     .iter()
                     .position(|n| n.tick == tick && n.pitch == pitch);
-                self.selected_note = idx;
+                if let Some(i) = idx {
+                    self.select_note(i);
+                }
             }
         }
     }
@@ -978,7 +1028,7 @@ impl DawState {
             match action {
                 UndoAction::Track { channel, snapshot } => {
                     self.tracks[channel] = snapshot;
-                    self.selected_note = None;
+                    self.clear_note_selection();
                     self.status_message = Some(format!("Undo track (Ch{})", channel + 1));
                 }
                 UndoAction::SynthParam {
@@ -1085,7 +1135,7 @@ impl DawState {
 
     /// Drag the selected note's right edge to adjust duration.
     fn drag_note_duration(&mut self, mx: f32) {
-        if let Some(idx) = self.selected_note {
+        if let Some(idx) = self.primary_selected_note() {
             let ch = self.selected_channel;
             let tw = self.tick_width();
             let sx = self.scroll_x;
@@ -1517,15 +1567,112 @@ impl DawState {
         }
     }
 
-    /// Delete the currently selected note, if any.
-    fn delete_selected_note(&mut self) {
-        if let Some(idx) = self.selected_note {
-            if idx < self.tracks[self.selected_channel].notes.len() {
-                self.push_undo();
-                self.tracks[self.selected_channel].notes.remove(idx);
-            }
-            self.selected_note = None;
+    /// Delete all selected notes.
+    fn delete_selected_notes(&mut self) {
+        if self.selected_notes.is_empty() {
+            return;
         }
+        self.push_undo();
+        let ch = self.selected_channel;
+        // Sort indices descending so removal does not invalidate earlier indices.
+        let mut indices = self.selected_notes.clone();
+        indices.sort_unstable();
+        indices.dedup();
+        for &idx in indices.iter().rev() {
+            if idx < self.tracks[ch].notes.len() {
+                self.tracks[ch].notes.remove(idx);
+            }
+        }
+        self.clear_note_selection();
+    }
+
+    /// Handle Shift+Click for multi-select on the piano roll.
+    fn handle_shift_click(&mut self, mx: f32, my: f32) {
+        if self.current_page != DawPage::PianoRoll {
+            // On non-piano-roll pages, treat Shift+Click as a regular click.
+            self.handle_click(mx, my);
+            return;
+        }
+        let roll_y = TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT;
+        if my < roll_y || mx < PIANO_KEY_WIDTH {
+            return;
+        }
+        let tw = self.tick_width();
+        let track = &self.tracks[self.selected_channel];
+        for (i, note) in track.notes.iter().enumerate() {
+            let note_x = PIANO_KEY_WIDTH + note.tick as f32 * tw - self.scroll_x;
+            let note_w = note.duration as f32 * tw;
+            let note_y = self.note_to_y(note.pitch, roll_y);
+            if mx >= note_x && mx <= note_x + note_w && my >= note_y && my <= note_y + NOTE_HEIGHT
+            {
+                self.toggle_note_selection(i);
+                return;
+            }
+        }
+    }
+
+    /// Copy selected notes to the clipboard.
+    fn copy_selected_notes(&mut self) {
+        if self.selected_notes.is_empty() {
+            return;
+        }
+        let ch = self.selected_channel;
+        let notes: Vec<MidiNote> = self
+            .selected_notes
+            .iter()
+            .filter_map(|&idx| self.tracks[ch].notes.get(idx).copied())
+            .collect();
+        if notes.is_empty() {
+            return;
+        }
+        // Find earliest tick to make offsets relative.
+        let min_tick = notes.iter().map(|n| n.tick).min().unwrap_or(0);
+        self.clipboard = notes
+            .into_iter()
+            .map(|mut n| {
+                n.tick -= min_tick;
+                n
+            })
+            .collect();
+        let count = self.clipboard.len();
+        self.status_message = Some(format!("Copied {count} note(s)"));
+    }
+
+    /// Paste notes from the clipboard at the current scroll position.
+    fn paste_notes(&mut self) {
+        if self.clipboard.is_empty() || self.current_page != DawPage::PianoRoll {
+            return;
+        }
+        self.push_undo();
+        let ch = self.selected_channel;
+        // Paste at the current scroll position, snapped to grid.
+        let paste_tick = self.x_to_tick(PIANO_KEY_WIDTH + self.scroll_x);
+        let mut new_indices = Vec::new();
+        for clip_note in &self.clipboard {
+            let note = MidiNote {
+                tick: paste_tick + clip_note.tick,
+                duration: clip_note.duration,
+                pitch: clip_note.pitch,
+                velocity: clip_note.velocity,
+            };
+            self.tracks[ch].notes.push(note);
+        }
+        self.tracks[ch].sort();
+        // Find the pasted notes by matching tick and pitch.
+        for clip_note in &self.clipboard {
+            let target_tick = paste_tick + clip_note.tick;
+            if let Some(idx) = self.tracks[ch]
+                .notes
+                .iter()
+                .position(|n| n.tick == target_tick && n.pitch == clip_note.pitch)
+                && !new_indices.contains(&idx)
+            {
+                new_indices.push(idx);
+            }
+        }
+        self.selected_notes = new_indices;
+        let count = self.clipboard.len();
+        self.status_message = Some(format!("Pasted {count} note(s)"));
     }
 
     /// Adjust a parameter by scroll delta.
@@ -2198,14 +2345,20 @@ impl DawState {
         if let Some(ref msg) = self.status_message {
             renderer.draw_text(msg, screen_w - 620.0, 12.0, FontSize::Small, TEXT_ACCENT);
         } else if self.current_page == DawPage::PianoRoll
-            && let Some(idx) = self.selected_note
+            && let Some(idx) = self.primary_selected_note()
             && let Some(note) = self.tracks[self.selected_channel].notes.get(idx)
         {
             let (name, octave) = MidiTrack::note_name(note.pitch);
             let beats = note.duration as f64 / self.project.ticks_per_beat as f64;
+            let count = self.selected_notes.len();
+            let sel_info = if count > 1 {
+                format!(" [{count} sel]")
+            } else {
+                String::new()
+            };
             let info = format!(
-                "{}{} vel:{} dur:{:.1}b  Scroll=Vel  Drag edge=Dur  Del=Remove",
-                name, octave, note.velocity, beats
+                "{}{} vel:{} dur:{:.1}b{}  Scroll=Vel  Del=Remove  Ctrl+C/V=Copy/Paste",
+                name, octave, note.velocity, beats, sel_info
             );
             renderer.draw_text(&info, screen_w - 720.0, 12.0, FontSize::Small, TEXT_ACCENT);
         } else {
@@ -2334,7 +2487,7 @@ impl DawState {
                 continue;
             }
 
-            let is_selected = self.selected_note == Some(i);
+            let is_selected = self.is_note_selected(i);
             // Scale brightness by velocity (vel 1 = 40%, vel 127 = 100%).
             let vel_scale = 0.4 + 0.6 * (note.velocity as f32 / 127.0);
             let fill_color = if is_selected {

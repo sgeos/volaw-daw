@@ -54,4 +54,10 @@ pub enum DawInput {
     ShiftLeft,
     /// Move selected item right within its container (Shift+Right).
     ShiftRight,
+    /// Copy selected note(s) (Ctrl+C).
+    Copy,
+    /// Paste copied note(s) (Ctrl+V).
+    Paste,
+    /// Shift-click at pixel coordinates for multi-select.
+    ShiftClick(f32, f32),
 }

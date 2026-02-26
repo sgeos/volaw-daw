@@ -82,6 +82,25 @@ pub struct PatchConfig {
     #[serde(default = "default_glide_time")]
     pub glide_time: f64,
 
+    // Voice mode
+    /// Voice mode string: "high_1", "low_1", "high_10", "low_10".
+    #[serde(default = "default_voice_mode")]
+    pub voice_mode: String,
+
+    // Velocity depth controls
+    /// Velocity depth for VCA level (0.0 = no effect, 1.0 = full velocity control).
+    #[serde(default)]
+    pub velocity_vca_depth: f64,
+    /// Velocity depth for LPF cutoff in octaves (0.0 = no effect).
+    #[serde(default)]
+    pub velocity_filter_depth: f64,
+    /// Velocity depth for envelope scaling (0.0 = no effect, 1.0 = full velocity control).
+    #[serde(default)]
+    pub velocity_envelope_depth: f64,
+    /// Velocity depth for VCO pitch in semitones (0.0 = no effect).
+    #[serde(default)]
+    pub velocity_pitch_depth: f64,
+
     // Modulation routings (optional overrides)
     #[serde(default)]
     pub mod_routings: Vec<ModRoutingConfig>,
@@ -127,6 +146,11 @@ impl Default for PatchConfig {
             lfo_rate: default_lfo_rate(),
             glide_enabled: false,
             glide_time: default_glide_time(),
+            voice_mode: default_voice_mode(),
+            velocity_vca_depth: 0.0,
+            velocity_filter_depth: 0.0,
+            velocity_envelope_depth: 0.0,
+            velocity_pitch_depth: 0.0,
             mod_routings: Vec::new(),
         }
     }
@@ -214,6 +238,9 @@ fn default_lfo_rate() -> f64 {
 }
 fn default_glide_time() -> f64 {
     0.1
+}
+fn default_voice_mode() -> String {
+    String::from("high_1")
 }
 
 #[cfg(test)]

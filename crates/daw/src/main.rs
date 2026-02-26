@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use audio::modmatrix::{ModDest, ModRouting, ModSource};
 use audio::vco::{Scale, Waveform};
-use audio::AudioEngine;
+use audio::{AudioEngine, VoiceMode};
 use daw_core::input::DawInput;
 use daw_core::midi::{MidiNote, MidiTrack};
 use daw_core::patch::{EffectChainConfig, PatchConfig};
@@ -109,53 +109,63 @@ fn parse_mod_dest(s: &str) -> Option<ModDest> {
 /// Apply a PatchConfig to the audio engine channel synth.
 ///
 /// Maps daw-core configuration strings to audio engine enum types and
-/// writes all synthesizer parameters directly to the Ms20Voice fields.
+/// writes all synthesizer parameters to the Ms20Voice and its voice pool.
 fn apply_patch_to_engine(engine: &mut AudioEngine, channel: usize, patch: &PatchConfig) {
     let synth = &mut engine.channels[channel].synth;
 
-    // VCO1.
-    synth.vco1.waveform = parse_waveform(&patch.vco1_waveform);
-    synth.vco1.scale = parse_scale(&patch.vco1_scale);
-    synth.vco1.pitch_fine = patch.vco1_pitch_fine;
-    synth.vco1.level = patch.vco1_level;
-    synth.vco1.pulse_width = patch.vco1_pulse_width;
-    synth.vco1.quantization = patch.vco1_quantization;
+    // Voice mode.
+    synth.set_voice_mode(parse_voice_mode(&patch.voice_mode));
 
-    // VCO2.
-    synth.vco2.waveform = parse_waveform(&patch.vco2_waveform);
-    synth.vco2.scale = parse_scale(&patch.vco2_scale);
-    synth.vco2.pitch_fine = patch.vco2_pitch_fine;
-    synth.vco2.level = patch.vco2_level;
-    synth.vco2.pulse_width = patch.vco2_pulse_width;
-    synth.vco2.quantization = patch.vco2_quantization;
+    // Velocity depth controls.
+    synth.velocity_vca_depth = patch.velocity_vca_depth;
+    synth.velocity_filter_depth = patch.velocity_filter_depth;
+    synth.velocity_envelope_depth = patch.velocity_envelope_depth;
+    synth.velocity_pitch_depth = patch.velocity_pitch_depth;
 
-    // VCO mix.
+    // Per-voice parameters: apply to all voices in the pool.
+    for voice in &mut synth.voices {
+        // VCO1.
+        voice.vco1.waveform = parse_waveform(&patch.vco1_waveform);
+        voice.vco1.scale = parse_scale(&patch.vco1_scale);
+        voice.vco1.pitch_fine = patch.vco1_pitch_fine;
+        voice.vco1.level = patch.vco1_level;
+        voice.vco1.pulse_width = patch.vco1_pulse_width;
+        voice.vco1.quantization = patch.vco1_quantization;
+
+        // VCO2.
+        voice.vco2.waveform = parse_waveform(&patch.vco2_waveform);
+        voice.vco2.scale = parse_scale(&patch.vco2_scale);
+        voice.vco2.pitch_fine = patch.vco2_pitch_fine;
+        voice.vco2.level = patch.vco2_level;
+        voice.vco2.pulse_width = patch.vco2_pulse_width;
+        voice.vco2.quantization = patch.vco2_quantization;
+
+        // EG1 (HPF envelope).
+        voice.eg1.attack = patch.eg1_attack;
+        voice.eg1.decay = patch.eg1_decay;
+        voice.eg1.sustain = patch.eg1_sustain;
+        voice.eg1.release = patch.eg1_release;
+
+        // EG2 (LPF and VCA envelope).
+        voice.eg2.attack = patch.eg2_attack;
+        voice.eg2.decay = patch.eg2_decay;
+        voice.eg2.sustain = patch.eg2_sustain;
+        voice.eg2.release = patch.eg2_release;
+
+        // Filters.
+        voice.hpf.cutoff = patch.hpf_cutoff;
+        voice.hpf.resonance = patch.hpf_resonance;
+        voice.lpf.cutoff = patch.lpf_cutoff;
+        voice.lpf.resonance = patch.lpf_resonance;
+
+        // Pitch glide.
+        voice.glide.enabled = patch.glide_enabled;
+        voice.glide.time = patch.glide_time;
+    }
+
+    // Shared state.
     synth.vco_mix = patch.vco_mix;
-
-    // EG1 (HPF envelope).
-    synth.eg1.attack = patch.eg1_attack;
-    synth.eg1.decay = patch.eg1_decay;
-    synth.eg1.sustain = patch.eg1_sustain;
-    synth.eg1.release = patch.eg1_release;
-
-    // EG2 (LPF and VCA envelope).
-    synth.eg2.attack = patch.eg2_attack;
-    synth.eg2.decay = patch.eg2_decay;
-    synth.eg2.sustain = patch.eg2_sustain;
-    synth.eg2.release = patch.eg2_release;
-
-    // Filters.
-    synth.hpf.cutoff = patch.hpf_cutoff;
-    synth.hpf.resonance = patch.hpf_resonance;
-    synth.lpf.cutoff = patch.lpf_cutoff;
-    synth.lpf.resonance = patch.lpf_resonance;
-
-    // LFO.
     synth.lfo_rate = patch.lfo_rate;
-
-    // Pitch glide.
-    synth.glide.enabled = patch.glide_enabled;
-    synth.glide.time = patch.glide_time;
 
     // Modulation matrix: clear defaults and apply patch routings.
     synth.mod_matrix.clear();
@@ -170,6 +180,16 @@ fn apply_patch_to_engine(engine: &mut AudioEngine, channel: usize, patch: &Patch
                 depth: routing_cfg.depth,
             });
         }
+    }
+}
+
+/// Parse a voice mode string into a VoiceMode enum.
+fn parse_voice_mode(s: &str) -> VoiceMode {
+    match s {
+        "low_1" => VoiceMode::Low(1),
+        "high_10" => VoiceMode::High(10),
+        "low_10" => VoiceMode::Low(10),
+        _ => VoiceMode::High(1),
     }
 }
 

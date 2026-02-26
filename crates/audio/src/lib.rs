@@ -23,5 +23,5 @@ pub use ms20_filter::{Korg35Lpf, SallenKeyHpf};
 pub use pedals::PedalChain;
 pub use position::PositionalStage;
 pub use sample::SampleInput;
-pub use synth::Ms20Voice;
+pub use synth::{Ms20Voice, SingleVoice, VoiceMode};
 pub use vco::{Scale, Vco, Waveform};

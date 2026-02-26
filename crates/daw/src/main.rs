@@ -64,6 +64,60 @@ const SETUP_ROW_GAP: f32 = 6.0;
 const SECTION_HEADER_H: f32 = 24.0;
 const PARAM_ROW_H: f32 = 24.0;
 
+/// Identifies a synthesizer parameter on the setup page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SynthParam {
+    Vco1PitchFine,
+    Vco1Level,
+    Vco1PulseWidth,
+    Vco2PitchFine,
+    Vco2Level,
+    Vco2PulseWidth,
+    VcoMix,
+    LfoRate,
+    Eg1Attack,
+    Eg1Decay,
+    Eg1Sustain,
+    Eg1Release,
+    Eg2Attack,
+    Eg2Decay,
+    Eg2Sustain,
+    Eg2Release,
+    HpfCutoff,
+    HpfResonance,
+    LpfCutoff,
+    LpfResonance,
+    VelocityVca,
+    VelocityFilter,
+    VelocityEnv,
+    VelocityPitch,
+    GlideTime,
+}
+
+/// Identifies a parameter being dragged on a setup page.
+#[derive(Debug, Clone)]
+enum DragTarget {
+    /// A synth parameter bar.
+    Synth {
+        param: SynthParam,
+        bar_x: f32,
+        bar_w: f32,
+        min_val: f64,
+        max_val: f64,
+    },
+    /// A pedal parameter bar.
+    Pedal {
+        /// Which chain: 0 = pre (mono), 1 = post-left, 2 = post-right.
+        chain: u8,
+        pedal_idx: usize,
+        param_idx: usize,
+        bar_x: f32,
+        bar_w: f32,
+        min_val: f64,
+        max_val: f64,
+    },
+}
+
 /// DAW page view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DawPage {
@@ -295,6 +349,8 @@ struct DawState {
     undo_stack: Vec<(usize, MidiTrack)>,
     /// Per-channel Keleos script runners. None if no script assigned.
     scripts: [Option<ScriptRunner>; 8],
+    /// Currently active drag target on a setup page parameter.
+    dragging_param: Option<DragTarget>,
 }
 
 /// Maximum undo history depth.
@@ -324,6 +380,7 @@ impl DawState {
             preset_indices: [None; 8],
             undo_stack: Vec::new(),
             scripts: core::array::from_fn(|_| None),
+            dragging_param: None,
         }
     }
 
@@ -573,6 +630,9 @@ impl DawState {
                 }
             }
             DawInput::Click(mx, my) => self.handle_click(mx, my),
+            DawInput::MouseUp(_, _) => {
+                self.dragging_param = None;
+            }
 
             // Piano roll inputs.
             DawInput::Left => {
@@ -619,6 +679,12 @@ impl DawState {
                     self.delete_selected_note();
                 }
             }
+            DawInput::MouseMove(mx, _my) => {
+                if let Some(ref target) = self.dragging_param {
+                    let value = drag_value(mx, target);
+                    self.apply_drag_value(target.clone(), value);
+                }
+            }
             _ => {}
         }
     }
@@ -652,9 +718,21 @@ impl DawState {
             return;
         }
 
-        // Only process grid clicks on the piano roll page.
-        if self.current_page != DawPage::PianoRoll {
-            return;
+        // Dispatch to page-specific click handling.
+        match self.current_page {
+            DawPage::SynthSetup => {
+                self.handle_synth_setup_click(mx, my, content_y);
+                return;
+            }
+            DawPage::MonoChain => {
+                self.handle_mono_chain_click(mx, my, content_y);
+                return;
+            }
+            DawPage::StereoChain => {
+                self.handle_stereo_chain_click(mx, my, content_y);
+                return;
+            }
+            DawPage::PianoRoll => {}
         }
 
         // Piano roll grid click (to the right of the piano keys).
@@ -762,6 +840,340 @@ impl DawState {
         }
     }
 
+    /// Handle a click on the synth setup page.
+    ///
+    /// Tests all parameter bar regions and enum label regions. On a bar hit,
+    /// starts a drag. On an enum label hit, cycles to the next value.
+    fn handle_synth_setup_click(&mut self, mx: f32, my: f32, content_y: f32) {
+        let screen_w = WINDOW_WIDTH as f32;
+        let y0 = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP;
+        let col_w = (screen_w - 2.0 * SETUP_MARGIN - 2.0 * SETUP_COL_GAP) / 3.0;
+        let x1 = SETUP_MARGIN;
+        let x2 = SETUP_MARGIN + col_w + SETUP_COL_GAP;
+        let x3 = SETUP_MARGIN + 2.0 * (col_w + SETUP_COL_GAP);
+
+        let bar_inset = 8.0;
+        let bar_w = col_w - 16.0;
+
+        // Row 1: VCO1, VCO2, Mix/LFO.
+        let row1_h = SECTION_HEADER_H + 5.0 * PARAM_ROW_H + 8.0;
+
+        // VCO1 enum labels (rows 0 and 1 within VCO1 section).
+        let vco1_y = y0 + SECTION_HEADER_H;
+        if hit_row(mx, my, x1, vco1_y, col_w) {
+            self.cycle_vco1_waveform();
+            return;
+        }
+        if hit_row(mx, my, x1, vco1_y + PARAM_ROW_H, col_w) {
+            self.cycle_vco1_scale();
+            return;
+        }
+        // VCO1 param bars (rows 2, 3, 4).
+        let vco1_bars: [(f32, SynthParam, f64, f64); 3] = [
+            (vco1_y + 2.0 * PARAM_ROW_H, SynthParam::Vco1PitchFine, -1.0, 1.0),
+            (vco1_y + 3.0 * PARAM_ROW_H, SynthParam::Vco1Level, 0.0, 1.0),
+            (vco1_y + 4.0 * PARAM_ROW_H, SynthParam::Vco1PulseWidth, 0.0, 1.0),
+        ];
+        for (py, param, min, max) in vco1_bars {
+            if hit_row(mx, my, x1, py, col_w) {
+                self.start_bar_drag(mx, x1 + bar_inset, bar_w, param, min, max);
+                return;
+            }
+        }
+
+        // VCO2 enum labels.
+        let vco2_y = y0 + SECTION_HEADER_H;
+        if hit_row(mx, my, x2, vco2_y, col_w) {
+            self.cycle_vco2_waveform();
+            return;
+        }
+        if hit_row(mx, my, x2, vco2_y + PARAM_ROW_H, col_w) {
+            self.cycle_vco2_scale();
+            return;
+        }
+        // VCO2 param bars.
+        let vco2_bars: [(f32, SynthParam, f64, f64); 3] = [
+            (vco2_y + 2.0 * PARAM_ROW_H, SynthParam::Vco2PitchFine, -1.0, 1.0),
+            (vco2_y + 3.0 * PARAM_ROW_H, SynthParam::Vco2Level, 0.0, 1.0),
+            (vco2_y + 4.0 * PARAM_ROW_H, SynthParam::Vco2PulseWidth, 0.0, 1.0),
+        ];
+        for (py, param, min, max) in vco2_bars {
+            if hit_row(mx, my, x2, py, col_w) {
+                self.start_bar_drag(mx, x2 + bar_inset, bar_w, param, min, max);
+                return;
+            }
+        }
+
+        // Mix / LFO bars.
+        let mix_y = y0 + SECTION_HEADER_H;
+        let mix_bars: [(f32, SynthParam, f64, f64); 2] = [
+            (mix_y, SynthParam::VcoMix, 0.0, 1.0),
+            (mix_y + PARAM_ROW_H, SynthParam::LfoRate, 0.1, 20.0),
+        ];
+        for (py, param, min, max) in mix_bars {
+            if hit_row(mx, my, x3, py, col_w) {
+                self.start_bar_drag(mx, x3 + bar_inset, bar_w, param, min, max);
+                return;
+            }
+        }
+
+        // Row 2: EG1, EG2, Filters.
+        let row2_y = y0 + row1_h + SETUP_ROW_GAP;
+
+        // EG1 bars.
+        let eg1_y = row2_y + SECTION_HEADER_H;
+        let eg1_bars: [(f32, SynthParam, f64, f64); 4] = [
+            (eg1_y, SynthParam::Eg1Attack, 0.0, 5.0),
+            (eg1_y + PARAM_ROW_H, SynthParam::Eg1Decay, 0.0, 5.0),
+            (eg1_y + 2.0 * PARAM_ROW_H, SynthParam::Eg1Sustain, 0.0, 1.0),
+            (eg1_y + 3.0 * PARAM_ROW_H, SynthParam::Eg1Release, 0.0, 5.0),
+        ];
+        for (py, param, min, max) in eg1_bars {
+            if hit_row(mx, my, x1, py, col_w) {
+                self.start_bar_drag(mx, x1 + bar_inset, bar_w, param, min, max);
+                return;
+            }
+        }
+
+        // EG2 bars.
+        let eg2_y = row2_y + SECTION_HEADER_H;
+        let eg2_bars: [(f32, SynthParam, f64, f64); 4] = [
+            (eg2_y, SynthParam::Eg2Attack, 0.0, 5.0),
+            (eg2_y + PARAM_ROW_H, SynthParam::Eg2Decay, 0.0, 5.0),
+            (eg2_y + 2.0 * PARAM_ROW_H, SynthParam::Eg2Sustain, 0.0, 1.0),
+            (eg2_y + 3.0 * PARAM_ROW_H, SynthParam::Eg2Release, 0.0, 5.0),
+        ];
+        for (py, param, min, max) in eg2_bars {
+            if hit_row(mx, my, x2, py, col_w) {
+                self.start_bar_drag(mx, x2 + bar_inset, bar_w, param, min, max);
+                return;
+            }
+        }
+
+        // HPF bars (column 3, top of row 2).
+        let filter_h = SECTION_HEADER_H + 2.0 * PARAM_ROW_H + 8.0;
+        let hpf_y = row2_y + SECTION_HEADER_H;
+        let hpf_bars: [(f32, SynthParam, f64, f64); 2] = [
+            (hpf_y, SynthParam::HpfCutoff, 20.0, 20000.0),
+            (hpf_y + PARAM_ROW_H, SynthParam::HpfResonance, 0.0, 4.0),
+        ];
+        for (py, param, min, max) in hpf_bars {
+            if hit_row(mx, my, x3, py, col_w) {
+                self.start_bar_drag(mx, x3 + bar_inset, bar_w, param, min, max);
+                return;
+            }
+        }
+
+        // LPF bars (column 3, below HPF).
+        let lpf_y = row2_y + filter_h + SETUP_ROW_GAP + SECTION_HEADER_H;
+        let lpf_bars: [(f32, SynthParam, f64, f64); 2] = [
+            (lpf_y, SynthParam::LpfCutoff, 20.0, 20000.0),
+            (lpf_y + PARAM_ROW_H, SynthParam::LpfResonance, 0.0, 4.0),
+        ];
+        for (py, param, min, max) in lpf_bars {
+            if hit_row(mx, my, x3, py, col_w) {
+                self.start_bar_drag(mx, x3 + bar_inset, bar_w, param, min, max);
+                return;
+            }
+        }
+
+        // Row 3: Voice, Velocity, Glide.
+        let row2_h = SECTION_HEADER_H + 4.0 * PARAM_ROW_H + 8.0;
+        let row3_y = row2_y + row2_h + SETUP_ROW_GAP;
+
+        // Voice mode label (click to cycle).
+        let voice_y = row3_y + SECTION_HEADER_H;
+        if hit_row(mx, my, x1, voice_y, col_w) {
+            self.cycle_voice_mode();
+            return;
+        }
+
+        // Velocity bars.
+        let vel_y = row3_y + SECTION_HEADER_H;
+        let vel_bars: [(f32, SynthParam, f64, f64); 4] = [
+            (vel_y, SynthParam::VelocityVca, 0.0, 1.0),
+            (vel_y + PARAM_ROW_H, SynthParam::VelocityFilter, 0.0, 4.0),
+            (vel_y + 2.0 * PARAM_ROW_H, SynthParam::VelocityEnv, 0.0, 1.0),
+            (vel_y + 3.0 * PARAM_ROW_H, SynthParam::VelocityPitch, 0.0, 12.0),
+        ];
+        for (py, param, min, max) in vel_bars {
+            if hit_row(mx, my, x2, py, col_w) {
+                self.start_bar_drag(mx, x2 + bar_inset, bar_w, param, min, max);
+                return;
+            }
+        }
+
+        // Glide toggle (click to cycle on/off).
+        let glide_y = row3_y + SECTION_HEADER_H;
+        if hit_row(mx, my, x3, glide_y, col_w) {
+            self.toggle_glide();
+            return;
+        }
+        // Glide time bar.
+        let glide_time_y = glide_y + PARAM_ROW_H;
+        if hit_row(mx, my, x3, glide_time_y, col_w) {
+            self.start_bar_drag(mx, x3 + bar_inset, bar_w, SynthParam::GlideTime, 0.0, 2.0);
+        }
+    }
+
+    /// Start a parameter bar drag operation.
+    fn start_bar_drag(
+        &mut self,
+        mx: f32,
+        bar_x: f32,
+        bar_w: f32,
+        param: SynthParam,
+        min_val: f64,
+        max_val: f64,
+    ) {
+        let target = DragTarget::Synth {
+            param,
+            bar_x,
+            bar_w,
+            min_val,
+            max_val,
+        };
+        let value = drag_value(mx, &target);
+        self.apply_drag_value(target.clone(), value);
+        self.dragging_param = Some(target);
+    }
+
+    /// Cycle VCO1 waveform to the next value.
+    fn cycle_vco1_waveform(&mut self) {
+        let ch = self.selected_channel;
+        self.patches[ch].vco1_waveform = next_waveform(&self.patches[ch].vco1_waveform);
+        if let Ok(mut engine) = self.engine.try_lock() {
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+        }
+    }
+
+    /// Cycle VCO2 waveform to the next value.
+    fn cycle_vco2_waveform(&mut self) {
+        let ch = self.selected_channel;
+        self.patches[ch].vco2_waveform = next_waveform(&self.patches[ch].vco2_waveform);
+        if let Ok(mut engine) = self.engine.try_lock() {
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+        }
+    }
+
+    /// Cycle VCO1 scale to the next value.
+    fn cycle_vco1_scale(&mut self) {
+        let ch = self.selected_channel;
+        self.patches[ch].vco1_scale = next_scale(&self.patches[ch].vco1_scale);
+        if let Ok(mut engine) = self.engine.try_lock() {
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+        }
+    }
+
+    /// Cycle VCO2 scale to the next value.
+    fn cycle_vco2_scale(&mut self) {
+        let ch = self.selected_channel;
+        self.patches[ch].vco2_scale = next_scale(&self.patches[ch].vco2_scale);
+        if let Ok(mut engine) = self.engine.try_lock() {
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+        }
+    }
+
+    /// Cycle voice mode to the next value.
+    fn cycle_voice_mode(&mut self) {
+        let ch = self.selected_channel;
+        self.patches[ch].voice_mode = next_voice_mode(&self.patches[ch].voice_mode);
+        if let Ok(mut engine) = self.engine.try_lock() {
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+        }
+    }
+
+    /// Toggle glide enabled on the selected channel.
+    fn toggle_glide(&mut self) {
+        let ch = self.selected_channel;
+        self.patches[ch].glide_enabled = !self.patches[ch].glide_enabled;
+        if let Ok(mut engine) = self.engine.try_lock() {
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+        }
+    }
+
+    /// Handle a click on the mono chain page (pedal parameter editing).
+    fn handle_mono_chain_click(&mut self, mx: f32, my: f32, content_y: f32) {
+        let chain = &self.effects[self.selected_channel];
+        if chain.pre_pedals.is_empty() {
+            return;
+        }
+        let pedals_y = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP + 48.0;
+        self.handle_pedal_chain_click(mx, my, pedals_y, 0);
+    }
+
+    /// Handle a click on the stereo chain page (pedal parameter editing).
+    fn handle_stereo_chain_click(&mut self, mx: f32, my: f32, content_y: f32) {
+        let screen_w = WINDOW_WIDTH as f32;
+        let y0 = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP;
+        let pos_h = 44.0;
+        let chains_y = y0 + pos_h + SETUP_ROW_GAP;
+        let left_header_h = 28.0;
+        let pedals_y = chains_y + left_header_h + 4.0;
+
+        let half_w = (screen_w - 3.0 * SETUP_MARGIN) / 2.0;
+        let right_x = SETUP_MARGIN + half_w + SETUP_MARGIN;
+
+        // Check if click is in left or right half.
+        if mx < right_x {
+            self.handle_pedal_chain_click(mx, my, pedals_y, 1);
+        } else {
+            self.handle_pedal_chain_click(mx, my, pedals_y, 2);
+        }
+    }
+
+    /// Handle a click within a pedal chain layout.
+    ///
+    /// `chain_id`: 0 = pre (mono), 1 = post-left, 2 = post-right.
+    fn handle_pedal_chain_click(
+        &mut self,
+        mx: f32,
+        my: f32,
+        pedals_y: f32,
+        chain_id: u8,
+    ) {
+        let ch = self.selected_channel;
+        let pedals = match chain_id {
+            0 => &self.effects[ch].pre_pedals,
+            1 => &self.effects[ch].post_pedals_left,
+            2 => &self.effects[ch].post_pedals_right,
+            _ => return,
+        };
+
+        let pedal_w = 180.0;
+        let pedal_gap = 16.0;
+        let bar_inset = 8.0;
+        let bar_w = pedal_w - 16.0;
+        let mut px = SETUP_MARGIN;
+
+        for (pedal_idx, pedal) in pedals.iter().enumerate() {
+            let header_h = 28.0;
+            let param_start_y = pedals_y + header_h;
+
+            for (param_idx, param) in pedal.params.iter().enumerate() {
+                let py = param_start_y + param_idx as f32 * PARAM_ROW_H;
+                if hit_row(mx, my, px, py, pedal_w) {
+                    let (min, max) = pedal_param_range(&param.name);
+                    let target = DragTarget::Pedal {
+                        chain: chain_id,
+                        pedal_idx,
+                        param_idx,
+                        bar_x: px + bar_inset,
+                        bar_w,
+                        min_val: min,
+                        max_val: max,
+                    };
+                    let value = drag_value(mx, &target);
+                    self.apply_drag_value(target.clone(), value);
+                    self.dragging_param = Some(target);
+                    return;
+                }
+            }
+
+            px += pedal_w + pedal_gap;
+        }
+    }
+
     /// Delete the currently selected note, if any.
     fn delete_selected_note(&mut self) {
         if let Some(idx) = self.selected_note {
@@ -770,6 +1182,102 @@ impl DawState {
                 self.tracks[self.selected_channel].notes.remove(idx);
             }
             self.selected_note = None;
+        }
+    }
+
+    /// Apply a dragged parameter value to both PatchConfig and the audio engine.
+    fn apply_drag_value(&mut self, target: DragTarget, value: f64) {
+        let ch = self.selected_channel;
+        match target {
+            DragTarget::Synth { param, .. } => {
+                self.set_synth_param(ch, param, value);
+            }
+            DragTarget::Pedal {
+                chain,
+                pedal_idx,
+                param_idx,
+                ..
+            } => {
+                self.set_pedal_param(ch, chain, pedal_idx, param_idx, value);
+            }
+        }
+    }
+
+    /// Write a synth parameter value to PatchConfig and sync to the audio engine.
+    fn set_synth_param(&mut self, ch: usize, param: SynthParam, value: f64) {
+        let patch = &mut self.patches[ch];
+        match param {
+            SynthParam::Vco1PitchFine => patch.vco1_pitch_fine = value,
+            SynthParam::Vco1Level => patch.vco1_level = value,
+            SynthParam::Vco1PulseWidth => patch.vco1_pulse_width = value,
+            SynthParam::Vco2PitchFine => patch.vco2_pitch_fine = value,
+            SynthParam::Vco2Level => patch.vco2_level = value,
+            SynthParam::Vco2PulseWidth => patch.vco2_pulse_width = value,
+            SynthParam::VcoMix => patch.vco_mix = value,
+            SynthParam::LfoRate => patch.lfo_rate = value,
+            SynthParam::Eg1Attack => patch.eg1_attack = value,
+            SynthParam::Eg1Decay => patch.eg1_decay = value,
+            SynthParam::Eg1Sustain => patch.eg1_sustain = value,
+            SynthParam::Eg1Release => patch.eg1_release = value,
+            SynthParam::Eg2Attack => patch.eg2_attack = value,
+            SynthParam::Eg2Decay => patch.eg2_decay = value,
+            SynthParam::Eg2Sustain => patch.eg2_sustain = value,
+            SynthParam::Eg2Release => patch.eg2_release = value,
+            SynthParam::HpfCutoff => patch.hpf_cutoff = value,
+            SynthParam::HpfResonance => patch.hpf_resonance = value,
+            SynthParam::LpfCutoff => patch.lpf_cutoff = value,
+            SynthParam::LpfResonance => patch.lpf_resonance = value,
+            SynthParam::VelocityVca => patch.velocity_vca_depth = value,
+            SynthParam::VelocityFilter => patch.velocity_filter_depth = value,
+            SynthParam::VelocityEnv => patch.velocity_envelope_depth = value,
+            SynthParam::VelocityPitch => patch.velocity_pitch_depth = value,
+            SynthParam::GlideTime => patch.glide_time = value,
+        }
+        // Sync the full patch to the engine. This is slightly wasteful (writes all
+        // parameters) but ensures consistency and avoids per-parameter engine access.
+        if let Ok(mut engine) = self.engine.try_lock() {
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+        }
+    }
+
+    /// Write a pedal parameter value to EffectChainConfig and sync to the engine.
+    fn set_pedal_param(
+        &mut self,
+        ch: usize,
+        chain: u8,
+        pedal_idx: usize,
+        param_idx: usize,
+        value: f64,
+    ) {
+        // Update the config.
+        let chain_config = &mut self.effects[ch];
+        let pedals = match chain {
+            0 => &mut chain_config.pre_pedals,
+            1 => &mut chain_config.post_pedals_left,
+            2 => &mut chain_config.post_pedals_right,
+            _ => return,
+        };
+        let param_name = if let Some(pedal) = pedals.get_mut(pedal_idx) {
+            if let Some(param) = pedal.params.get_mut(param_idx) {
+                param.value = value;
+                param.name.clone()
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+        // Sync the specific parameter to the engine's live pedal.
+        if let Ok(mut engine) = self.engine.try_lock() {
+            let engine_chain = match chain {
+                0 => &mut engine.channels[ch].pre_pedals,
+                1 => &mut engine.channels[ch].post_pedals_left,
+                2 => &mut engine.channels[ch].post_pedals_right,
+                _ => return,
+            };
+            if let Some(pedal) = engine_chain.pedals.get_mut(pedal_idx) {
+                pedal.set_param(&param_name, value);
+            }
         }
     }
 
@@ -836,7 +1344,7 @@ impl DawState {
             let hints = if self.current_page == DawPage::PianoRoll {
                 "Space=Play  S=Stop  1-8=Ch  P=Preset  M=Mute  Click=Note  Del=Remove  Tab=Setup"
             } else {
-                "Left/Right=Navigate  Tab=Cycle  Esc=Back  1-8=Ch  P=Preset  Ctrl+S=Save"
+                "Click=Edit  Drag=Adjust  Left/Right=Navigate  Esc=Back  P=Preset  Ctrl+S=Save"
             };
             renderer.draw_text(hints, screen_w - 720.0, 12.0, FontSize::Small, TEXT_SECONDARY);
         }
@@ -1482,12 +1990,62 @@ fn pedal_param_range(name: &str) -> (f64, f64) {
     }
 }
 
+/// Test whether a mouse click at (mx, my) falls within a parameter row.
+///
+/// A row occupies the rectangle `[col_x, row_y, col_x + col_w, row_y + PARAM_ROW_H]`.
+fn hit_row(mx: f32, my: f32, col_x: f32, row_y: f32, col_w: f32) -> bool {
+    mx >= col_x && mx < col_x + col_w && my >= row_y && my < row_y + PARAM_ROW_H
+}
+
+/// Cycle to the next waveform name in a fixed list.
+fn next_waveform(current: &str) -> String {
+    const WAVEFORMS: &[&str] = &["sawtooth", "triangle", "square", "sine", "noise", "ring"];
+    let idx = WAVEFORMS.iter().position(|w| *w == current).unwrap_or(0);
+    String::from(WAVEFORMS[(idx + 1) % WAVEFORMS.len()])
+}
+
+/// Cycle to the next organ pipe scale in a fixed list.
+fn next_scale(current: &str) -> String {
+    const SCALES: &[&str] = &["32'", "16'", "8'", "4'", "2'"];
+    let idx = SCALES.iter().position(|s| *s == current).unwrap_or(2);
+    String::from(SCALES[(idx + 1) % SCALES.len()])
+}
+
+/// Cycle to the next voice mode in a fixed list.
+fn next_voice_mode(current: &str) -> String {
+    const MODES: &[&str] = &["high_1", "low_1", "high_10", "low_10"];
+    let idx = MODES.iter().position(|m| *m == current).unwrap_or(0);
+    String::from(MODES[(idx + 1) % MODES.len()])
+}
+
 /// Compute a linear fraction for a parameter value within a range.
 fn param_fraction(value: f64, min: f64, max: f64) -> f32 {
     if max <= min {
         return 0.0;
     }
     ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
+}
+
+/// Compute a parameter value from a mouse x position within a drag target bar.
+fn drag_value(mx: f32, target: &DragTarget) -> f64 {
+    let (bar_x, bar_w, min_val, max_val) = match target {
+        DragTarget::Synth {
+            bar_x,
+            bar_w,
+            min_val,
+            max_val,
+            ..
+        } => (*bar_x, *bar_w, *min_val, *max_val),
+        DragTarget::Pedal {
+            bar_x,
+            bar_w,
+            min_val,
+            max_val,
+            ..
+        } => (*bar_x, *bar_w, *min_val, *max_val),
+    };
+    let frac = ((mx - bar_x) / bar_w).clamp(0.0, 1.0) as f64;
+    min_val + frac * (max_val - min_val)
 }
 
 fn main() {

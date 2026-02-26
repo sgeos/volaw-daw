@@ -43,6 +43,12 @@ pub unsafe fn translate_event(event: &SDL_Event) -> Option<DawInput> {
         return Some(DawInput::Click(button.x, button.y));
     }
 
+    // Mouse button release events.
+    if event_type == SDL_EventType::MOUSE_BUTTON_UP.0 {
+        let button = unsafe { &event.button };
+        return Some(DawInput::MouseUp(button.x, button.y));
+    }
+
     // Mouse motion events.
     if event_type == SDL_EventType::MOUSE_MOTION.0 {
         let motion = unsafe { &event.motion };

@@ -3,8 +3,10 @@
 pub enum DawInput {
     /// Quit the application.
     Quit,
-    /// Mouse click at pixel coordinates (x, y).
+    /// Mouse button pressed at pixel coordinates (x, y).
     Click(f32, f32),
+    /// Mouse button released at pixel coordinates (x, y).
+    MouseUp(f32, f32),
     /// Mouse moved to pixel coordinates (x, y).
     MouseMove(f32, f32),
     /// Mouse scroll wheel delta (vertical).

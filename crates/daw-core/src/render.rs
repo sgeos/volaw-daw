@@ -45,6 +45,15 @@ pub const CHANNEL_COLORS: [Color; 8] = [
     Color::rgb(200, 200, 200), // Channel 7: Silver
 ];
 
+// Setup page colors.
+pub const KNOB_TRACK: Color = Color::rgb(30, 30, 35);
+pub const PANEL_BG: Color = Color::rgb(42, 42, 52);
+pub const PANEL_BORDER: Color = Color::rgb(65, 65, 78);
+pub const SECTION_BG: Color = Color::rgb(38, 38, 46);
+pub const NAV_BUTTON: Color = Color::rgb(55, 60, 75);
+pub const PEDAL_BG: Color = Color::rgb(52, 48, 44);
+pub const PEDAL_HEADER: Color = Color::rgb(70, 65, 55);
+
 /// Font size categories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontSize {

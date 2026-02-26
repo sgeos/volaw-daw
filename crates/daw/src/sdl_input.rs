@@ -70,6 +70,7 @@ fn translate_ctrl_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
 fn translate_shift_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
     match scancode {
         SDL_SCANCODE_P => Some(DawInput::PrevPreset),
+        SDL_SCANCODE_TAB => Some(DawInput::PrevPage),
         _ => None,
     }
 }
@@ -100,6 +101,7 @@ fn translate_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
         // Preset cycling and mute toggle.
         SDL_SCANCODE_P => Some(DawInput::NextPreset),
         SDL_SCANCODE_M => Some(DawInput::ToggleMute),
+        SDL_SCANCODE_TAB => Some(DawInput::NextPage),
         _ => None,
     }
 }

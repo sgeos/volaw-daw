@@ -40,4 +40,8 @@ pub enum DawInput {
     PrevPreset,
     /// Toggle mute on the selected channel.
     ToggleMute,
+    /// Cycle to the next page (Tab).
+    NextPage,
+    /// Cycle to the previous page (Shift+Tab).
+    PrevPage,
 }

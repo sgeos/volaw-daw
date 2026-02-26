@@ -14,7 +14,7 @@ use audio::vco::{Scale, Waveform};
 use audio::{AudioEngine, VoiceMode};
 use daw_core::input::DawInput;
 use daw_core::midi::{MidiNote, MidiTrack};
-use daw_core::patch::{EffectChainConfig, PatchConfig};
+use daw_core::patch::{EffectChainConfig, PatchConfig, PedalConfig};
 use daw_core::presets;
 use daw_core::project::DawProject;
 use daw_core::render::{
@@ -54,6 +54,72 @@ const DEFAULT_VELOCITY: u8 = 100;
 
 /// Default project root directory.
 const PROJECT_ROOT: &str = "daw_projects";
+
+/// Setup page layout constants.
+const NAV_BAR_HEIGHT: f32 = 30.0;
+const SETUP_MARGIN: f32 = 10.0;
+const SETUP_COL_GAP: f32 = 10.0;
+const SETUP_ROW_GAP: f32 = 6.0;
+const SECTION_HEADER_H: f32 = 24.0;
+const PARAM_ROW_H: f32 = 24.0;
+
+/// DAW page view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DawPage {
+    PianoRoll,
+    SynthSetup,
+    MonoChain,
+    StereoChain,
+}
+
+impl DawPage {
+    fn next(self) -> Self {
+        match self {
+            Self::PianoRoll => Self::SynthSetup,
+            Self::SynthSetup => Self::MonoChain,
+            Self::MonoChain => Self::StereoChain,
+            Self::StereoChain => Self::PianoRoll,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::PianoRoll => Self::StereoChain,
+            Self::SynthSetup => Self::PianoRoll,
+            Self::MonoChain => Self::SynthSetup,
+            Self::StereoChain => Self::MonoChain,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::PianoRoll => "Piano Roll",
+            Self::SynthSetup => "Synth Setup",
+            Self::MonoChain => "Mono Chain",
+            Self::StereoChain => "Stereo Chain",
+        }
+    }
+
+    /// Navigate left from setup pages (circular among the 3 setup pages).
+    fn setup_left(self) -> Self {
+        match self {
+            Self::SynthSetup => Self::StereoChain,
+            Self::MonoChain => Self::SynthSetup,
+            Self::StereoChain => Self::MonoChain,
+            Self::PianoRoll => Self::PianoRoll,
+        }
+    }
+
+    /// Navigate right from setup pages.
+    fn setup_right(self) -> Self {
+        match self {
+            Self::SynthSetup => Self::MonoChain,
+            Self::MonoChain => Self::StereoChain,
+            Self::StereoChain => Self::SynthSetup,
+            Self::PianoRoll => Self::PianoRoll,
+        }
+    }
+}
 
 /// Parse a waveform name string into the audio engine Waveform enum.
 fn parse_waveform(s: &str) -> Waveform {
@@ -207,6 +273,8 @@ struct DawState {
     patches: [PatchConfig; 8],
     effects: [EffectChainConfig; 8],
     running: bool,
+    /// Current page/view being displayed.
+    current_page: DawPage,
     /// Index of the currently selected note in the active channel, if any.
     selected_note: Option<usize>,
     /// Snap quantization in ticks. Notes snap to this grid. Default is one beat (480).
@@ -243,6 +311,7 @@ impl DawState {
             patches: core::array::from_fn(|_| PatchConfig::default()),
             effects: core::array::from_fn(|_| EffectChainConfig::default()),
             running: true,
+            current_page: DawPage::PianoRoll,
             selected_note: None,
             snap_ticks: DEFAULT_NOTE_DURATION,
             project_root: PathBuf::from(PROJECT_ROOT),
@@ -398,6 +467,7 @@ impl DawState {
 
     fn handle_input(&mut self, input: DawInput) {
         match input {
+            // Global inputs (all pages).
             DawInput::Quit => self.running = false,
             DawInput::TogglePlay => {
                 if self.transport.playing {
@@ -419,32 +489,70 @@ impl DawState {
                     self.selected_note = None;
                 }
             }
-            DawInput::ZoomIn => {
-                self.zoom = (self.zoom * 1.2).min(8.0);
-            }
-            DawInput::ZoomOut => {
-                self.zoom = (self.zoom / 1.2).max(0.25);
-            }
-            DawInput::Left => self.scroll_x = (self.scroll_x - 20.0).max(0.0),
-            DawInput::Right => self.scroll_x += 20.0,
-            DawInput::Up => self.scroll_y = (self.scroll_y - 20.0).max(0.0),
-            DawInput::Down => self.scroll_y += 20.0,
-            DawInput::Scroll(delta) => {
-                self.scroll_y = (self.scroll_y - delta as f32 * 20.0).max(0.0);
-            }
-            DawInput::Click(mx, my) => self.handle_click(mx, my),
-            DawInput::Delete => self.delete_selected_note(),
             DawInput::Save => self.save(),
             DawInput::Undo => self.undo(),
-            DawInput::Cancel => {
-                self.selected_note = None;
-            }
             DawInput::NextPreset => self.cycle_preset(1),
             DawInput::PrevPreset => self.cycle_preset(-1),
             DawInput::ToggleMute => {
                 let ch = self.selected_channel;
                 self.project.channels[ch].muted = !self.project.channels[ch].muted;
                 self.sync_engine_channels();
+            }
+            DawInput::NextPage => self.current_page = self.current_page.next(),
+            DawInput::PrevPage => self.current_page = self.current_page.prev(),
+            DawInput::Cancel => {
+                if self.current_page != DawPage::PianoRoll {
+                    self.current_page = DawPage::PianoRoll;
+                } else {
+                    self.selected_note = None;
+                }
+            }
+            DawInput::Click(mx, my) => self.handle_click(mx, my),
+
+            // Piano roll inputs.
+            DawInput::Left => {
+                if self.current_page == DawPage::PianoRoll {
+                    self.scroll_x = (self.scroll_x - 20.0).max(0.0);
+                } else {
+                    self.current_page = self.current_page.setup_left();
+                }
+            }
+            DawInput::Right => {
+                if self.current_page == DawPage::PianoRoll {
+                    self.scroll_x += 20.0;
+                } else {
+                    self.current_page = self.current_page.setup_right();
+                }
+            }
+            DawInput::Up => {
+                if self.current_page == DawPage::PianoRoll {
+                    self.scroll_y = (self.scroll_y - 20.0).max(0.0);
+                }
+            }
+            DawInput::Down => {
+                if self.current_page == DawPage::PianoRoll {
+                    self.scroll_y += 20.0;
+                }
+            }
+            DawInput::Scroll(delta) => {
+                if self.current_page == DawPage::PianoRoll {
+                    self.scroll_y = (self.scroll_y - delta as f32 * 20.0).max(0.0);
+                }
+            }
+            DawInput::ZoomIn => {
+                if self.current_page == DawPage::PianoRoll {
+                    self.zoom = (self.zoom * 1.2).min(8.0);
+                }
+            }
+            DawInput::ZoomOut => {
+                if self.current_page == DawPage::PianoRoll {
+                    self.zoom = (self.zoom / 1.2).max(0.25);
+                }
+            }
+            DawInput::Delete => {
+                if self.current_page == DawPage::PianoRoll {
+                    self.delete_selected_note();
+                }
             }
             _ => {}
         }
@@ -453,10 +561,10 @@ impl DawState {
     /// Handle a mouse click. If over the grid area, either select an existing
     /// note or place a new one. If over the channel bar, select a channel.
     fn handle_click(&mut self, mx: f32, my: f32) {
-        let roll_y = TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT;
+        let content_y = TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT;
 
-        // Channel bar click.
-        if my >= TOOLBAR_HEIGHT && my < roll_y {
+        // Channel bar click (all pages).
+        if my >= TOOLBAR_HEIGHT && my < content_y {
             let tab_w = WINDOW_WIDTH as f32 / 8.0;
             let ch = (mx / tab_w) as usize;
             if ch < 8 {
@@ -466,7 +574,26 @@ impl DawState {
             return;
         }
 
+        // Setup page navigation bar click.
+        if self.current_page != DawPage::PianoRoll
+            && my >= content_y
+            && my < content_y + NAV_BAR_HEIGHT
+        {
+            if mx < 200.0 {
+                self.current_page = self.current_page.setup_left();
+            } else if mx > WINDOW_WIDTH as f32 - 200.0 {
+                self.current_page = self.current_page.setup_right();
+            }
+            return;
+        }
+
+        // Only process grid clicks on the piano roll page.
+        if self.current_page != DawPage::PianoRoll {
+            return;
+        }
+
         // Piano roll grid click (to the right of the piano keys).
+        let roll_y = content_y;
         if my >= roll_y && mx >= PIANO_KEY_WIDTH {
             let tick = self.x_to_tick(mx);
             let pitch = self.y_to_pitch(my, roll_y);
@@ -593,10 +720,23 @@ impl DawState {
         // Channel selector bar.
         self.render_channel_bar(renderer, screen_w);
 
-        // Piano roll area.
-        let roll_y = TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT;
-        let roll_h = screen_h - roll_y;
-        self.render_piano_roll(renderer, screen_w, roll_y, roll_h);
+        // Content area.
+        let content_y = TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT;
+        let content_h = screen_h - content_y;
+        match self.current_page {
+            DawPage::PianoRoll => {
+                self.render_piano_roll(renderer, screen_w, content_y, content_h);
+            }
+            DawPage::SynthSetup => {
+                self.render_synth_setup(renderer, screen_w, content_y, content_h);
+            }
+            DawPage::MonoChain => {
+                self.render_mono_chain(renderer, screen_w, content_y, content_h);
+            }
+            DawPage::StereoChain => {
+                self.render_stereo_chain(renderer, screen_w, content_y, content_h);
+            }
+        }
 
         renderer.present();
     }
@@ -607,36 +747,33 @@ impl DawState {
         // Project name.
         renderer.draw_text(&self.project.name, 10.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
 
+        // Page indicator.
+        renderer.draw_text(self.current_page.name(), 200.0, 8.0, FontSize::Medium, TEXT_ACCENT);
+
         // Transport controls.
         let play_text = if self.transport.playing { "PLAYING" } else { "STOPPED" };
         let play_color = if self.transport.playing { colors::NOTE_BLOCK } else { TEXT_SECONDARY };
-        renderer.draw_text(play_text, 250.0, 8.0, FontSize::Medium, play_color);
+        renderer.draw_text(play_text, 380.0, 8.0, FontSize::Medium, play_color);
 
         // Position display (bar:beat:tick).
         let (bar, beat, tick) = self.transport.position_bbt();
         let pos_text = format!("{bar}:{beat}:{tick:03}");
-        renderer.draw_text(&pos_text, 380.0, 8.0, FontSize::Medium, TEXT_ACCENT);
+        renderer.draw_text(&pos_text, 500.0, 8.0, FontSize::Medium, TEXT_ACCENT);
 
         // Tempo display.
         let tempo_text = format!("{:.0} BPM", self.project.tempo);
-        renderer.draw_text(&tempo_text, 500.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
+        renderer.draw_text(&tempo_text, 620.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
 
-        // Zoom and note count display.
-        let note_count = self.tracks[self.selected_channel].notes.len();
-        let info_text = format!("x{:.1}  Notes: {note_count}", self.zoom);
-        renderer.draw_text(&info_text, 620.0, 8.0, FontSize::Small, TEXT_SECONDARY);
-
-        // Status message or key hints.
+        // Status message or page-specific hints.
         if let Some(ref msg) = self.status_message {
             renderer.draw_text(msg, screen_w - 620.0, 12.0, FontSize::Small, TEXT_ACCENT);
         } else {
-            renderer.draw_text(
-                "Space=Play  S=Stop  1-8=Ch  P=Preset  M=Mute  Click=Note  Del=Remove  Ctrl+S=Save",
-                screen_w - 720.0,
-                12.0,
-                FontSize::Small,
-                TEXT_SECONDARY,
-            );
+            let hints = if self.current_page == DawPage::PianoRoll {
+                "Space=Play  S=Stop  1-8=Ch  P=Preset  M=Mute  Click=Note  Del=Remove  Tab=Setup"
+            } else {
+                "Left/Right=Navigate  Tab=Cycle  Esc=Back  1-8=Ch  P=Preset  Ctrl+S=Save"
+            };
+            renderer.draw_text(hints, screen_w - 720.0, 12.0, FontSize::Small, TEXT_SECONDARY);
         }
     }
 
@@ -805,6 +942,487 @@ impl DawState {
         let relative = (LOWEST_NOTE + VISIBLE_NOTE_RANGE - 1).saturating_sub(pitch);
         roll_y + relative as f32 * NOTE_HEIGHT - self.scroll_y
     }
+
+    // --- Setup page rendering ---
+
+    /// Render the navigation bar for setup pages.
+    fn render_setup_nav<R: Renderer>(
+        &self,
+        renderer: &mut R,
+        screen_w: f32,
+        content_y: f32,
+    ) {
+        let nav_y = content_y;
+        renderer.fill_rect(0.0, nav_y, screen_w, NAV_BAR_HEIGHT, BG_PANEL);
+
+        // Left arrow button.
+        let left_page = self.current_page.setup_left();
+        let left_label = format!("<< {}", left_page.name());
+        renderer.fill_rect(10.0, nav_y + 3.0, 180.0, 24.0, colors::NAV_BUTTON);
+        renderer.draw_rect(10.0, nav_y + 3.0, 180.0, 24.0, colors::PANEL_BORDER);
+        renderer.draw_text(&left_label, 20.0, nav_y + 6.0, FontSize::Small, TEXT_PRIMARY);
+
+        // Page title (centered).
+        let title = self.current_page.name();
+        renderer.draw_text(
+            title,
+            screen_w / 2.0 - 50.0,
+            nav_y + 5.0,
+            FontSize::Medium,
+            TEXT_ACCENT,
+        );
+
+        // Right arrow button.
+        let right_page = self.current_page.setup_right();
+        let right_label = format!("{} >>", right_page.name());
+        let rx = screen_w - 190.0;
+        renderer.fill_rect(rx, nav_y + 3.0, 180.0, 24.0, colors::NAV_BUTTON);
+        renderer.draw_rect(rx, nav_y + 3.0, 180.0, 24.0, colors::PANEL_BORDER);
+        renderer.draw_text(&right_label, rx + 10.0, nav_y + 6.0, FontSize::Small, TEXT_PRIMARY);
+    }
+
+    /// Render the synth setup page: skeuomorphic panel with parameter displays.
+    fn render_synth_setup<R: Renderer>(
+        &self,
+        renderer: &mut R,
+        screen_w: f32,
+        content_y: f32,
+        content_h: f32,
+    ) {
+        let patch = &self.patches[self.selected_channel];
+        let accent = CHANNEL_COLORS[self.selected_channel];
+
+        // Background.
+        renderer.fill_rect(0.0, content_y, screen_w, content_h, colors::SECTION_BG);
+
+        // Navigation bar.
+        self.render_setup_nav(renderer, screen_w, content_y);
+
+        let y0 = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP;
+        let col_w = (screen_w - 2.0 * SETUP_MARGIN - 2.0 * SETUP_COL_GAP) / 3.0;
+        let x1 = SETUP_MARGIN;
+        let x2 = SETUP_MARGIN + col_w + SETUP_COL_GAP;
+        let x3 = SETUP_MARGIN + 2.0 * (col_w + SETUP_COL_GAP);
+
+        // --- Row 1: VCO1, VCO2, Mix/LFO ---
+        let row1_h = SECTION_HEADER_H + 5.0 * PARAM_ROW_H + 8.0;
+
+        // VCO 1.
+        draw_section_panel(renderer, x1, y0, col_w, row1_h, "VCO 1", accent);
+        let mut py = y0 + SECTION_HEADER_H;
+        draw_param_label(renderer, x1, py, col_w, "Waveform", &patch.vco1_waveform);
+        py += PARAM_ROW_H;
+        draw_param_label(renderer, x1, py, col_w, "Scale", &patch.vco1_scale);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x1, py, col_w, "Pitch Fine", patch.vco1_pitch_fine, -1.0, 1.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x1, py, col_w, "Level", patch.vco1_level, 0.0, 1.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x1, py, col_w, "Pulse Width", patch.vco1_pulse_width, 0.0, 1.0, accent);
+
+        // VCO 2.
+        draw_section_panel(renderer, x2, y0, col_w, row1_h, "VCO 2", accent);
+        py = y0 + SECTION_HEADER_H;
+        draw_param_label(renderer, x2, py, col_w, "Waveform", &patch.vco2_waveform);
+        py += PARAM_ROW_H;
+        draw_param_label(renderer, x2, py, col_w, "Scale", &patch.vco2_scale);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x2, py, col_w, "Pitch Fine", patch.vco2_pitch_fine, -1.0, 1.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x2, py, col_w, "Level", patch.vco2_level, 0.0, 1.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x2, py, col_w, "Pulse Width", patch.vco2_pulse_width, 0.0, 1.0, accent);
+
+        // Mix / LFO.
+        let mix_h = SECTION_HEADER_H + 2.0 * PARAM_ROW_H + 8.0;
+        draw_section_panel(renderer, x3, y0, col_w, mix_h, "MIX / LFO", accent);
+        py = y0 + SECTION_HEADER_H;
+        draw_param_bar(renderer, x3, py, col_w, "VCO Mix", patch.vco_mix, 0.0, 1.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x3, py, col_w, "LFO Rate", patch.lfo_rate, 0.1, 20.0, accent);
+
+        // --- Row 2: EG1, EG2, Filters ---
+        let row2_y = y0 + row1_h + SETUP_ROW_GAP;
+        let row2_h = SECTION_HEADER_H + 4.0 * PARAM_ROW_H + 8.0;
+
+        // EG 1 (HPF).
+        draw_section_panel(renderer, x1, row2_y, col_w, row2_h, "EG 1 (HPF)", accent);
+        py = row2_y + SECTION_HEADER_H;
+        draw_param_bar(renderer, x1, py, col_w, "Attack", patch.eg1_attack, 0.0, 5.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x1, py, col_w, "Decay", patch.eg1_decay, 0.0, 5.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x1, py, col_w, "Sustain", patch.eg1_sustain, 0.0, 1.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x1, py, col_w, "Release", patch.eg1_release, 0.0, 5.0, accent);
+
+        // EG 2 (VCA/LPF).
+        draw_section_panel(renderer, x2, row2_y, col_w, row2_h, "EG 2 (VCA/LPF)", accent);
+        py = row2_y + SECTION_HEADER_H;
+        draw_param_bar(renderer, x2, py, col_w, "Attack", patch.eg2_attack, 0.0, 5.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x2, py, col_w, "Decay", patch.eg2_decay, 0.0, 5.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x2, py, col_w, "Sustain", patch.eg2_sustain, 0.0, 1.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x2, py, col_w, "Release", patch.eg2_release, 0.0, 5.0, accent);
+
+        // Filters (HPF + LPF stacked in column 3).
+        let filter_h = SECTION_HEADER_H + 2.0 * PARAM_ROW_H + 8.0;
+        draw_section_panel(renderer, x3, row2_y, col_w, filter_h, "HPF", accent);
+        py = row2_y + SECTION_HEADER_H;
+        draw_param_bar(renderer, x3, py, col_w, "Cutoff", patch.hpf_cutoff, 20.0, 20000.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x3, py, col_w, "Resonance", patch.hpf_resonance, 0.0, 4.0, accent);
+
+        let lpf_y = row2_y + filter_h + SETUP_ROW_GAP;
+        draw_section_panel(renderer, x3, lpf_y, col_w, filter_h, "LPF", accent);
+        py = lpf_y + SECTION_HEADER_H;
+        draw_param_bar(renderer, x3, py, col_w, "Cutoff", patch.lpf_cutoff, 20.0, 20000.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x3, py, col_w, "Resonance", patch.lpf_resonance, 0.0, 4.0, accent);
+
+        // --- Row 3: Voice, Velocity, Glide ---
+        let row3_y = row2_y + row2_h + SETUP_ROW_GAP;
+
+        // Voice mode.
+        let voice_h = SECTION_HEADER_H + PARAM_ROW_H + 8.0;
+        draw_section_panel(renderer, x1, row3_y, col_w, voice_h, "VOICE", accent);
+        py = row3_y + SECTION_HEADER_H;
+        draw_param_label(renderer, x1, py, col_w, "Mode", &patch.voice_mode);
+
+        // Velocity.
+        let vel_h = SECTION_HEADER_H + 4.0 * PARAM_ROW_H + 8.0;
+        draw_section_panel(renderer, x2, row3_y, col_w, vel_h, "VELOCITY", accent);
+        py = row3_y + SECTION_HEADER_H;
+        draw_param_bar(renderer, x2, py, col_w, "VCA Depth", patch.velocity_vca_depth, 0.0, 1.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x2, py, col_w, "Filter Depth", patch.velocity_filter_depth, 0.0, 4.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x2, py, col_w, "Env Depth", patch.velocity_envelope_depth, 0.0, 1.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x2, py, col_w, "Pitch Depth", patch.velocity_pitch_depth, 0.0, 12.0, accent);
+
+        // Glide.
+        let glide_h = SECTION_HEADER_H + 2.0 * PARAM_ROW_H + 8.0;
+        draw_section_panel(renderer, x3, row3_y, col_w, glide_h, "GLIDE", accent);
+        py = row3_y + SECTION_HEADER_H;
+        let glide_status = if patch.glide_enabled { "ON" } else { "OFF" };
+        draw_param_label(renderer, x3, py, col_w, "Enabled", glide_status);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x3, py, col_w, "Time", patch.glide_time, 0.0, 2.0, accent);
+
+        // --- Row 4: Mod Matrix (full width) ---
+        let row4_y = row3_y + vel_h + SETUP_ROW_GAP;
+        let mod_count = patch.mod_routings.len();
+        let mod_h = SECTION_HEADER_H + (mod_count.max(1) as f32) * PARAM_ROW_H + 8.0;
+        let full_w = screen_w - 2.0 * SETUP_MARGIN;
+        draw_section_panel(renderer, x1, row4_y, full_w, mod_h, "MOD MATRIX", accent);
+        py = row4_y + SECTION_HEADER_H;
+        if patch.mod_routings.is_empty() {
+            renderer.draw_text(
+                "No modulation routings",
+                x1 + 8.0,
+                py,
+                FontSize::Small,
+                TEXT_SECONDARY,
+            );
+        } else {
+            for routing in &patch.mod_routings {
+                let desc = format!(
+                    "{} -> {} ({:.2})",
+                    routing.source, routing.dest, routing.depth
+                );
+                renderer.draw_text(&desc, x1 + 8.0, py, FontSize::Small, TEXT_PRIMARY);
+                py += PARAM_ROW_H;
+            }
+        }
+    }
+
+    /// Render the mono effect chain setup page.
+    fn render_mono_chain<R: Renderer>(
+        &self,
+        renderer: &mut R,
+        screen_w: f32,
+        content_y: f32,
+        content_h: f32,
+    ) {
+        let chain = &self.effects[self.selected_channel];
+        let accent = CHANNEL_COLORS[self.selected_channel];
+
+        renderer.fill_rect(0.0, content_y, screen_w, content_h, colors::SECTION_BG);
+        self.render_setup_nav(renderer, screen_w, content_y);
+
+        let y0 = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP;
+
+        // Chain title.
+        let title = format!("Pre-Split Mono Chain  [{}]", chain.name);
+        renderer.draw_text(&title, SETUP_MARGIN + 8.0, y0, FontSize::Medium, TEXT_PRIMARY);
+
+        // Signal flow indicator.
+        renderer.draw_text(
+            "Signal: Synth -> [Mono Chain] -> Positional Stage",
+            SETUP_MARGIN + 8.0,
+            y0 + 22.0,
+            FontSize::Small,
+            TEXT_SECONDARY,
+        );
+
+        let pedals_y = y0 + 48.0;
+
+        if chain.pre_pedals.is_empty() {
+            renderer.draw_text(
+                "No pedals in chain. Signal passes through unprocessed.",
+                SETUP_MARGIN + 20.0,
+                pedals_y + 20.0,
+                FontSize::Medium,
+                TEXT_SECONDARY,
+            );
+        } else {
+            draw_pedal_chain(renderer, SETUP_MARGIN, pedals_y, &chain.pre_pedals, accent);
+        }
+    }
+
+    /// Render the stereo effect chain setup page.
+    fn render_stereo_chain<R: Renderer>(
+        &self,
+        renderer: &mut R,
+        screen_w: f32,
+        content_y: f32,
+        content_h: f32,
+    ) {
+        let chain = &self.effects[self.selected_channel];
+        let accent = CHANNEL_COLORS[self.selected_channel];
+
+        renderer.fill_rect(0.0, content_y, screen_w, content_h, colors::SECTION_BG);
+        self.render_setup_nav(renderer, screen_w, content_y);
+
+        let y0 = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP;
+        let full_w = screen_w - 2.0 * SETUP_MARGIN;
+
+        // Positional stage indicator.
+        let pos_h = 44.0;
+        draw_section_panel(
+            renderer,
+            SETUP_MARGIN,
+            y0,
+            full_w,
+            pos_h,
+            "POSITIONAL STAGE",
+            accent,
+        );
+        renderer.draw_text(
+            "Mono signal splits to stereo here (Pan / 3D Position)",
+            SETUP_MARGIN + 8.0,
+            y0 + SECTION_HEADER_H,
+            FontSize::Small,
+            TEXT_SECONDARY,
+        );
+
+        let chains_y = y0 + pos_h + SETUP_ROW_GAP;
+        let half_w = (screen_w - 3.0 * SETUP_MARGIN) / 2.0;
+
+        // Left channel chain.
+        let left_x = SETUP_MARGIN;
+        let left_header_h = 28.0;
+        renderer.fill_rect(left_x, chains_y, half_w, left_header_h, colors::PANEL_BG);
+        renderer.fill_rect(left_x, chains_y, half_w, 2.0, accent);
+        renderer.draw_text(
+            "LEFT CHANNEL",
+            left_x + 8.0,
+            chains_y + 6.0,
+            FontSize::Medium,
+            TEXT_PRIMARY,
+        );
+        let left_y = chains_y + left_header_h + 4.0;
+        if chain.post_pedals_left.is_empty() {
+            renderer.draw_text(
+                "(empty chain)",
+                left_x + 20.0,
+                left_y + 8.0,
+                FontSize::Small,
+                TEXT_SECONDARY,
+            );
+        } else {
+            draw_pedal_chain(renderer, left_x, left_y, &chain.post_pedals_left, accent);
+        }
+
+        // Right channel chain.
+        let right_x = SETUP_MARGIN + half_w + SETUP_MARGIN;
+        renderer.fill_rect(right_x, chains_y, half_w, left_header_h, colors::PANEL_BG);
+        renderer.fill_rect(right_x, chains_y, half_w, 2.0, accent);
+        renderer.draw_text(
+            "RIGHT CHANNEL",
+            right_x + 8.0,
+            chains_y + 6.0,
+            FontSize::Medium,
+            TEXT_PRIMARY,
+        );
+        let right_y = chains_y + left_header_h + 4.0;
+        if chain.post_pedals_right.is_empty() {
+            renderer.draw_text(
+                "(empty chain)",
+                right_x + 20.0,
+                right_y + 8.0,
+                FontSize::Small,
+                TEXT_SECONDARY,
+            );
+        } else {
+            draw_pedal_chain(renderer, right_x, right_y, &chain.post_pedals_right, accent);
+        }
+    }
+}
+
+// --- Setup page rendering helpers (standalone functions) ---
+
+/// Draw a section panel with a colored accent bar and title.
+fn draw_section_panel<R: Renderer>(
+    renderer: &mut R,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    title: &str,
+    accent: Color,
+) {
+    renderer.fill_rect(x, y, w, h, colors::PANEL_BG);
+    renderer.fill_rect(x, y, w, 2.0, accent);
+    renderer.draw_rect(x, y, w, h, colors::PANEL_BORDER);
+    renderer.draw_text(title, x + 8.0, y + 5.0, FontSize::Small, TEXT_PRIMARY);
+}
+
+/// Draw a parameter with a label, numeric value, and horizontal bar indicator.
+#[allow(clippy::too_many_arguments)]
+fn draw_param_bar<R: Renderer>(
+    renderer: &mut R,
+    x: f32,
+    y: f32,
+    w: f32,
+    label: &str,
+    value: f64,
+    min: f64,
+    max: f64,
+    accent: Color,
+) {
+    let display = format!("{value:.2}");
+    renderer.draw_text(label, x + 8.0, y, FontSize::Small, TEXT_SECONDARY);
+    renderer.draw_text(&display, x + w - 64.0, y, FontSize::Small, TEXT_PRIMARY);
+    let bar_y = y + 16.0;
+    let bar_w = w - 16.0;
+    renderer.fill_rect(x + 8.0, bar_y, bar_w, 5.0, colors::KNOB_TRACK);
+    let frac = param_fraction(value, min, max);
+    if frac > 0.0 {
+        renderer.fill_rect(x + 8.0, bar_y, bar_w * frac, 5.0, accent);
+    }
+}
+
+/// Draw a parameter with a label and a text value in a display box.
+fn draw_param_label<R: Renderer>(
+    renderer: &mut R,
+    x: f32,
+    y: f32,
+    w: f32,
+    label: &str,
+    value: &str,
+) {
+    renderer.draw_text(label, x + 8.0, y, FontSize::Small, TEXT_SECONDARY);
+    let box_x = x + w * 0.55;
+    let box_w = w * 0.4;
+    renderer.fill_rect(box_x, y, box_w, 18.0, Color::rgb(28, 28, 34));
+    renderer.draw_rect(box_x, y, box_w, 18.0, Color::rgb(55, 55, 65));
+    renderer.draw_text(value, box_x + 6.0, y + 1.0, FontSize::Small, TEXT_ACCENT);
+}
+
+/// Draw a horizontal chain of pedal boxes with connection lines.
+fn draw_pedal_chain<R: Renderer>(
+    renderer: &mut R,
+    x: f32,
+    y: f32,
+    pedals: &[PedalConfig],
+    accent: Color,
+) {
+    let pedal_w = 180.0;
+    let pedal_gap = 16.0;
+    let mut px = x;
+
+    for (i, pedal) in pedals.iter().enumerate() {
+        let param_count = pedal.params.len().max(1);
+        let pedal_h = 28.0 + (param_count as f32) * PARAM_ROW_H + 8.0;
+        draw_pedal_box(renderer, px, y, pedal_w, pedal_h, pedal, accent);
+
+        // Connection line to next pedal.
+        if i < pedals.len() - 1 {
+            let line_y = y + pedal_h / 2.0;
+            renderer.draw_hline(px + pedal_w, px + pedal_w + pedal_gap, line_y, accent);
+            // Arrow head.
+            let ax = px + pedal_w + pedal_gap - 4.0;
+            renderer.draw_hline(ax - 4.0, ax, line_y - 2.0, accent);
+            renderer.draw_hline(ax - 4.0, ax, line_y + 2.0, accent);
+        }
+
+        px += pedal_w + pedal_gap;
+    }
+}
+
+/// Draw a single pedal box with type header and parameter bars.
+fn draw_pedal_box<R: Renderer>(
+    renderer: &mut R,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    pedal: &PedalConfig,
+    accent: Color,
+) {
+    // Pedal body (warm tone).
+    renderer.fill_rect(x, y, w, h, colors::PEDAL_BG);
+    // Header bar.
+    renderer.fill_rect(x, y, w, 24.0, colors::PEDAL_HEADER);
+    let type_name = pedal.pedal_type.to_uppercase();
+    renderer.draw_text(&type_name, x + 6.0, y + 4.0, FontSize::Small, TEXT_PRIMARY);
+    // Border.
+    renderer.draw_rect(x, y, w, h, accent);
+
+    // LED indicator dot.
+    renderer.fill_rect(x + w - 16.0, y + 8.0, 8.0, 8.0, Color::rgb(80, 220, 80));
+
+    // Parameters.
+    let mut py = y + 28.0;
+    for param in &pedal.params {
+        let (min, max) = pedal_param_range(&param.name);
+        draw_param_bar(renderer, x, py, w, &param.name, param.value, min, max, accent);
+        py += PARAM_ROW_H;
+    }
+}
+
+/// Map pedal parameter names to reasonable display ranges.
+fn pedal_param_range(name: &str) -> (f64, f64) {
+    match name {
+        "mix" | "tone" | "depth" | "sensitivity" | "warmth" | "position"
+        | "threshold" | "damping" | "decay" | "rate_factor" => (0.0, 1.0),
+        "gain" => (0.0, 20.0),
+        "drive" => (1.0, 5.0),
+        "feedback" => (-1.0, 1.0),
+        "rate_hz" => (0.1, 20.0),
+        "time_ms" | "attack_ms" | "release_ms" | "depth_ms" => (0.0, 2000.0),
+        "ratio" => (1.0, 20.0),
+        "semitones" => (-24.0, 24.0),
+        "bit_depth" => (1.0, 32.0),
+        "frequency_hz" | "min_freq" | "max_freq" | "low_freq" | "mid_freq"
+        | "high_freq" => (20.0, 20000.0),
+        "q" => (0.1, 20.0),
+        "low_gain_db" | "mid_gain_db" | "high_gain_db" => (-12.0, 12.0),
+        "makeup_gain" => (0.0, 4.0),
+        _ => (0.0, 1.0),
+    }
+}
+
+/// Compute a linear fraction for a parameter value within a range.
+fn param_fraction(value: f64, min: f64, max: f64) -> f32 {
+    if max <= min {
+        return 0.0;
+    }
+    ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
 }
 
 fn main() {

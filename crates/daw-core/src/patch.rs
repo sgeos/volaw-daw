@@ -183,6 +183,18 @@ impl EffectChainConfig {
         };
         pedals.get(pedal_idx)?.params.get(param_idx).map(|p| p.value)
     }
+
+    /// Get the pedal list for a given chain ID.
+    ///
+    /// chain_id: 0 = pre, 1 = post-left, 2 = post-right.
+    pub fn get_chain_pedals(&self, chain_id: u8) -> Option<&[PedalConfig]> {
+        match chain_id {
+            0 => Some(&self.pre_pedals),
+            1 => Some(&self.post_pedals_left),
+            2 => Some(&self.post_pedals_right),
+            _ => None,
+        }
+    }
 }
 
 impl Default for EffectChainConfig {

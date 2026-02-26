@@ -67,6 +67,36 @@ const SETUP_ROW_GAP: f32 = 6.0;
 const SECTION_HEADER_H: f32 = 24.0;
 const PARAM_ROW_H: f32 = 24.0;
 
+/// An undoable action stored in the undo stack.
+#[derive(Debug, Clone)]
+enum UndoAction {
+    /// MIDI track snapshot (for note edits).
+    Track {
+        channel: usize,
+        snapshot: MidiTrack,
+    },
+    /// Single synth parameter change.
+    SynthParam {
+        channel: usize,
+        param: SynthParam,
+        old_value: f64,
+    },
+    /// Single pedal parameter change.
+    PedalParam {
+        channel: usize,
+        chain: u8,
+        pedal_idx: usize,
+        param_idx: usize,
+        old_value: f64,
+    },
+    /// Pedal chain structural change (add, remove, reorder, bypass toggle).
+    PedalChain {
+        channel: usize,
+        chain: u8,
+        old_pedals: Vec<PedalConfig>,
+    },
+}
+
 /// Identifies a synthesizer parameter on the setup page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SynthParam {
@@ -107,6 +137,7 @@ enum DragTarget {
         bar_w: f32,
         min_val: f64,
         max_val: f64,
+        log_scale: bool,
     },
     /// A pedal parameter bar.
     Pedal {
@@ -118,6 +149,7 @@ enum DragTarget {
         bar_w: f32,
         min_val: f64,
         max_val: f64,
+        log_scale: bool,
     },
 }
 
@@ -372,8 +404,11 @@ struct DawState {
     /// Per-channel preset index into `presets::preset_names()`. None means
     /// the channel uses a custom (non-preset) patch.
     preset_indices: [Option<usize>; 8],
-    /// Undo stack: each entry is (channel_index, track_snapshot_before_edit).
-    undo_stack: Vec<(usize, MidiTrack)>,
+    /// Undo stack of reversible actions.
+    undo_stack: Vec<UndoAction>,
+    /// Pending parameter undo: captures the pre-drag value for continuous edits.
+    /// Flushed to the undo stack on mouse-up or when the drag target changes.
+    pending_param_undo: Option<UndoAction>,
     /// Per-channel Keleos script runners. None if no script assigned.
     scripts: [Option<ScriptRunner>; 8],
     /// Currently active drag target on a setup page parameter.
@@ -417,6 +452,7 @@ impl DawState {
             prev_ticks: 0,
             preset_indices: [None; 8],
             undo_stack: Vec::new(),
+            pending_param_undo: None,
             scripts: core::array::from_fn(|_| None),
             dragging_param: None,
             dragging_note_edge: false,
@@ -678,6 +714,7 @@ impl DawState {
             }
             DawInput::Click(mx, my) => self.handle_click(mx, my),
             DawInput::MouseUp(_, _) => {
+                self.flush_pending_undo();
                 self.dragging_param = None;
                 self.dragging_note_edge = false;
             }
@@ -898,18 +935,87 @@ impl DawState {
     /// Save a snapshot of the current channel track to the undo stack.
     fn push_undo(&mut self) {
         let ch = self.selected_channel;
+        self.push_undo_action(UndoAction::Track {
+            channel: ch,
+            snapshot: self.tracks[ch].clone(),
+        });
+    }
+
+    /// Push any undo action onto the stack.
+    fn push_undo_action(&mut self, action: UndoAction) {
         if self.undo_stack.len() >= MAX_UNDO_DEPTH {
             self.undo_stack.remove(0);
         }
-        self.undo_stack.push((ch, self.tracks[ch].clone()));
+        self.undo_stack.push(action);
     }
 
-    /// Undo the last edit operation by restoring the track snapshot.
+    /// Flush the pending parameter undo to the stack if present.
+    fn flush_pending_undo(&mut self) {
+        if let Some(action) = self.pending_param_undo.take() {
+            self.push_undo_action(action);
+        }
+    }
+
+    /// Snapshot a pedal chain before a structural modification.
+    fn push_chain_undo(&mut self, ch: usize, chain_id: u8) {
+        let old_pedals = match chain_id {
+            0 => self.effects[ch].pre_pedals.clone(),
+            1 => self.effects[ch].post_pedals_left.clone(),
+            2 => self.effects[ch].post_pedals_right.clone(),
+            _ => return,
+        };
+        self.push_undo_action(UndoAction::PedalChain {
+            channel: ch,
+            chain: chain_id,
+            old_pedals,
+        });
+    }
+
+    /// Undo the last edit operation.
     fn undo(&mut self) {
-        if let Some((ch, snapshot)) = self.undo_stack.pop() {
-            self.tracks[ch] = snapshot;
-            self.selected_note = None;
-            self.status_message = Some(format!("Undo (Ch{})", ch + 1));
+        self.flush_pending_undo();
+        if let Some(action) = self.undo_stack.pop() {
+            match action {
+                UndoAction::Track { channel, snapshot } => {
+                    self.tracks[channel] = snapshot;
+                    self.selected_note = None;
+                    self.status_message = Some(format!("Undo track (Ch{})", channel + 1));
+                }
+                UndoAction::SynthParam {
+                    channel,
+                    param,
+                    old_value,
+                } => {
+                    self.set_synth_param(channel, param, old_value);
+                    self.status_message = Some(format!("Undo param (Ch{})", channel + 1));
+                }
+                UndoAction::PedalParam {
+                    channel,
+                    chain,
+                    pedal_idx,
+                    param_idx,
+                    old_value,
+                } => {
+                    self.set_pedal_param(channel, chain, pedal_idx, param_idx, old_value);
+                    self.status_message = Some(format!("Undo pedal param (Ch{})", channel + 1));
+                }
+                UndoAction::PedalChain {
+                    channel,
+                    chain,
+                    old_pedals,
+                } => {
+                    let pedals = match chain {
+                        0 => &mut self.effects[channel].pre_pedals,
+                        1 => &mut self.effects[channel].post_pedals_left,
+                        2 => &mut self.effects[channel].post_pedals_right,
+                        _ => return,
+                    };
+                    *pedals = old_pedals;
+                    self.rebuild_engine_chain(channel, chain);
+                    self.selected_pedal = None;
+                    self.status_message = Some(format!("Undo pedal chain (Ch{})", channel + 1));
+                }
+            }
         }
     }
 
@@ -1179,12 +1285,22 @@ impl DawState {
         min_val: f64,
         max_val: f64,
     ) {
+        // Capture pre-drag value for undo.
+        let ch = self.selected_channel;
+        let old_value = self.get_synth_param_value(ch, param);
+        self.flush_pending_undo();
+        self.pending_param_undo = Some(UndoAction::SynthParam {
+            channel: ch,
+            param,
+            old_value,
+        });
         let target = DragTarget::Synth {
             param,
             bar_x,
             bar_w,
             min_val,
             max_val,
+            log_scale: is_log_synth_param(param),
         };
         let value = drag_value(mx, &target);
         self.apply_drag_value(target.clone(), value);
@@ -1300,53 +1416,105 @@ impl DawState {
         let header_h = 28.0;
         let mut px = SETUP_MARGIN;
 
+        // Scan for hit targets without mutable self access.
+        enum HitKind {
+            Led(usize),
+            Header(usize, String),
+            Param {
+                pedal_idx: usize,
+                param_idx: usize,
+                old_value: f64,
+                min: f64,
+                max: f64,
+                bar_x: f32,
+                log_scale: bool,
+            },
+        }
+        let mut hit: Option<HitKind> = None;
+
         for (pedal_idx, pedal) in pedals.iter().enumerate() {
-            // Check click on LED indicator (toggles bypass).
             let led_x = px + pedal_w - 16.0;
             let led_y = pedals_y + 8.0;
             if mx >= led_x && mx < led_x + 8.0 && my >= led_y && my < led_y + 8.0 {
-                self.selected_pedal = Some((chain_id, pedal_idx));
-                self.toggle_pedal_bypass();
-                return;
+                hit = Some(HitKind::Led(pedal_idx));
+                break;
             }
-
-            // Check click on pedal header (selects pedal).
             if mx >= px && mx < px + pedal_w && my >= pedals_y && my < pedals_y + header_h {
-                self.selected_pedal = Some((chain_id, pedal_idx));
-                self.status_message = Some(format!(
-                    "Selected: {} [Del=Remove, B=Bypass, A=Add, Shift+Arrows=Move]",
-                    pedal.pedal_type
-                ));
-                return;
+                hit = Some(HitKind::Header(pedal_idx, pedal.pedal_type.clone()));
+                break;
             }
-
             let param_start_y = pedals_y + header_h;
-
+            let mut found = false;
             for (param_idx, param) in pedal.params.iter().enumerate() {
                 let py = param_start_y + param_idx as f32 * PARAM_ROW_H;
                 if hit_row(mx, my, px, py, pedal_w) {
                     let (min, max) = pedal_param_range(&param.name);
-                    let target = DragTarget::Pedal {
-                        chain: chain_id,
+                    hit = Some(HitKind::Param {
                         pedal_idx,
                         param_idx,
+                        old_value: param.value,
+                        min,
+                        max,
                         bar_x: px + bar_inset,
-                        bar_w,
-                        min_val: min,
-                        max_val: max,
-                    };
-                    let value = drag_value(mx, &target);
-                    self.apply_drag_value(target.clone(), value);
-                    self.dragging_param = Some(target);
-                    return;
+                        log_scale: is_log_pedal_param(&param.name),
+                    });
+                    found = true;
+                    break;
                 }
             }
-
+            if found {
+                break;
+            }
             px += pedal_w + pedal_gap;
         }
 
-        // Click on empty area deselects.
-        self.selected_pedal = None;
+        // Now process the hit with mutable self access.
+        match hit {
+            Some(HitKind::Led(pedal_idx)) => {
+                self.selected_pedal = Some((chain_id, pedal_idx));
+                self.toggle_pedal_bypass();
+            }
+            Some(HitKind::Header(pedal_idx, name)) => {
+                self.selected_pedal = Some((chain_id, pedal_idx));
+                self.status_message = Some(format!(
+                    "Selected: {name} [Del=Remove, B=Bypass, A=Add, Shift+Arrows=Move]"
+                ));
+            }
+            Some(HitKind::Param {
+                pedal_idx,
+                param_idx,
+                old_value,
+                min,
+                max,
+                bar_x,
+                log_scale,
+            }) => {
+                self.flush_pending_undo();
+                self.pending_param_undo = Some(UndoAction::PedalParam {
+                    channel: ch,
+                    chain: chain_id,
+                    pedal_idx,
+                    param_idx,
+                    old_value,
+                });
+                let target = DragTarget::Pedal {
+                    chain: chain_id,
+                    pedal_idx,
+                    param_idx,
+                    bar_x,
+                    bar_w,
+                    min_val: min,
+                    max_val: max,
+                    log_scale,
+                };
+                let value = drag_value(mx, &target);
+                self.apply_drag_value(target.clone(), value);
+                self.dragging_param = Some(target);
+            }
+            None => {
+                self.selected_pedal = None;
+            }
+        }
     }
 
     /// Delete the currently selected note, if any.
@@ -1364,25 +1532,24 @@ impl DawState {
     ///
     /// On synth page: if actively dragging a param, scroll fine-adjusts it.
     /// On chain pages: hit-tests the mouse position against pedal param bars.
-    /// Each scroll tick nudges the value by 2% of the parameter range.
+    /// Each scroll tick nudges the value by 2% of the parameter range
+    /// (in log space for frequency parameters).
     fn scroll_param(&mut self, delta: i32) {
         // If actively dragging a synth or pedal param, fine-adjust it.
         if let Some(ref target) = self.dragging_param.clone() {
             match target {
-                DragTarget::Synth { param, min_val, max_val, .. } => {
+                DragTarget::Synth { param, min_val, max_val, log_scale, .. } => {
                     let ch = self.selected_channel;
                     let current = self.get_synth_param_value(ch, *param);
-                    let step = (max_val - min_val) * 0.02 * delta as f64;
-                    let new_val = (current + step).clamp(*min_val, *max_val);
+                    let new_val = scroll_step(current, *min_val, *max_val, delta, *log_scale);
                     self.set_synth_param(ch, *param, new_val);
                 }
-                DragTarget::Pedal { chain, pedal_idx, param_idx, min_val, max_val, .. } => {
+                DragTarget::Pedal { chain, pedal_idx, param_idx, min_val, max_val, log_scale, .. } => {
                     let ch = self.selected_channel;
                     let current = self.effects[ch]
                         .get_pedal_param(*chain, *pedal_idx, *param_idx)
                         .unwrap_or(0.0);
-                    let step = (max_val - min_val) * 0.02 * delta as f64;
-                    let new_val = (current + step).clamp(*min_val, *max_val);
+                    let new_val = scroll_step(current, *min_val, *max_val, delta, *log_scale);
                     self.set_pedal_param(ch, *chain, *pedal_idx, *param_idx, new_val);
                 }
             }
@@ -1400,11 +1567,199 @@ impl DawState {
                 let current = self.effects[ch]
                     .get_pedal_param(chain_id, pedal_idx, param_idx)
                     .unwrap_or(0.0);
-                let step = (max - min) * 0.02 * delta as f64;
-                let new_val = (current + step).clamp(min, max);
+                // Capture undo if this is a new scroll target.
+                let same_target = matches!(
+                    &self.pending_param_undo,
+                    Some(UndoAction::PedalParam {
+                        channel: c, chain: ci, pedal_idx: pi, param_idx: pai, ..
+                    }) if *c == ch && *ci == chain_id && *pi == pedal_idx && *pai == param_idx
+                );
+                if !same_target {
+                    self.flush_pending_undo();
+                    self.pending_param_undo = Some(UndoAction::PedalParam {
+                        channel: ch,
+                        chain: chain_id,
+                        pedal_idx,
+                        param_idx,
+                        old_value: current,
+                    });
+                }
+                // Pedal scroll: look up param name for log check.
+                let log = self.effects[ch]
+                    .get_chain_pedals(chain_id)
+                    .and_then(|p| p.get(pedal_idx))
+                    .and_then(|p| p.params.get(param_idx))
+                    .is_some_and(|p| is_log_pedal_param(&p.name));
+                let new_val = scroll_step(current, min, max, delta, log);
                 self.set_pedal_param(ch, chain_id, pedal_idx, param_idx, new_val);
             }
         }
+
+        // On synth setup page, hit-test the mouse position.
+        if self.current_page == DawPage::SynthSetup {
+            let (mx, my) = self.last_mouse;
+            let content_y = TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT;
+            if let Some((param, min, max)) = self.find_synth_param_at(mx, my, content_y) {
+                let ch = self.selected_channel;
+                let current = self.get_synth_param_value(ch, param);
+                // Capture undo if this is a new scroll target.
+                let same_target = matches!(
+                    &self.pending_param_undo,
+                    Some(UndoAction::SynthParam { channel: c, param: p, .. })
+                        if *c == ch && *p == param
+                );
+                if !same_target {
+                    self.flush_pending_undo();
+                    self.pending_param_undo = Some(UndoAction::SynthParam {
+                        channel: ch,
+                        param,
+                        old_value: current,
+                    });
+                }
+                let new_val = scroll_step(current, min, max, delta, is_log_synth_param(param));
+                self.set_synth_param(ch, param, new_val);
+            }
+        }
+    }
+
+    /// Find which synth parameter bar is at the given mouse position.
+    ///
+    /// Returns (SynthParam, min_val, max_val) if the cursor is over a bar.
+    fn find_synth_param_at(
+        &self,
+        mx: f32,
+        my: f32,
+        content_y: f32,
+    ) -> Option<(SynthParam, f64, f64)> {
+        let screen_w = WINDOW_WIDTH as f32;
+        let y0 = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP;
+        let col_w = (screen_w - 2.0 * SETUP_MARGIN - 2.0 * SETUP_COL_GAP) / 3.0;
+        let x1 = SETUP_MARGIN;
+        let x2 = SETUP_MARGIN + col_w + SETUP_COL_GAP;
+        let x3 = SETUP_MARGIN + 2.0 * (col_w + SETUP_COL_GAP);
+
+        // Row 1: VCO1, VCO2, Mix/LFO.
+        let row1_h = SECTION_HEADER_H + 5.0 * PARAM_ROW_H + 8.0;
+        let vco1_y = y0 + SECTION_HEADER_H;
+
+        // VCO1 param bars (rows 2, 3, 4 within VCO1 section).
+        let vco1_bars: [(f32, SynthParam, f64, f64); 3] = [
+            (vco1_y + 2.0 * PARAM_ROW_H, SynthParam::Vco1PitchFine, -1.0, 1.0),
+            (vco1_y + 3.0 * PARAM_ROW_H, SynthParam::Vco1Level, 0.0, 1.0),
+            (vco1_y + 4.0 * PARAM_ROW_H, SynthParam::Vco1PulseWidth, 0.0, 1.0),
+        ];
+        for (py, param, min, max) in vco1_bars {
+            if hit_row(mx, my, x1, py, col_w) {
+                return Some((param, min, max));
+            }
+        }
+
+        // VCO2 param bars.
+        let vco2_y = y0 + SECTION_HEADER_H;
+        let vco2_bars: [(f32, SynthParam, f64, f64); 3] = [
+            (vco2_y + 2.0 * PARAM_ROW_H, SynthParam::Vco2PitchFine, -1.0, 1.0),
+            (vco2_y + 3.0 * PARAM_ROW_H, SynthParam::Vco2Level, 0.0, 1.0),
+            (vco2_y + 4.0 * PARAM_ROW_H, SynthParam::Vco2PulseWidth, 0.0, 1.0),
+        ];
+        for (py, param, min, max) in vco2_bars {
+            if hit_row(mx, my, x2, py, col_w) {
+                return Some((param, min, max));
+            }
+        }
+
+        // Mix / LFO bars.
+        let mix_y = y0 + SECTION_HEADER_H;
+        let mix_bars: [(f32, SynthParam, f64, f64); 2] = [
+            (mix_y, SynthParam::VcoMix, 0.0, 1.0),
+            (mix_y + PARAM_ROW_H, SynthParam::LfoRate, 0.1, 20.0),
+        ];
+        for (py, param, min, max) in mix_bars {
+            if hit_row(mx, my, x3, py, col_w) {
+                return Some((param, min, max));
+            }
+        }
+
+        // Row 2: EG1, EG2, Filters.
+        let row2_y = y0 + row1_h + SETUP_ROW_GAP;
+        let filter_h = SECTION_HEADER_H + 2.0 * PARAM_ROW_H + 8.0;
+
+        // EG1 bars.
+        let eg1_y = row2_y + SECTION_HEADER_H;
+        let eg1_bars: [(f32, SynthParam, f64, f64); 4] = [
+            (eg1_y, SynthParam::Eg1Attack, 0.0, 5.0),
+            (eg1_y + PARAM_ROW_H, SynthParam::Eg1Decay, 0.0, 5.0),
+            (eg1_y + 2.0 * PARAM_ROW_H, SynthParam::Eg1Sustain, 0.0, 1.0),
+            (eg1_y + 3.0 * PARAM_ROW_H, SynthParam::Eg1Release, 0.0, 5.0),
+        ];
+        for (py, param, min, max) in eg1_bars {
+            if hit_row(mx, my, x1, py, col_w) {
+                return Some((param, min, max));
+            }
+        }
+
+        // EG2 bars.
+        let eg2_y = row2_y + SECTION_HEADER_H;
+        let eg2_bars: [(f32, SynthParam, f64, f64); 4] = [
+            (eg2_y, SynthParam::Eg2Attack, 0.0, 5.0),
+            (eg2_y + PARAM_ROW_H, SynthParam::Eg2Decay, 0.0, 5.0),
+            (eg2_y + 2.0 * PARAM_ROW_H, SynthParam::Eg2Sustain, 0.0, 1.0),
+            (eg2_y + 3.0 * PARAM_ROW_H, SynthParam::Eg2Release, 0.0, 5.0),
+        ];
+        for (py, param, min, max) in eg2_bars {
+            if hit_row(mx, my, x2, py, col_w) {
+                return Some((param, min, max));
+            }
+        }
+
+        // HPF bars.
+        let hpf_y = row2_y + SECTION_HEADER_H;
+        let hpf_bars: [(f32, SynthParam, f64, f64); 2] = [
+            (hpf_y, SynthParam::HpfCutoff, 20.0, 20000.0),
+            (hpf_y + PARAM_ROW_H, SynthParam::HpfResonance, 0.0, 4.0),
+        ];
+        for (py, param, min, max) in hpf_bars {
+            if hit_row(mx, my, x3, py, col_w) {
+                return Some((param, min, max));
+            }
+        }
+
+        // LPF bars.
+        let lpf_y = row2_y + filter_h + SETUP_ROW_GAP + SECTION_HEADER_H;
+        let lpf_bars: [(f32, SynthParam, f64, f64); 2] = [
+            (lpf_y, SynthParam::LpfCutoff, 20.0, 20000.0),
+            (lpf_y + PARAM_ROW_H, SynthParam::LpfResonance, 0.0, 4.0),
+        ];
+        for (py, param, min, max) in lpf_bars {
+            if hit_row(mx, my, x3, py, col_w) {
+                return Some((param, min, max));
+            }
+        }
+
+        // Row 3: Velocity, Glide.
+        let row2_h = SECTION_HEADER_H + 4.0 * PARAM_ROW_H + 8.0;
+        let row3_y = row2_y + row2_h + SETUP_ROW_GAP;
+
+        // Velocity bars.
+        let vel_y = row3_y + SECTION_HEADER_H;
+        let vel_bars: [(f32, SynthParam, f64, f64); 4] = [
+            (vel_y, SynthParam::VelocityVca, 0.0, 1.0),
+            (vel_y + PARAM_ROW_H, SynthParam::VelocityFilter, 0.0, 4.0),
+            (vel_y + 2.0 * PARAM_ROW_H, SynthParam::VelocityEnv, 0.0, 1.0),
+            (vel_y + 3.0 * PARAM_ROW_H, SynthParam::VelocityPitch, 0.0, 12.0),
+        ];
+        for (py, param, min, max) in vel_bars {
+            if hit_row(mx, my, x2, py, col_w) {
+                return Some((param, min, max));
+            }
+        }
+
+        // Glide time bar.
+        let glide_y = row3_y + SECTION_HEADER_H + PARAM_ROW_H;
+        if hit_row(mx, my, x3, glide_y, col_w) {
+            return Some((SynthParam::GlideTime, 0.0, 2.0));
+        }
+
+        None
     }
 
     /// Find which pedal parameter bar is at the given mouse position.
@@ -1491,6 +1846,7 @@ impl DawState {
             return;
         };
         let ch = self.selected_channel;
+        self.push_chain_undo(ch, chain_id);
         let pedals = match chain_id {
             0 => &mut self.effects[ch].pre_pedals,
             1 => &mut self.effects[ch].post_pedals_left,
@@ -1513,6 +1869,7 @@ impl DawState {
             return;
         };
         let ch = self.selected_channel;
+        self.push_chain_undo(ch, chain_id);
         let pedals = match chain_id {
             0 => &mut self.effects[ch].pre_pedals,
             1 => &mut self.effects[ch].post_pedals_left,
@@ -1536,6 +1893,7 @@ impl DawState {
             return;
         };
         let ch = self.selected_channel;
+        self.push_chain_undo(ch, chain_id);
         let pedals = match chain_id {
             0 => &mut self.effects[ch].pre_pedals,
             1 => &mut self.effects[ch].post_pedals_left,
@@ -1558,6 +1916,7 @@ impl DawState {
             return;
         };
         let ch = self.selected_channel;
+        self.push_chain_undo(ch, chain_id);
         let pedals = match chain_id {
             0 => &mut self.effects[ch].pre_pedals,
             1 => &mut self.effects[ch].post_pedals_left,
@@ -2408,6 +2767,20 @@ fn draw_section_panel<R: Renderer>(
     renderer.draw_text(title, x + 8.0, y + 5.0, FontSize::Small, TEXT_PRIMARY);
 }
 
+/// Check whether a parameter label represents a frequency (for log mapping).
+fn is_log_label(label: &str) -> bool {
+    let lower = label.to_lowercase();
+    lower == "cutoff"
+        || lower.ends_with("_freq")
+        || lower.ends_with("_hz")
+        || lower == "frequency_hz"
+        || lower == "min_freq"
+        || lower == "max_freq"
+        || lower == "low_freq"
+        || lower == "mid_freq"
+        || lower == "high_freq"
+}
+
 /// Draw a parameter with a label, numeric value, and horizontal bar indicator.
 #[allow(clippy::too_many_arguments)]
 fn draw_param_bar<R: Renderer>(
@@ -2421,13 +2794,18 @@ fn draw_param_bar<R: Renderer>(
     max: f64,
     accent: Color,
 ) {
-    let display = format!("{value:.2}");
+    let log_scale = is_log_label(label) && min > 0.0;
+    let display = if log_scale {
+        format!("{value:.0} Hz")
+    } else {
+        format!("{value:.2}")
+    };
     renderer.draw_text(label, x + 8.0, y, FontSize::Small, TEXT_SECONDARY);
     renderer.draw_text(&display, x + w - 64.0, y, FontSize::Small, TEXT_PRIMARY);
     let bar_y = y + 16.0;
     let bar_w = w - 16.0;
     renderer.fill_rect(x + 8.0, bar_y, bar_w, 5.0, colors::KNOB_TRACK);
-    let frac = param_fraction(value, min, max);
+    let frac = param_fraction(value, min, max, log_scale);
     if frac > 0.0 {
         renderer.fill_rect(x + 8.0, bar_y, bar_w * frac, 5.0, accent);
     }
@@ -2607,12 +2985,68 @@ fn next_voice_mode(current: &str) -> String {
     String::from(MODES[(idx + 1) % MODES.len()])
 }
 
-/// Compute a linear fraction for a parameter value within a range.
-fn param_fraction(value: f64, min: f64, max: f64) -> f32 {
+/// Check whether a synth parameter should use logarithmic display mapping.
+fn is_log_synth_param(param: SynthParam) -> bool {
+    matches!(param, SynthParam::HpfCutoff | SynthParam::LpfCutoff)
+}
+
+/// Check whether a pedal parameter name should use logarithmic display mapping.
+fn is_log_pedal_param(name: &str) -> bool {
+    matches!(
+        name,
+        "frequency_hz" | "min_freq" | "max_freq" | "low_freq" | "mid_freq" | "high_freq"
+    )
+}
+
+/// Check whether a DragTarget uses logarithmic mapping.
+fn is_log_target(target: &DragTarget) -> bool {
+    match target {
+        DragTarget::Synth { log_scale, .. } => *log_scale,
+        DragTarget::Pedal { log_scale, .. } => *log_scale,
+    }
+}
+
+/// Compute a display fraction for a parameter value within a range.
+///
+/// Uses logarithmic mapping when `log_scale` is true, for perceptually
+/// uniform distribution of frequency parameters.
+fn param_fraction(value: f64, min: f64, max: f64, log_scale: bool) -> f32 {
     if max <= min {
         return 0.0;
     }
-    ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
+    if log_scale && min > 0.0 {
+        let log_min = min.ln();
+        let log_max = max.ln();
+        ((value.clamp(min, max).ln() - log_min) / (log_max - log_min)) as f32
+    } else {
+        ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
+    }
+}
+
+/// Compute a parameter value from a fraction, using log mapping when appropriate.
+fn value_from_fraction(frac: f64, min: f64, max: f64, log_scale: bool) -> f64 {
+    if log_scale && min > 0.0 {
+        let log_min = min.ln();
+        let log_max = max.ln();
+        (log_min + frac * (log_max - log_min)).exp()
+    } else {
+        min + frac * (max - min)
+    }
+}
+
+/// Compute the new value after a scroll step, using log mapping for frequencies.
+fn scroll_step(current: f64, min: f64, max: f64, delta: i32, log_scale: bool) -> f64 {
+    if log_scale && min > 0.0 {
+        // Step in log space: each tick is 2% of the log range.
+        let log_min = min.ln();
+        let log_max = max.ln();
+        let log_current = current.clamp(min, max).ln();
+        let step = (log_max - log_min) * 0.02 * delta as f64;
+        (log_current + step).exp().clamp(min, max)
+    } else {
+        let step = (max - min) * 0.02 * delta as f64;
+        (current + step).clamp(min, max)
+    }
 }
 
 /// Compute a parameter value from a mouse x position within a drag target bar.
@@ -2634,7 +3068,8 @@ fn drag_value(mx: f32, target: &DragTarget) -> f64 {
         } => (*bar_x, *bar_w, *min_val, *max_val),
     };
     let frac = ((mx - bar_x) / bar_w).clamp(0.0, 1.0) as f64;
-    min_val + frac * (max_val - min_val)
+    let log_scale = is_log_target(target);
+    value_from_fraction(frac, min_val, max_val, log_scale)
 }
 
 fn main() {

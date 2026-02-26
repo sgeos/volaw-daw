@@ -338,8 +338,8 @@ struct DawState {
     project_root: PathBuf,
     /// Status message displayed temporarily.
     status_message: Option<String>,
-    /// Per-channel: index of the currently playing note, if any.
-    active_notes: [Option<usize>; 8],
+    /// Per-channel: indices of currently playing notes (supports polyphonic playback).
+    active_notes: [Vec<usize>; 8],
     /// Previous transport tick position (for detecting tick advancement).
     prev_ticks: u64,
     /// Per-channel preset index into `presets::preset_names()`. None means
@@ -375,7 +375,7 @@ impl DawState {
             snap_ticks: DEFAULT_NOTE_DURATION,
             project_root: PathBuf::from(PROJECT_ROOT),
             status_message: None,
-            active_notes: [None; 8],
+            active_notes: core::array::from_fn(|_| Vec::new()),
             prev_ticks: 0,
             preset_indices: [None; 8],
             undo_stack: Vec::new(),
@@ -512,28 +512,30 @@ impl DawState {
 
             let track = &self.tracks[ch];
 
-            // Check if the currently active note should end.
-            if let Some(note_idx) = self.active_notes[ch] {
-                if note_idx < track.notes.len() {
-                    let note = &track.notes[note_idx];
-                    let note_end = note.tick + note.duration;
-                    if current_ticks >= note_end {
-                        engine.channels[ch].synth.note_off();
-                        self.active_notes[ch] = None;
-                    }
-                } else {
-                    self.active_notes[ch] = None;
+            // Check if any active notes should end (per-note release for polyphony).
+            self.active_notes[ch].retain(|&note_idx| {
+                if note_idx >= track.notes.len() {
+                    return false;
                 }
-            }
+                let note = &track.notes[note_idx];
+                let note_end = note.tick + note.duration;
+                if current_ticks >= note_end {
+                    let freq = MidiTrack::note_to_freq(note.pitch);
+                    engine.channels[ch].synth.note_off_freq(freq);
+                    false
+                } else {
+                    true
+                }
+            });
 
-            // Check if a new note should start in the tick range [prev_ticks, current_ticks).
+            // Check if new notes should start in the tick range [prev_ticks, current_ticks).
             for (i, note) in track.notes.iter().enumerate() {
                 if note.tick >= prev_ticks && note.tick < current_ticks {
                     let freq = MidiTrack::note_to_freq(note.pitch);
                     let vel = note.velocity as f64 / 127.0;
                     engine.channels[ch].synth.note_on_with_velocity(freq, vel);
                     engine.channels[ch].enabled = true;
-                    self.active_notes[ch] = Some(i);
+                    self.active_notes[ch].push(i);
                 }
             }
         }
@@ -545,9 +547,9 @@ impl DawState {
             return;
         };
         for ch in 0..8 {
-            if self.active_notes[ch].is_some() {
+            if !self.active_notes[ch].is_empty() {
                 engine.channels[ch].synth.note_off();
-                self.active_notes[ch] = None;
+                self.active_notes[ch].clear();
             }
         }
     }
@@ -2156,11 +2158,6 @@ fn main() {
                                 continue;
                             }
                             state.tracks[ch] = smf_track.clone();
-                            // Apply monophonic autofix if the imported track has overlaps.
-                            if !state.tracks[ch].is_monophonic() {
-                                eprintln!("[INFO] Ch{}: autofix monophonic (latest-note strategy)", ch + 1);
-                                state.tracks[ch].autofix(daw_core::midi::AutofixStrategy::LatestNote);
-                            }
                             eprintln!(
                                 "[INFO] Ch{}: imported {} notes",
                                 ch + 1,

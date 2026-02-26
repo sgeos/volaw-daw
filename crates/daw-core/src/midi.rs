@@ -18,10 +18,13 @@ pub struct MidiNote {
     pub velocity: u8,
 }
 
-/// A single-channel MIDI track (monophonic).
+/// A single-channel MIDI track.
+///
+/// Supports both monophonic and polyphonic note arrangements. Notes are
+/// sorted by start tick. Overlapping notes are valid for polyphonic playback.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MidiTrack {
-    /// Notes sorted by start tick. Must be monophonic (no overlapping notes).
+    /// Notes sorted by start tick.
     pub notes: Vec<MidiNote>,
     /// Ticks per beat (resolution). Default is 480.
     #[serde(default = "default_ticks_per_beat")]

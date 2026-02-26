@@ -244,6 +244,9 @@ fn apply_chain_to_engine(
 ) {
     chain.clear();
     for config in configs {
+        if config.bypassed {
+            continue;
+        }
         if let Some(mut pedal) = Pedal::from_name(&config.pedal_type, sample_rate) {
             for param in &config.params {
                 pedal.set_param(&param.name, param.value);
@@ -380,6 +383,8 @@ struct DawState {
     /// Currently selected pedal on a chain page: (chain_id, pedal_index).
     /// chain_id: 0 = pre (mono), 1 = post-left, 2 = post-right.
     selected_pedal: Option<(u8, usize)>,
+    /// Last known mouse position for scroll-over-parameter.
+    last_mouse: (f32, f32),
     /// Whether the add-pedal type picker overlay is open.
     pedal_picker_open: bool,
     /// Which chain the pedal picker will insert into.
@@ -415,6 +420,7 @@ impl DawState {
             scripts: core::array::from_fn(|_| None),
             dragging_param: None,
             dragging_note_edge: false,
+            last_mouse: (0.0, 0.0),
             selected_pedal: None,
             pedal_picker_open: false,
             pedal_picker_chain: 0,
@@ -714,6 +720,11 @@ impl DawState {
                     } else {
                         self.scroll_y = (self.scroll_y - delta as f32 * 20.0).max(0.0);
                     }
+                } else if self.current_page == DawPage::SynthSetup
+                    || self.current_page == DawPage::MonoChain
+                    || self.current_page == DawPage::StereoChain
+                {
+                    self.scroll_param(delta);
                 }
             }
             DawInput::ZoomIn => {
@@ -760,7 +771,15 @@ impl DawState {
                     self.move_selected_pedal(1);
                 }
             }
-            DawInput::MouseMove(mx, _my) => {
+            DawInput::ToggleBypass => {
+                if self.current_page == DawPage::MonoChain
+                    || self.current_page == DawPage::StereoChain
+                {
+                    self.toggle_pedal_bypass();
+                }
+            }
+            DawInput::MouseMove(mx, my) => {
+                self.last_mouse = (mx, my);
                 if let Some(ref target) = self.dragging_param {
                     let value = drag_value(mx, target);
                     self.apply_drag_value(target.clone(), value);
@@ -1282,11 +1301,20 @@ impl DawState {
         let mut px = SETUP_MARGIN;
 
         for (pedal_idx, pedal) in pedals.iter().enumerate() {
+            // Check click on LED indicator (toggles bypass).
+            let led_x = px + pedal_w - 16.0;
+            let led_y = pedals_y + 8.0;
+            if mx >= led_x && mx < led_x + 8.0 && my >= led_y && my < led_y + 8.0 {
+                self.selected_pedal = Some((chain_id, pedal_idx));
+                self.toggle_pedal_bypass();
+                return;
+            }
+
             // Check click on pedal header (selects pedal).
             if mx >= px && mx < px + pedal_w && my >= pedals_y && my < pedals_y + header_h {
                 self.selected_pedal = Some((chain_id, pedal_idx));
                 self.status_message = Some(format!(
-                    "Selected: {} [Del=Remove, A=Add, Shift+Arrows=Move]",
+                    "Selected: {} [Del=Remove, B=Bypass, A=Add, Shift+Arrows=Move]",
                     pedal.pedal_type
                 ));
                 return;
@@ -1330,6 +1358,153 @@ impl DawState {
             }
             self.selected_note = None;
         }
+    }
+
+    /// Adjust a parameter by scroll delta.
+    ///
+    /// On synth page: if actively dragging a param, scroll fine-adjusts it.
+    /// On chain pages: hit-tests the mouse position against pedal param bars.
+    /// Each scroll tick nudges the value by 2% of the parameter range.
+    fn scroll_param(&mut self, delta: i32) {
+        // If actively dragging a synth or pedal param, fine-adjust it.
+        if let Some(ref target) = self.dragging_param.clone() {
+            match target {
+                DragTarget::Synth { param, min_val, max_val, .. } => {
+                    let ch = self.selected_channel;
+                    let current = self.get_synth_param_value(ch, *param);
+                    let step = (max_val - min_val) * 0.02 * delta as f64;
+                    let new_val = (current + step).clamp(*min_val, *max_val);
+                    self.set_synth_param(ch, *param, new_val);
+                }
+                DragTarget::Pedal { chain, pedal_idx, param_idx, min_val, max_val, .. } => {
+                    let ch = self.selected_channel;
+                    let current = self.effects[ch]
+                        .get_pedal_param(*chain, *pedal_idx, *param_idx)
+                        .unwrap_or(0.0);
+                    let step = (max_val - min_val) * 0.02 * delta as f64;
+                    let new_val = (current + step).clamp(*min_val, *max_val);
+                    self.set_pedal_param(ch, *chain, *pedal_idx, *param_idx, new_val);
+                }
+            }
+            return;
+        }
+
+        // On chain pages, hit-test the mouse position.
+        if self.current_page == DawPage::MonoChain || self.current_page == DawPage::StereoChain {
+            let (mx, my) = self.last_mouse;
+            let content_y = TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT;
+            if let Some((chain_id, pedal_idx, param_idx, min, max)) =
+                self.find_pedal_param_at(mx, my, content_y)
+            {
+                let ch = self.selected_channel;
+                let current = self.effects[ch]
+                    .get_pedal_param(chain_id, pedal_idx, param_idx)
+                    .unwrap_or(0.0);
+                let step = (max - min) * 0.02 * delta as f64;
+                let new_val = (current + step).clamp(min, max);
+                self.set_pedal_param(ch, chain_id, pedal_idx, param_idx, new_val);
+            }
+        }
+    }
+
+    /// Find which pedal parameter bar is at the given mouse position.
+    fn find_pedal_param_at(
+        &self,
+        mx: f32,
+        my: f32,
+        content_y: f32,
+    ) -> Option<(u8, usize, usize, f64, f64)> {
+        let screen_w = WINDOW_WIDTH as f32;
+        let pedal_w = 180.0;
+        let pedal_gap = 16.0;
+        let header_h = 28.0;
+
+        if self.current_page == DawPage::MonoChain {
+            let pedals_y = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP + 48.0;
+            let pedals = &self.effects[self.selected_channel].pre_pedals;
+            return find_pedal_param_in_chain(
+                mx, my, pedals_y, SETUP_MARGIN, pedals, pedal_w, pedal_gap, header_h, 0,
+            );
+        }
+
+        if self.current_page == DawPage::StereoChain {
+            let y0 = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP;
+            let chains_y = y0 + 44.0 + SETUP_ROW_GAP;
+            let left_header_h = 28.0;
+            let pedals_y = chains_y + left_header_h + 4.0;
+
+            let half_w = (screen_w - 3.0 * SETUP_MARGIN) / 2.0;
+            let right_x = SETUP_MARGIN + half_w + SETUP_MARGIN;
+            let ch = self.selected_channel;
+
+            if mx < right_x {
+                return find_pedal_param_in_chain(
+                    mx, my, pedals_y, SETUP_MARGIN,
+                    &self.effects[ch].post_pedals_left, pedal_w, pedal_gap, header_h, 1,
+                );
+            } else {
+                return find_pedal_param_in_chain(
+                    mx, my, pedals_y, right_x,
+                    &self.effects[ch].post_pedals_right, pedal_w, pedal_gap, header_h, 2,
+                );
+            }
+        }
+
+        None
+    }
+
+    /// Get the current value of a synth parameter from PatchConfig.
+    fn get_synth_param_value(&self, ch: usize, param: SynthParam) -> f64 {
+        let patch = &self.patches[ch];
+        match param {
+            SynthParam::Vco1PitchFine => patch.vco1_pitch_fine,
+            SynthParam::Vco1Level => patch.vco1_level,
+            SynthParam::Vco1PulseWidth => patch.vco1_pulse_width,
+            SynthParam::Vco2PitchFine => patch.vco2_pitch_fine,
+            SynthParam::Vco2Level => patch.vco2_level,
+            SynthParam::Vco2PulseWidth => patch.vco2_pulse_width,
+            SynthParam::VcoMix => patch.vco_mix,
+            SynthParam::LfoRate => patch.lfo_rate,
+            SynthParam::Eg1Attack => patch.eg1_attack,
+            SynthParam::Eg1Decay => patch.eg1_decay,
+            SynthParam::Eg1Sustain => patch.eg1_sustain,
+            SynthParam::Eg1Release => patch.eg1_release,
+            SynthParam::Eg2Attack => patch.eg2_attack,
+            SynthParam::Eg2Decay => patch.eg2_decay,
+            SynthParam::Eg2Sustain => patch.eg2_sustain,
+            SynthParam::Eg2Release => patch.eg2_release,
+            SynthParam::HpfCutoff => patch.hpf_cutoff,
+            SynthParam::HpfResonance => patch.hpf_resonance,
+            SynthParam::LpfCutoff => patch.lpf_cutoff,
+            SynthParam::LpfResonance => patch.lpf_resonance,
+            SynthParam::VelocityVca => patch.velocity_vca_depth,
+            SynthParam::VelocityFilter => patch.velocity_filter_depth,
+            SynthParam::VelocityEnv => patch.velocity_envelope_depth,
+            SynthParam::VelocityPitch => patch.velocity_pitch_depth,
+            SynthParam::GlideTime => patch.glide_time,
+        }
+    }
+
+    /// Toggle bypass on the currently selected pedal.
+    fn toggle_pedal_bypass(&mut self) {
+        let Some((chain_id, pedal_idx)) = self.selected_pedal else {
+            return;
+        };
+        let ch = self.selected_channel;
+        let pedals = match chain_id {
+            0 => &mut self.effects[ch].pre_pedals,
+            1 => &mut self.effects[ch].post_pedals_left,
+            2 => &mut self.effects[ch].post_pedals_right,
+            _ => return,
+        };
+        let Some(pedal) = pedals.get_mut(pedal_idx) else {
+            return;
+        };
+        pedal.bypassed = !pedal.bypassed;
+        let state = if pedal.bypassed { "BYPASSED" } else { "ACTIVE" };
+        let name = pedal.pedal_type.clone();
+        self.rebuild_engine_chain(ch, chain_id);
+        self.status_message = Some(format!("{name}: {state}"));
     }
 
     /// Delete the currently selected pedal from its chain.
@@ -2337,8 +2512,13 @@ fn draw_pedal_box<R: Renderer>(
         renderer.draw_rect(x - 1.0, y - 1.0, w + 2.0, h + 2.0, border_color);
     }
 
-    // LED indicator dot.
-    renderer.fill_rect(x + w - 16.0, y + 8.0, 8.0, 8.0, Color::rgb(80, 220, 80));
+    // LED indicator dot: green = active, red = bypassed.
+    let led_color = if pedal.bypassed {
+        Color::rgb(220, 60, 60)
+    } else {
+        Color::rgb(80, 220, 80)
+    };
+    renderer.fill_rect(x + w - 16.0, y + 8.0, 8.0, 8.0, led_color);
 
     // Parameters.
     let mut py = y + 28.0;
@@ -2350,6 +2530,34 @@ fn draw_pedal_box<R: Renderer>(
 }
 
 /// Map pedal parameter names to reasonable display ranges.
+/// Find a pedal parameter bar at the given mouse position within a single chain.
+#[allow(clippy::too_many_arguments)]
+fn find_pedal_param_in_chain(
+    mx: f32,
+    my: f32,
+    pedals_y: f32,
+    start_x: f32,
+    pedals: &[PedalConfig],
+    pedal_w: f32,
+    pedal_gap: f32,
+    header_h: f32,
+    chain_id: u8,
+) -> Option<(u8, usize, usize, f64, f64)> {
+    let mut px = start_x;
+    for (pedal_idx, pedal) in pedals.iter().enumerate() {
+        let param_start_y = pedals_y + header_h;
+        for (param_idx, param) in pedal.params.iter().enumerate() {
+            let py = param_start_y + param_idx as f32 * PARAM_ROW_H;
+            if hit_row(mx, my, px, py, pedal_w) {
+                let (min, max) = pedal_param_range(&param.name);
+                return Some((chain_id, pedal_idx, param_idx, min, max));
+            }
+        }
+        px += pedal_w + pedal_gap;
+    }
+    None
+}
+
 fn pedal_param_range(name: &str) -> (f64, f64) {
     match name {
         "mix" | "tone" | "depth" | "sensitivity" | "warmth" | "position"

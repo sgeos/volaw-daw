@@ -48,6 +48,8 @@ pub enum DawInput {
     PrevPage,
     /// Insert/add item (A key on chain pages).
     Insert,
+    /// Toggle bypass on the selected pedal (B key on chain pages).
+    ToggleBypass,
     /// Move selected item left within its container (Shift+Left).
     ShiftLeft,
     /// Move selected item right within its container (Shift+Right).

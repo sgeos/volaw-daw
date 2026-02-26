@@ -170,6 +170,21 @@ pub struct EffectChainConfig {
     pub post_pedals_right: Vec<PedalConfig>,
 }
 
+impl EffectChainConfig {
+    /// Get a pedal parameter value by chain ID, pedal index, and parameter index.
+    ///
+    /// chain_id: 0 = pre, 1 = post-left, 2 = post-right.
+    pub fn get_pedal_param(&self, chain_id: u8, pedal_idx: usize, param_idx: usize) -> Option<f64> {
+        let pedals = match chain_id {
+            0 => &self.pre_pedals,
+            1 => &self.post_pedals_left,
+            2 => &self.post_pedals_right,
+            _ => return None,
+        };
+        pedals.get(pedal_idx)?.params.get(param_idx).map(|p| p.value)
+    }
+}
+
 impl Default for EffectChainConfig {
     fn default() -> Self {
         Self {
@@ -187,6 +202,9 @@ pub struct PedalConfig {
     pub pedal_type: String,
     #[serde(default)]
     pub params: Vec<PedalParam>,
+    /// Whether this pedal is bypassed (signal passes through unprocessed).
+    #[serde(default)]
+    pub bypassed: bool,
 }
 
 /// A named parameter on a pedal.
@@ -339,6 +357,7 @@ pub fn default_pedal_config(pedal_type: &str) -> Option<PedalConfig> {
     Some(PedalConfig {
         pedal_type: String::from(pedal_type),
         params,
+        bypassed: false,
     })
 }
 

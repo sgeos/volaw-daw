@@ -77,6 +77,8 @@ fn translate_shift_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
     match scancode {
         SDL_SCANCODE_P => Some(DawInput::PrevPreset),
         SDL_SCANCODE_TAB => Some(DawInput::PrevPage),
+        SDL_SCANCODE_LEFT => Some(DawInput::ShiftLeft),
+        SDL_SCANCODE_RIGHT => Some(DawInput::ShiftRight),
         _ => None,
     }
 }
@@ -108,6 +110,7 @@ fn translate_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
         SDL_SCANCODE_P => Some(DawInput::NextPreset),
         SDL_SCANCODE_M => Some(DawInput::ToggleMute),
         SDL_SCANCODE_TAB => Some(DawInput::NextPage),
+        SDL_SCANCODE_A => Some(DawInput::Insert),
         _ => None,
     }
 }

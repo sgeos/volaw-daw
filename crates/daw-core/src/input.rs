@@ -46,4 +46,10 @@ pub enum DawInput {
     NextPage,
     /// Cycle to the previous page (Shift+Tab).
     PrevPage,
+    /// Insert/add item (A key on chain pages).
+    Insert,
+    /// Move selected item left within its container (Shift+Left).
+    ShiftLeft,
+    /// Move selected item right within its container (Shift+Right).
+    ShiftRight,
 }

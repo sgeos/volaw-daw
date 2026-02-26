@@ -11,10 +11,13 @@ use std::path::PathBuf;
 
 use audio::modmatrix::{ModDest, ModRouting, ModSource};
 use audio::vco::{Scale, Waveform};
+use audio::effects::Pedal;
 use audio::{AudioEngine, VoiceMode};
 use daw_core::input::DawInput;
 use daw_core::midi::{MidiNote, MidiTrack};
-use daw_core::patch::{EffectChainConfig, PatchConfig, PedalConfig};
+use daw_core::patch::{
+    default_pedal_config, EffectChainConfig, PatchConfig, PedalConfig, PEDAL_TYPES,
+};
 use daw_core::presets;
 use daw_core::project::DawProject;
 use daw_core::script::{self, ScriptRunner};
@@ -230,6 +233,27 @@ fn parse_mod_dest(s: &str) -> Option<ModDest> {
 /// Apply a PatchConfig to the audio engine channel synth.
 ///
 /// Maps daw-core configuration strings to audio engine enum types and
+/// Instantiate a `PedalChain` from a list of `PedalConfig` entries.
+///
+/// Creates each pedal from its type name, applies saved parameter values,
+/// and activates the chain if it contains any pedals.
+fn apply_chain_to_engine(
+    chain: &mut audio::PedalChain,
+    configs: &[PedalConfig],
+    sample_rate: f64,
+) {
+    chain.clear();
+    for config in configs {
+        if let Some(mut pedal) = Pedal::from_name(&config.pedal_type, sample_rate) {
+            for param in &config.params {
+                pedal.set_param(&param.name, param.value);
+            }
+            chain.push(pedal);
+        }
+    }
+    chain.active = !chain.is_empty();
+}
+
 /// writes all synthesizer parameters to the Ms20Voice and its voice pool.
 fn apply_patch_to_engine(engine: &mut AudioEngine, channel: usize, patch: &PatchConfig) {
     let synth = &mut engine.channels[channel].synth;
@@ -353,6 +377,13 @@ struct DawState {
     dragging_param: Option<DragTarget>,
     /// True when dragging a note's right edge to resize its duration.
     dragging_note_edge: bool,
+    /// Currently selected pedal on a chain page: (chain_id, pedal_index).
+    /// chain_id: 0 = pre (mono), 1 = post-left, 2 = post-right.
+    selected_pedal: Option<(u8, usize)>,
+    /// Whether the add-pedal type picker overlay is open.
+    pedal_picker_open: bool,
+    /// Which chain the pedal picker will insert into.
+    pedal_picker_chain: u8,
 }
 
 /// Maximum undo history depth.
@@ -384,6 +415,9 @@ impl DawState {
             scripts: core::array::from_fn(|_| None),
             dragging_param: None,
             dragging_note_edge: false,
+            selected_pedal: None,
+            pedal_picker_open: false,
+            pedal_picker_chain: 0,
         }
     }
 
@@ -628,7 +662,9 @@ impl DawState {
             DawInput::NextPage => self.current_page = self.current_page.next(),
             DawInput::PrevPage => self.current_page = self.current_page.prev(),
             DawInput::Cancel => {
-                if self.current_page != DawPage::PianoRoll {
+                if self.pedal_picker_open {
+                    self.pedal_picker_open = false;
+                } else if self.current_page != DawPage::PianoRoll {
                     self.current_page = DawPage::PianoRoll;
                 } else {
                     self.selected_note = None;
@@ -693,6 +729,35 @@ impl DawState {
             DawInput::Delete => {
                 if self.current_page == DawPage::PianoRoll {
                     self.delete_selected_note();
+                } else if self.current_page == DawPage::MonoChain
+                    || self.current_page == DawPage::StereoChain
+                {
+                    self.delete_selected_pedal();
+                }
+            }
+            DawInput::Insert => {
+                if self.current_page == DawPage::MonoChain {
+                    self.pedal_picker_open = true;
+                    self.pedal_picker_chain = 0;
+                } else if self.current_page == DawPage::StereoChain {
+                    // Default to left chain. Can be toggled.
+                    self.pedal_picker_open = true;
+                    let chain = if let Some((c, _)) = self.selected_pedal { c } else { 1 };
+                    self.pedal_picker_chain = chain;
+                }
+            }
+            DawInput::ShiftLeft => {
+                if self.current_page == DawPage::MonoChain
+                    || self.current_page == DawPage::StereoChain
+                {
+                    self.move_selected_pedal(-1);
+                }
+            }
+            DawInput::ShiftRight => {
+                if self.current_page == DawPage::MonoChain
+                    || self.current_page == DawPage::StereoChain
+                {
+                    self.move_selected_pedal(1);
                 }
             }
             DawInput::MouseMove(mx, _my) => {
@@ -733,6 +798,12 @@ impl DawState {
             } else if mx > WINDOW_WIDTH as f32 - 200.0 {
                 self.current_page = self.current_page.setup_right();
             }
+            return;
+        }
+
+        // Handle pedal picker overlay clicks.
+        if self.pedal_picker_open {
+            self.handle_pedal_picker_click(mx, my);
             return;
         }
 
@@ -861,6 +932,29 @@ impl DawState {
         };
         for ch in 0..8 {
             apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+        }
+    }
+
+    /// Apply all channel effect chains to the audio engine. Called after loading
+    /// a project to instantiate saved pedal configs into live audio pedal chains.
+    fn apply_all_effects(&self) {
+        let Ok(mut engine) = self.engine.try_lock() else {
+            return;
+        };
+        let sr = SAMPLE_RATE as f64;
+        for ch in 0..8 {
+            let config = &self.effects[ch];
+            apply_chain_to_engine(&mut engine.channels[ch].pre_pedals, &config.pre_pedals, sr);
+            apply_chain_to_engine(
+                &mut engine.channels[ch].post_pedals_left,
+                &config.post_pedals_left,
+                sr,
+            );
+            apply_chain_to_engine(
+                &mut engine.channels[ch].post_pedals_right,
+                &config.post_pedals_right,
+                sr,
+            );
         }
     }
 
@@ -1184,10 +1278,20 @@ impl DawState {
         let pedal_gap = 16.0;
         let bar_inset = 8.0;
         let bar_w = pedal_w - 16.0;
+        let header_h = 28.0;
         let mut px = SETUP_MARGIN;
 
         for (pedal_idx, pedal) in pedals.iter().enumerate() {
-            let header_h = 28.0;
+            // Check click on pedal header (selects pedal).
+            if mx >= px && mx < px + pedal_w && my >= pedals_y && my < pedals_y + header_h {
+                self.selected_pedal = Some((chain_id, pedal_idx));
+                self.status_message = Some(format!(
+                    "Selected: {} [Del=Remove, A=Add, Shift+Arrows=Move]",
+                    pedal.pedal_type
+                ));
+                return;
+            }
+
             let param_start_y = pedals_y + header_h;
 
             for (param_idx, param) in pedal.params.iter().enumerate() {
@@ -1212,6 +1316,9 @@ impl DawState {
 
             px += pedal_w + pedal_gap;
         }
+
+        // Click on empty area deselects.
+        self.selected_pedal = None;
     }
 
     /// Delete the currently selected note, if any.
@@ -1222,6 +1329,135 @@ impl DawState {
                 self.tracks[self.selected_channel].notes.remove(idx);
             }
             self.selected_note = None;
+        }
+    }
+
+    /// Delete the currently selected pedal from its chain.
+    fn delete_selected_pedal(&mut self) {
+        let Some((chain_id, pedal_idx)) = self.selected_pedal else {
+            return;
+        };
+        let ch = self.selected_channel;
+        let pedals = match chain_id {
+            0 => &mut self.effects[ch].pre_pedals,
+            1 => &mut self.effects[ch].post_pedals_left,
+            2 => &mut self.effects[ch].post_pedals_right,
+            _ => return,
+        };
+        if pedal_idx >= pedals.len() {
+            self.selected_pedal = None;
+            return;
+        }
+        let name = pedals[pedal_idx].pedal_type.clone();
+        pedals.remove(pedal_idx);
+        self.selected_pedal = None;
+        self.rebuild_engine_chain(ch, chain_id);
+        self.status_message = Some(format!("Removed {name}"));
+    }
+
+    /// Move the selected pedal left or right within its chain.
+    fn move_selected_pedal(&mut self, direction: i32) {
+        let Some((chain_id, pedal_idx)) = self.selected_pedal else {
+            return;
+        };
+        let ch = self.selected_channel;
+        let pedals = match chain_id {
+            0 => &mut self.effects[ch].pre_pedals,
+            1 => &mut self.effects[ch].post_pedals_left,
+            2 => &mut self.effects[ch].post_pedals_right,
+            _ => return,
+        };
+        let new_idx = pedal_idx as i32 + direction;
+        if new_idx < 0 || new_idx as usize >= pedals.len() {
+            return;
+        }
+        let new_idx = new_idx as usize;
+        pedals.swap(pedal_idx, new_idx);
+        self.selected_pedal = Some((chain_id, new_idx));
+        self.rebuild_engine_chain(ch, chain_id);
+    }
+
+    /// Add a pedal of the given type to a chain.
+    fn add_pedal_to_chain(&mut self, chain_id: u8, pedal_type: &str) {
+        let Some(config) = default_pedal_config(pedal_type) else {
+            return;
+        };
+        let ch = self.selected_channel;
+        let pedals = match chain_id {
+            0 => &mut self.effects[ch].pre_pedals,
+            1 => &mut self.effects[ch].post_pedals_left,
+            2 => &mut self.effects[ch].post_pedals_right,
+            _ => return,
+        };
+        pedals.push(config);
+        let new_idx = pedals.len() - 1;
+        self.selected_pedal = Some((chain_id, new_idx));
+        self.rebuild_engine_chain(ch, chain_id);
+        self.status_message = Some(format!("Added {pedal_type}"));
+    }
+
+    /// Rebuild one engine pedal chain from its config.
+    fn rebuild_engine_chain(&self, ch: usize, chain_id: u8) {
+        let Ok(mut engine) = self.engine.try_lock() else {
+            return;
+        };
+        let sr = SAMPLE_RATE as f64;
+        let (engine_chain, configs) = match chain_id {
+            0 => (
+                &mut engine.channels[ch].pre_pedals,
+                &self.effects[ch].pre_pedals,
+            ),
+            1 => (
+                &mut engine.channels[ch].post_pedals_left,
+                &self.effects[ch].post_pedals_left,
+            ),
+            2 => (
+                &mut engine.channels[ch].post_pedals_right,
+                &self.effects[ch].post_pedals_right,
+            ),
+            _ => return,
+        };
+        apply_chain_to_engine(engine_chain, configs, sr);
+    }
+
+    /// Handle a click on the pedal type picker overlay.
+    fn handle_pedal_picker_click(&mut self, mx: f32, my: f32) {
+        let screen_w = WINDOW_WIDTH as f32;
+        let screen_h = WINDOW_HEIGHT as f32;
+        let picker_w = 400.0;
+        let picker_h = 500.0;
+        let picker_x = (screen_w - picker_w) / 2.0;
+        let picker_y = (screen_h - picker_h) / 2.0;
+
+        // Click outside picker closes it.
+        if mx < picker_x || mx > picker_x + picker_w || my < picker_y || my > picker_y + picker_h {
+            self.pedal_picker_open = false;
+            return;
+        }
+
+        // Check which item was clicked.
+        let item_h = 22.0;
+        let header_h = 28.0;
+        let mut cy = picker_y + 32.0; // Title bar height.
+
+        for (_category, types) in PEDAL_TYPES {
+            // Category header.
+            if my >= cy && my < cy + header_h {
+                cy += header_h;
+                continue;
+            }
+            cy += header_h;
+
+            for pedal_type in *types {
+                if my >= cy && my < cy + item_h && mx >= picker_x && mx < picker_x + picker_w {
+                    let chain_id = self.pedal_picker_chain;
+                    let pt = String::from(*pedal_type);
+                    self.pedal_picker_open = false;
+                    self.add_pedal_to_chain(chain_id, &pt);
+                    return;
+                }
+                cy += item_h;
+            }
         }
     }
 
@@ -1351,7 +1587,54 @@ impl DawState {
             }
         }
 
+        // Pedal picker overlay.
+        if self.pedal_picker_open {
+            self.render_pedal_picker(renderer, screen_w, screen_h);
+        }
+
         renderer.present();
+    }
+
+    /// Render the pedal type picker overlay.
+    fn render_pedal_picker<R: Renderer>(&self, renderer: &mut R, screen_w: f32, screen_h: f32) {
+        // Semi-transparent backdrop.
+        renderer.fill_rect(0.0, 0.0, screen_w, screen_h, Color::rgba(0, 0, 0, 180));
+
+        let picker_w = 400.0;
+        let picker_h = 500.0;
+        let picker_x = (screen_w - picker_w) / 2.0;
+        let picker_y = (screen_h - picker_h) / 2.0;
+
+        // Picker background.
+        renderer.fill_rect(picker_x, picker_y, picker_w, picker_h, colors::PANEL_BG);
+        renderer.draw_rect(picker_x, picker_y, picker_w, picker_h, TEXT_ACCENT);
+
+        // Title.
+        let chain_name = match self.pedal_picker_chain {
+            0 => "Mono Chain",
+            1 => "Left Chain",
+            2 => "Right Chain",
+            _ => "Chain",
+        };
+        let title = format!("Add Pedal to {chain_name}  (Esc to cancel)");
+        renderer.draw_text(&title, picker_x + 12.0, picker_y + 8.0, FontSize::Medium, TEXT_ACCENT);
+
+        let item_h = 22.0;
+        let header_h = 28.0;
+        let mut cy = picker_y + 32.0;
+        let accent = CHANNEL_COLORS[self.selected_channel];
+
+        for (category, types) in PEDAL_TYPES {
+            // Category header.
+            renderer.fill_rect(picker_x + 4.0, cy, picker_w - 8.0, header_h - 2.0, BG_DARK);
+            renderer.draw_text(category, picker_x + 12.0, cy + 6.0, FontSize::Small, accent);
+            cy += header_h;
+
+            for pedal_type in *types {
+                renderer.draw_text(pedal_type, picker_x + 24.0, cy + 3.0, FontSize::Small, TEXT_PRIMARY);
+                cy += item_h;
+            }
+        }
     }
 
     fn render_toolbar<R: Renderer>(&self, renderer: &mut R, screen_w: f32) {
@@ -1807,15 +2090,26 @@ impl DawState {
 
         if chain.pre_pedals.is_empty() {
             renderer.draw_text(
-                "No pedals in chain. Signal passes through unprocessed.",
+                "No pedals in chain. Press A to add a pedal.",
                 SETUP_MARGIN + 20.0,
                 pedals_y + 20.0,
                 FontSize::Medium,
                 TEXT_SECONDARY,
             );
         } else {
-            draw_pedal_chain(renderer, SETUP_MARGIN, pedals_y, &chain.pre_pedals, accent);
+            let sel = self.selected_pedal
+                .and_then(|(c, idx)| if c == 0 { Some(idx) } else { None });
+            draw_pedal_chain(renderer, SETUP_MARGIN, pedals_y, &chain.pre_pedals, accent, sel);
         }
+
+        // Controls hint.
+        renderer.draw_text(
+            "A=Add  Del=Remove  Shift+Arrows=Reorder  Click header=Select",
+            SETUP_MARGIN + 8.0,
+            content_y + content_h - 24.0,
+            FontSize::Small,
+            TEXT_SECONDARY,
+        );
     }
 
     /// Render the stereo effect chain setup page.
@@ -1872,14 +2166,16 @@ impl DawState {
         let left_y = chains_y + left_header_h + 4.0;
         if chain.post_pedals_left.is_empty() {
             renderer.draw_text(
-                "(empty chain)",
+                "(empty chain - press A)",
                 left_x + 20.0,
                 left_y + 8.0,
                 FontSize::Small,
                 TEXT_SECONDARY,
             );
         } else {
-            draw_pedal_chain(renderer, left_x, left_y, &chain.post_pedals_left, accent);
+            let sel = self.selected_pedal
+                .and_then(|(c, idx)| if c == 1 { Some(idx) } else { None });
+            draw_pedal_chain(renderer, left_x, left_y, &chain.post_pedals_left, accent, sel);
         }
 
         // Right channel chain.
@@ -1896,15 +2192,26 @@ impl DawState {
         let right_y = chains_y + left_header_h + 4.0;
         if chain.post_pedals_right.is_empty() {
             renderer.draw_text(
-                "(empty chain)",
+                "(empty chain - press A)",
                 right_x + 20.0,
                 right_y + 8.0,
                 FontSize::Small,
                 TEXT_SECONDARY,
             );
         } else {
-            draw_pedal_chain(renderer, right_x, right_y, &chain.post_pedals_right, accent);
+            let sel = self.selected_pedal
+                .and_then(|(c, idx)| if c == 2 { Some(idx) } else { None });
+            draw_pedal_chain(renderer, right_x, right_y, &chain.post_pedals_right, accent, sel);
         }
+
+        // Controls hint.
+        renderer.draw_text(
+            "A=Add  Del=Remove  Shift+Arrows=Reorder  Click header=Select",
+            SETUP_MARGIN + 8.0,
+            content_y + content_h - 24.0,
+            FontSize::Small,
+            TEXT_SECONDARY,
+        );
     }
 }
 
@@ -1969,12 +2276,15 @@ fn draw_param_label<R: Renderer>(
 }
 
 /// Draw a horizontal chain of pedal boxes with connection lines.
+///
+/// `selected_idx` is the index of the selected pedal within this chain, if any.
 fn draw_pedal_chain<R: Renderer>(
     renderer: &mut R,
     x: f32,
     y: f32,
     pedals: &[PedalConfig],
     accent: Color,
+    selected_idx: Option<usize>,
 ) {
     let pedal_w = 180.0;
     let pedal_gap = 16.0;
@@ -1983,7 +2293,8 @@ fn draw_pedal_chain<R: Renderer>(
     for (i, pedal) in pedals.iter().enumerate() {
         let param_count = pedal.params.len().max(1);
         let pedal_h = 28.0 + (param_count as f32) * PARAM_ROW_H + 8.0;
-        draw_pedal_box(renderer, px, y, pedal_w, pedal_h, pedal, accent);
+        let is_selected = selected_idx == Some(i);
+        draw_pedal_box(renderer, px, y, pedal_w, pedal_h, pedal, accent, is_selected);
 
         // Connection line to next pedal.
         if i < pedals.len() - 1 {
@@ -2000,6 +2311,7 @@ fn draw_pedal_chain<R: Renderer>(
 }
 
 /// Draw a single pedal box with type header and parameter bars.
+#[allow(clippy::too_many_arguments)]
 fn draw_pedal_box<R: Renderer>(
     renderer: &mut R,
     x: f32,
@@ -2008,15 +2320,22 @@ fn draw_pedal_box<R: Renderer>(
     h: f32,
     pedal: &PedalConfig,
     accent: Color,
+    is_selected: bool,
 ) {
     // Pedal body (warm tone).
     renderer.fill_rect(x, y, w, h, colors::PEDAL_BG);
-    // Header bar.
-    renderer.fill_rect(x, y, w, 24.0, colors::PEDAL_HEADER);
+    // Header bar. Selected pedals get an accent-colored header.
+    let header_color = if is_selected { accent } else { colors::PEDAL_HEADER };
+    renderer.fill_rect(x, y, w, 24.0, header_color);
     let type_name = pedal.pedal_type.to_uppercase();
-    renderer.draw_text(&type_name, x + 6.0, y + 4.0, FontSize::Small, TEXT_PRIMARY);
-    // Border.
-    renderer.draw_rect(x, y, w, h, accent);
+    let header_text_color = if is_selected { BG_DARK } else { TEXT_PRIMARY };
+    renderer.draw_text(&type_name, x + 6.0, y + 4.0, FontSize::Small, header_text_color);
+    // Border. Selected pedals get a thicker visual indicator (double border).
+    let border_color = if is_selected { TEXT_ACCENT } else { accent };
+    renderer.draw_rect(x, y, w, h, border_color);
+    if is_selected {
+        renderer.draw_rect(x - 1.0, y - 1.0, w + 2.0, h + 2.0, border_color);
+    }
 
     // LED indicator dot.
     renderer.fill_rect(x + w - 16.0, y + 8.0, 8.0, 8.0, Color::rgb(80, 220, 80));
@@ -2257,9 +2576,10 @@ fn main() {
     // Load Keleos scripts for channels that have them.
     state.load_scripts();
 
-    // Sync channel configuration and patches to the audio engine.
+    // Sync channel configuration, patches, and effect chains to the audio engine.
     state.sync_engine_channels();
     state.apply_all_patches();
+    state.apply_all_effects();
     state.transport.tempo = state.project.tempo;
 
     println!("[INFO] DAW started: {WINDOW_WIDTH}x{WINDOW_HEIGHT} @ {SAMPLE_RATE}Hz");

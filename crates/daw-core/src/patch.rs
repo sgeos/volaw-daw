@@ -196,6 +196,152 @@ pub struct PedalParam {
     pub value: f64,
 }
 
+/// All known pedal type names, organized by category.
+pub const PEDAL_TYPES: &[(&str, &[&str])] = &[
+    ("Distortion", &["Overdrive", "Distortion", "Fuzz", "TapeSaturation"]),
+    ("Wah", &["AutoWah", "WahManual"]),
+    ("Modulation", &["Chorus", "Flanger", "Phaser", "Tremolo"]),
+    ("Delay", &["DigitalDelay", "AnalogDelay", "PingPongDelay"]),
+    ("Reverb", &["PlateReverb", "HallReverb", "RoomReverb"]),
+    ("Special", &["Bitcrusher", "RingModulator", "PitchShifter", "AutoPan"]),
+    ("Dynamics", &["NoiseGate", "Compressor"]),
+    ("Utility", &["Eq", "Volume", "Buffer"]),
+];
+
+/// Create a `PedalConfig` with default parameter values for the given pedal type.
+///
+/// Returns `None` if the type name is not recognized.
+pub fn default_pedal_config(pedal_type: &str) -> Option<PedalConfig> {
+    let params = match pedal_type {
+        "Overdrive" => alloc::vec![
+            PedalParam { name: String::from("gain"), value: 2.0 },
+            PedalParam { name: String::from("tone"), value: 0.5 },
+            PedalParam { name: String::from("mix"), value: 1.0 },
+        ],
+        "Distortion" => alloc::vec![
+            PedalParam { name: String::from("gain"), value: 5.0 },
+            PedalParam { name: String::from("threshold"), value: 0.5 },
+            PedalParam { name: String::from("tone"), value: 0.5 },
+            PedalParam { name: String::from("mix"), value: 1.0 },
+        ],
+        "Fuzz" => alloc::vec![
+            PedalParam { name: String::from("gain"), value: 8.0 },
+            PedalParam { name: String::from("tone"), value: 0.5 },
+            PedalParam { name: String::from("mix"), value: 1.0 },
+        ],
+        "TapeSaturation" => alloc::vec![
+            PedalParam { name: String::from("drive"), value: 1.5 },
+            PedalParam { name: String::from("warmth"), value: 0.3 },
+            PedalParam { name: String::from("mix"), value: 1.0 },
+        ],
+        "AutoWah" => alloc::vec![
+            PedalParam { name: String::from("sensitivity"), value: 0.5 },
+            PedalParam { name: String::from("min_freq"), value: 200.0 },
+            PedalParam { name: String::from("max_freq"), value: 2000.0 },
+            PedalParam { name: String::from("q"), value: 2.0 },
+            PedalParam { name: String::from("mix"), value: 1.0 },
+        ],
+        "WahManual" => alloc::vec![
+            PedalParam { name: String::from("position"), value: 0.5 },
+            PedalParam { name: String::from("min_freq"), value: 200.0 },
+            PedalParam { name: String::from("max_freq"), value: 2000.0 },
+            PedalParam { name: String::from("q"), value: 2.0 },
+            PedalParam { name: String::from("mix"), value: 1.0 },
+        ],
+        "Chorus" => alloc::vec![
+            PedalParam { name: String::from("rate_hz"), value: 1.0 },
+            PedalParam { name: String::from("depth_ms"), value: 3.0 },
+            PedalParam { name: String::from("mix"), value: 0.5 },
+        ],
+        "Flanger" => alloc::vec![
+            PedalParam { name: String::from("rate_hz"), value: 0.5 },
+            PedalParam { name: String::from("depth_ms"), value: 2.0 },
+            PedalParam { name: String::from("feedback"), value: 0.3 },
+            PedalParam { name: String::from("mix"), value: 0.5 },
+        ],
+        "Phaser" => alloc::vec![
+            PedalParam { name: String::from("rate_hz"), value: 0.5 },
+            PedalParam { name: String::from("depth"), value: 0.5 },
+            PedalParam { name: String::from("feedback"), value: 0.3 },
+            PedalParam { name: String::from("mix"), value: 0.5 },
+            PedalParam { name: String::from("stages"), value: 4.0 },
+        ],
+        "Tremolo" => alloc::vec![
+            PedalParam { name: String::from("rate_hz"), value: 5.0 },
+            PedalParam { name: String::from("depth"), value: 0.5 },
+        ],
+        "DigitalDelay" => alloc::vec![
+            PedalParam { name: String::from("time_ms"), value: 250.0 },
+            PedalParam { name: String::from("feedback"), value: 0.3 },
+            PedalParam { name: String::from("mix"), value: 0.4 },
+        ],
+        "AnalogDelay" => alloc::vec![
+            PedalParam { name: String::from("time_ms"), value: 300.0 },
+            PedalParam { name: String::from("feedback"), value: 0.3 },
+            PedalParam { name: String::from("tone"), value: 0.5 },
+            PedalParam { name: String::from("mix"), value: 0.4 },
+        ],
+        "PingPongDelay" => alloc::vec![
+            PedalParam { name: String::from("time_ms"), value: 250.0 },
+            PedalParam { name: String::from("feedback"), value: 0.3 },
+            PedalParam { name: String::from("mix"), value: 0.4 },
+        ],
+        "PlateReverb" | "HallReverb" | "RoomReverb" => alloc::vec![
+            PedalParam { name: String::from("decay"), value: 0.5 },
+            PedalParam { name: String::from("damping"), value: 0.5 },
+            PedalParam { name: String::from("mix"), value: 0.3 },
+        ],
+        "Bitcrusher" => alloc::vec![
+            PedalParam { name: String::from("bit_depth"), value: 8.0 },
+            PedalParam { name: String::from("rate_factor"), value: 0.5 },
+            PedalParam { name: String::from("mix"), value: 1.0 },
+        ],
+        "RingModulator" => alloc::vec![
+            PedalParam { name: String::from("frequency_hz"), value: 440.0 },
+            PedalParam { name: String::from("mix"), value: 0.5 },
+        ],
+        "PitchShifter" => alloc::vec![
+            PedalParam { name: String::from("semitones"), value: 0.0 },
+            PedalParam { name: String::from("mix"), value: 1.0 },
+        ],
+        "AutoPan" => alloc::vec![
+            PedalParam { name: String::from("rate_hz"), value: 1.0 },
+            PedalParam { name: String::from("depth"), value: 0.5 },
+        ],
+        "NoiseGate" => alloc::vec![
+            PedalParam { name: String::from("threshold"), value: 0.01 },
+            PedalParam { name: String::from("attack_ms"), value: 1.0 },
+            PedalParam { name: String::from("release_ms"), value: 50.0 },
+        ],
+        "Compressor" => alloc::vec![
+            PedalParam { name: String::from("threshold"), value: 0.5 },
+            PedalParam { name: String::from("ratio"), value: 4.0 },
+            PedalParam { name: String::from("attack_ms"), value: 10.0 },
+            PedalParam { name: String::from("release_ms"), value: 100.0 },
+            PedalParam { name: String::from("makeup_gain"), value: 1.0 },
+        ],
+        "Eq" => alloc::vec![
+            PedalParam { name: String::from("low_gain_db"), value: 0.0 },
+            PedalParam { name: String::from("mid_gain_db"), value: 0.0 },
+            PedalParam { name: String::from("high_gain_db"), value: 0.0 },
+            PedalParam { name: String::from("low_freq"), value: 200.0 },
+            PedalParam { name: String::from("mid_freq"), value: 1000.0 },
+            PedalParam { name: String::from("high_freq"), value: 4000.0 },
+        ],
+        "Volume" => alloc::vec![
+            PedalParam { name: String::from("gain"), value: 1.0 },
+        ],
+        "Buffer" => alloc::vec![
+            PedalParam { name: String::from("gain"), value: 1.0 },
+        ],
+        _ => return None,
+    };
+    Some(PedalConfig {
+        pedal_type: String::from(pedal_type),
+        params,
+    })
+}
+
 // Serde default functions.
 fn default_scale() -> String {
     String::from("8'")
@@ -260,5 +406,29 @@ mod tests {
         assert!(chain.pre_pedals.is_empty());
         assert!(chain.post_pedals_left.is_empty());
         assert!(chain.post_pedals_right.is_empty());
+    }
+
+    #[test]
+    fn default_pedal_config_all_types() {
+        for (_category, types) in PEDAL_TYPES {
+            for pedal_type in *types {
+                let config = default_pedal_config(pedal_type);
+                assert!(config.is_some(), "default_pedal_config should recognize {pedal_type}");
+                let config = config.unwrap();
+                assert_eq!(config.pedal_type, *pedal_type);
+                assert!(!config.params.is_empty(), "{pedal_type} should have params");
+            }
+        }
+    }
+
+    #[test]
+    fn default_pedal_config_unknown() {
+        assert!(default_pedal_config("Unknown").is_none());
+    }
+
+    #[test]
+    fn pedal_types_covers_25() {
+        let count: usize = PEDAL_TYPES.iter().map(|(_, types)| types.len()).sum();
+        assert_eq!(count, 25);
     }
 }

@@ -264,6 +264,91 @@ impl Pedal {
         }
     }
 
+    /// Create a pedal from its type name string.
+    ///
+    /// Returns `None` if the name does not match any known pedal type.
+    /// Names are case-insensitive and match the enum variant names.
+    pub fn from_name(name: &str, sample_rate: f64) -> Option<Self> {
+        let lower = name.to_lowercase();
+        match lower.as_str() {
+            "overdrive" => Some(Pedal::Overdrive(Overdrive::new(sample_rate))),
+            "distortion" => Some(Pedal::Distortion(Distortion::new(sample_rate))),
+            "fuzz" => Some(Pedal::Fuzz(Fuzz::new(sample_rate))),
+            "tapesaturation" | "tape_saturation" => {
+                Some(Pedal::TapeSaturation(TapeSaturation::new(sample_rate)))
+            }
+            "autowah" | "auto_wah" => Some(Pedal::AutoWah(AutoWah::new(sample_rate))),
+            "wahmanual" | "wah_manual" => Some(Pedal::WahManual(WahManual::new(sample_rate))),
+            "chorus" => Some(Pedal::Chorus(Chorus::new(sample_rate))),
+            "flanger" => Some(Pedal::Flanger(Flanger::new(sample_rate))),
+            "phaser" => Some(Pedal::Phaser(Phaser::new(sample_rate))),
+            "tremolo" => Some(Pedal::Tremolo(Tremolo::new(sample_rate))),
+            "digitaldelay" | "digital_delay" => {
+                Some(Pedal::DigitalDelay(DigitalDelay::new(sample_rate)))
+            }
+            "analogdelay" | "analog_delay" => {
+                Some(Pedal::AnalogDelay(AnalogDelay::new(sample_rate)))
+            }
+            "pingpongdelay" | "ping_pong_delay" => {
+                Some(Pedal::PingPongDelay(PingPongDelay::new(sample_rate)))
+            }
+            "platereverb" | "plate_reverb" => {
+                Some(Pedal::PlateReverb(PlateReverb::new(sample_rate)))
+            }
+            "hallreverb" | "hall_reverb" => {
+                Some(Pedal::HallReverb(HallReverb::new(sample_rate)))
+            }
+            "roomreverb" | "room_reverb" => {
+                Some(Pedal::RoomReverb(RoomReverb::new(sample_rate)))
+            }
+            "bitcrusher" => Some(Pedal::Bitcrusher(Bitcrusher::new(sample_rate))),
+            "ringmodulator" | "ring_modulator" => {
+                Some(Pedal::RingModulator(RingModulator::new(sample_rate)))
+            }
+            "pitchshifter" | "pitch_shifter" => {
+                Some(Pedal::PitchShifter(PitchShifter::new(sample_rate)))
+            }
+            "autopan" | "auto_pan" => Some(Pedal::AutoPan(AutoPan::new(sample_rate))),
+            "noisegate" | "noise_gate" => Some(Pedal::NoiseGate(NoiseGate::new(sample_rate))),
+            "compressor" => Some(Pedal::Compressor(Compressor::new(sample_rate))),
+            "eq" => Some(Pedal::Eq(Eq::new(sample_rate))),
+            "volume" => Some(Pedal::Volume(Volume::new(sample_rate))),
+            "buffer" => Some(Pedal::Buffer(Buffer::new(sample_rate))),
+            _ => None,
+        }
+    }
+
+    /// Return the type name string for this pedal variant.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Pedal::Overdrive(_) => "Overdrive",
+            Pedal::Distortion(_) => "Distortion",
+            Pedal::Fuzz(_) => "Fuzz",
+            Pedal::TapeSaturation(_) => "TapeSaturation",
+            Pedal::AutoWah(_) => "AutoWah",
+            Pedal::WahManual(_) => "WahManual",
+            Pedal::Chorus(_) => "Chorus",
+            Pedal::Flanger(_) => "Flanger",
+            Pedal::Phaser(_) => "Phaser",
+            Pedal::Tremolo(_) => "Tremolo",
+            Pedal::DigitalDelay(_) => "DigitalDelay",
+            Pedal::AnalogDelay(_) => "AnalogDelay",
+            Pedal::PingPongDelay(_) => "PingPongDelay",
+            Pedal::PlateReverb(_) => "PlateReverb",
+            Pedal::HallReverb(_) => "HallReverb",
+            Pedal::RoomReverb(_) => "RoomReverb",
+            Pedal::Bitcrusher(_) => "Bitcrusher",
+            Pedal::RingModulator(_) => "RingModulator",
+            Pedal::PitchShifter(_) => "PitchShifter",
+            Pedal::AutoPan(_) => "AutoPan",
+            Pedal::NoiseGate(_) => "NoiseGate",
+            Pedal::Compressor(_) => "Compressor",
+            Pedal::Eq(_) => "Eq",
+            Pedal::Volume(_) => "Volume",
+            Pedal::Buffer(_) => "Buffer",
+        }
+    }
+
     /// Reset the effect state (clear delay lines, filters, etc.).
     pub fn reset(&mut self) {
         match self {
@@ -293,5 +378,45 @@ impl Pedal {
             Pedal::Volume(p) => p.reset(),
             Pedal::Buffer(p) => p.reset(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_name_all_25_types() {
+        let names = [
+            "Overdrive", "Distortion", "Fuzz", "TapeSaturation",
+            "AutoWah", "WahManual", "Chorus", "Flanger", "Phaser", "Tremolo",
+            "DigitalDelay", "AnalogDelay", "PingPongDelay",
+            "PlateReverb", "HallReverb", "RoomReverb",
+            "Bitcrusher", "RingModulator", "PitchShifter", "AutoPan",
+            "NoiseGate", "Compressor", "Eq", "Volume", "Buffer",
+        ];
+        for name in &names {
+            let pedal = Pedal::from_name(name, 48000.0);
+            assert!(pedal.is_some(), "from_name should recognize {name}");
+            assert_eq!(pedal.unwrap().type_name(), *name);
+        }
+    }
+
+    #[test]
+    fn from_name_case_insensitive() {
+        assert!(Pedal::from_name("overdrive", 48000.0).is_some());
+        assert!(Pedal::from_name("CHORUS", 48000.0).is_some());
+    }
+
+    #[test]
+    fn from_name_snake_case() {
+        assert!(Pedal::from_name("tape_saturation", 48000.0).is_some());
+        assert!(Pedal::from_name("digital_delay", 48000.0).is_some());
+        assert!(Pedal::from_name("noise_gate", 48000.0).is_some());
+    }
+
+    #[test]
+    fn from_name_unknown_returns_none() {
+        assert!(Pedal::from_name("unknown", 48000.0).is_none());
     }
 }

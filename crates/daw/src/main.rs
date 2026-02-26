@@ -380,6 +380,8 @@ struct DawState {
     #[allow(dead_code)]
     engine: Arc<Mutex<AudioEngine>>,
     selected_channel: usize,
+    /// Solo channel index, if any. When set, only this channel plays.
+    solo_channel: Option<usize>,
     scroll_x: f32,
     scroll_y: f32,
     zoom: f32,
@@ -441,6 +443,7 @@ impl DawState {
             transport: Transport::new(SAMPLE_RATE, 480),
             engine,
             selected_channel: 0,
+            solo_channel: None,
             scroll_x: 0.0,
             scroll_y: (VISIBLE_NOTE_RANGE as f32 / 2.0) * NOTE_HEIGHT,
             zoom: 1.0,
@@ -692,7 +695,13 @@ impl DawState {
             let left = vol * (1.0 - conf.pan.max(0.0));
             let right = vol * (1.0 + conf.pan.min(0.0));
             engine.channels[ch].set_volume(left, right);
-            engine.channels[ch].enabled = !conf.muted;
+            // Solo overrides mute: when a channel is soloed, all others are disabled.
+            let enabled = if let Some(solo) = self.solo_channel {
+                ch == solo && !conf.muted
+            } else {
+                !conf.muted
+            };
+            engine.channels[ch].enabled = enabled;
         }
     }
 
@@ -906,6 +915,13 @@ impl DawState {
             DawInput::Duplicate => self.duplicate_notes(),
             DawInput::SelectAll => self.select_all_notes(),
             DawInput::ToggleLoop => self.toggle_loop(),
+            DawInput::ToggleSolo => self.toggle_solo(),
+            DawInput::Home => {
+                self.transport.reset();
+                self.stop_all_notes();
+                self.scroll_x = 0.0;
+                self.status_message = Some(String::from("Home"));
+            }
             DawInput::ShiftUp => {
                 if self.current_page == DawPage::PianoRoll && !self.selected_notes.is_empty() {
                     self.transpose_notes(12);
@@ -1371,6 +1387,20 @@ impl DawState {
         }
         self.tracks[ch].sort();
         self.status_message = Some(format!("Quantized {count} note(s)"));
+    }
+
+    /// Toggle solo on the selected channel.
+    /// When soloed, only that channel plays. Toggle again to un-solo.
+    fn toggle_solo(&mut self) {
+        let ch = self.selected_channel;
+        if self.solo_channel == Some(ch) {
+            self.solo_channel = None;
+            self.status_message = Some(String::from("Solo OFF"));
+        } else {
+            self.solo_channel = Some(ch);
+            self.status_message = Some(format!("Solo Ch{}", ch + 1));
+        }
+        self.sync_engine_channels();
     }
 
     /// Toggle loop mode. When enabling, auto-set the loop region to cover
@@ -2725,6 +2755,9 @@ impl DawState {
             };
             renderer.draw_text(&label, x + 8.0, y + 7.0, FontSize::Small, color);
 
+            if self.solo_channel == Some(i) {
+                renderer.draw_text("S", x + tab_w - 40.0, y + 7.0, FontSize::Small, Color::rgb(255, 200, 80));
+            }
             if self.project.channels[i].muted {
                 renderer.draw_text("M", x + tab_w - 24.0, y + 7.0, FontSize::Small, Color::rgb(255, 80, 80));
             }

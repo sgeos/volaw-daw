@@ -138,6 +138,8 @@ fn translate_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
         SDL_SCANCODE_B => Some(DawInput::ToggleBypass),
         SDL_SCANCODE_G => Some(DawInput::GridCycle),
         SDL_SCANCODE_L => Some(DawInput::ToggleLoop),
+        SDL_SCANCODE_O => Some(DawInput::ToggleSolo),
+        SDL_SCANCODE_HOME | SDL_SCANCODE_0 => Some(DawInput::Home),
         _ => None,
     }
 }

@@ -80,4 +80,8 @@ pub enum DawInput {
     Duplicate,
     /// Select all notes in the current track (Ctrl+A).
     SelectAll,
+    /// Toggle solo on the selected channel.
+    ToggleSolo,
+    /// Reset transport to the beginning.
+    Home,
 }

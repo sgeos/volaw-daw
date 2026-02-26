@@ -351,6 +351,8 @@ struct DawState {
     scripts: [Option<ScriptRunner>; 8],
     /// Currently active drag target on a setup page parameter.
     dragging_param: Option<DragTarget>,
+    /// True when dragging a note's right edge to resize its duration.
+    dragging_note_edge: bool,
 }
 
 /// Maximum undo history depth.
@@ -381,6 +383,7 @@ impl DawState {
             undo_stack: Vec::new(),
             scripts: core::array::from_fn(|_| None),
             dragging_param: None,
+            dragging_note_edge: false,
         }
     }
 
@@ -634,6 +637,7 @@ impl DawState {
             DawInput::Click(mx, my) => self.handle_click(mx, my),
             DawInput::MouseUp(_, _) => {
                 self.dragging_param = None;
+                self.dragging_note_edge = false;
             }
 
             // Piano roll inputs.
@@ -663,7 +667,17 @@ impl DawState {
             }
             DawInput::Scroll(delta) => {
                 if self.current_page == DawPage::PianoRoll {
-                    self.scroll_y = (self.scroll_y - delta as f32 * 20.0).max(0.0);
+                    // If a note is selected, scroll adjusts velocity.
+                    if let Some(idx) = self.selected_note {
+                        let ch = self.selected_channel;
+                        if let Some(note) = self.tracks[ch].notes.get_mut(idx) {
+                            let new_vel = (note.velocity as i32 + delta * 4).clamp(1, 127) as u8;
+                            note.velocity = new_vel;
+                            self.status_message = Some(format!("Vel: {}", new_vel));
+                        }
+                    } else {
+                        self.scroll_y = (self.scroll_y - delta as f32 * 20.0).max(0.0);
+                    }
                 }
             }
             DawInput::ZoomIn => {
@@ -685,6 +699,8 @@ impl DawState {
                 if let Some(ref target) = self.dragging_param {
                     let value = drag_value(mx, target);
                     self.apply_drag_value(target.clone(), value);
+                } else if self.dragging_note_edge {
+                    self.drag_note_duration(mx);
                 }
             }
             _ => {}
@@ -745,6 +761,7 @@ impl DawState {
 
             // Check if clicking on an existing note.
             let tw = self.tick_width();
+            let edge_zone = 8.0_f32; // Pixels from right edge that triggers duration drag.
             let track = &self.tracks[self.selected_channel];
             for (i, note) in track.notes.iter().enumerate() {
                 let note_x = PIANO_KEY_WIDTH + note.tick as f32 * tw - self.scroll_x;
@@ -757,6 +774,11 @@ impl DawState {
                     && my <= note_y + NOTE_HEIGHT
                 {
                     self.selected_note = Some(i);
+                    // If click is near the right edge, start a duration drag.
+                    if mx >= note_x + note_w - edge_zone {
+                        self.push_undo();
+                        self.dragging_note_edge = true;
+                    }
                     return;
                 }
             }
@@ -839,6 +861,22 @@ impl DawState {
         };
         for ch in 0..8 {
             apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+        }
+    }
+
+    /// Drag the selected note's right edge to adjust duration.
+    fn drag_note_duration(&mut self, mx: f32) {
+        if let Some(idx) = self.selected_note {
+            let ch = self.selected_channel;
+            let tw = self.tick_width();
+            let sx = self.scroll_x;
+            let snap = self.snap_ticks;
+            if let Some(note) = self.tracks[ch].notes.get_mut(idx) {
+                let note_x = PIANO_KEY_WIDTH + note.tick as f32 * tw - sx;
+                let raw_end_tick = ((mx - note_x) / tw).max(0.0) as u64 + note.tick;
+                let snapped = ((raw_end_tick - note.tick) / snap).max(1) * snap;
+                note.duration = snapped;
+            }
         }
     }
 
@@ -1339,9 +1377,20 @@ impl DawState {
         let tempo_text = format!("{:.0} BPM", self.project.tempo);
         renderer.draw_text(&tempo_text, 620.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
 
-        // Status message or page-specific hints.
+        // Status message, selected note info, or page-specific hints.
         if let Some(ref msg) = self.status_message {
             renderer.draw_text(msg, screen_w - 620.0, 12.0, FontSize::Small, TEXT_ACCENT);
+        } else if self.current_page == DawPage::PianoRoll
+            && let Some(idx) = self.selected_note
+            && let Some(note) = self.tracks[self.selected_channel].notes.get(idx)
+        {
+            let (name, octave) = MidiTrack::note_name(note.pitch);
+            let beats = note.duration as f64 / self.project.ticks_per_beat as f64;
+            let info = format!(
+                "{}{} vel:{} dur:{:.1}b  Scroll=Vel  Drag edge=Dur  Del=Remove",
+                name, octave, note.velocity, beats
+            );
+            renderer.draw_text(&info, screen_w - 720.0, 12.0, FontSize::Small, TEXT_ACCENT);
         } else {
             let hints = if self.current_page == DawPage::PianoRoll {
                 "Space=Play  S=Stop  1-8=Ch  P=Preset  M=Mute  Click=Note  Del=Remove  Tab=Setup"
@@ -1469,7 +1518,18 @@ impl DawState {
             }
 
             let is_selected = self.selected_note == Some(i);
-            let fill_color = if is_selected { NOTE_SELECTED } else { ch_color };
+            // Scale brightness by velocity (vel 1 = 40%, vel 127 = 100%).
+            let vel_scale = 0.4 + 0.6 * (note.velocity as f32 / 127.0);
+            let fill_color = if is_selected {
+                NOTE_SELECTED
+            } else {
+                Color::rgba(
+                    (ch_color.r as f32 * vel_scale) as u8,
+                    (ch_color.g as f32 * vel_scale) as u8,
+                    (ch_color.b as f32 * vel_scale) as u8,
+                    ch_color.a,
+                )
+            };
             renderer.fill_rect(note_x, note_y, note_w, NOTE_HEIGHT - 1.0, fill_color);
             let border = if is_selected {
                 Color::rgba(255, 255, 255, 180)

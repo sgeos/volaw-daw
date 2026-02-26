@@ -38,7 +38,7 @@ impl SdlRenderer {
             CString::new(font_path).map_err(|e| format!("invalid font path: {e}"))?;
 
         unsafe {
-            if !sdl3_sys::init::SDL_Init(sdl3_sys::init::SDL_INIT_VIDEO) {
+            if !sdl3_sys::init::SDL_Init(sdl3_sys::init::SDL_INIT_VIDEO | sdl3_sys::init::SDL_INIT_AUDIO) {
                 return Err(sdl_error("SDL_Init"));
             }
 

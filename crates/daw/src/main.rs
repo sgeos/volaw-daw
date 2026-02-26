@@ -42,6 +42,7 @@ const PIANO_KEY_WIDTH: f32 = 60.0;
 const NOTE_HEIGHT: f32 = 12.0;
 const TOOLBAR_HEIGHT: f32 = 32.0;
 const CHANNEL_BAR_HEIGHT: f32 = 28.0;
+const VELOCITY_LANE_HEIGHT: f32 = 60.0;
 
 /// Number of visible octaves in the piano roll (C2 to C7 = 5 octaves = 60 notes).
 const VISIBLE_NOTE_RANGE: u8 = 60;
@@ -422,6 +423,8 @@ struct DawState {
     dragging_param: Option<DragTarget>,
     /// True when dragging a note's right edge to resize its duration.
     dragging_note_edge: bool,
+    /// True when dragging a note velocity in the velocity lane.
+    dragging_velocity: bool,
     /// Currently selected pedal on a chain page: (chain_id, pedal_index).
     /// chain_id: 0 = pre (mono), 1 = post-left, 2 = post-right.
     selected_pedal: Option<(u8, usize)>,
@@ -466,6 +469,7 @@ impl DawState {
             scripts: core::array::from_fn(|_| None),
             dragging_param: None,
             dragging_note_edge: false,
+            dragging_velocity: false,
             last_mouse: (0.0, 0.0),
             selected_pedal: None,
             pedal_picker_open: false,
@@ -777,6 +781,7 @@ impl DawState {
                 self.flush_pending_undo();
                 self.dragging_param = None;
                 self.dragging_note_edge = false;
+                self.dragging_velocity = false;
             }
 
             // Piano roll inputs.
@@ -939,6 +944,8 @@ impl DawState {
                     self.apply_drag_value(target.clone(), value);
                 } else if self.dragging_note_edge {
                     self.drag_note_duration(mx);
+                } else if self.dragging_velocity {
+                    self.drag_velocity(my);
                 }
             }
             _ => {}
@@ -995,6 +1002,17 @@ impl DawState {
                 return;
             }
             DawPage::PianoRoll => {}
+        }
+
+        // Determine the velocity lane boundary.
+        let screen_h = WINDOW_HEIGHT as f32;
+        let roll_h = screen_h - content_y - VELOCITY_LANE_HEIGHT;
+        let vel_lane_y = content_y + roll_h;
+
+        // Velocity lane click.
+        if my >= vel_lane_y && mx >= PIANO_KEY_WIDTH {
+            self.handle_velocity_lane_click(mx, my, vel_lane_y);
+            return;
         }
 
         // Piano roll grid click (to the right of the piano keys).
@@ -1496,6 +1514,59 @@ impl DawState {
                 note.duration = (adjusted / snap).max(1) * snap;
             }
         }
+    }
+
+    /// Handle a click in the velocity lane. Selects the nearest note at the
+    /// clicked x position and begins a velocity drag.
+    fn handle_velocity_lane_click(&mut self, mx: f32, my: f32, vel_lane_y: f32) {
+        let tw = self.tick_width();
+        let track = &self.tracks[self.selected_channel];
+
+        // Find the note whose horizontal span contains the click x.
+        let mut hit = None;
+        for (i, note) in track.notes.iter().enumerate() {
+            let note_x = PIANO_KEY_WIDTH + note.tick as f32 * tw - self.scroll_x;
+            let note_w = (note.duration as f32 * tw).max(3.0);
+            if mx >= note_x && mx <= note_x + note_w {
+                hit = Some(i);
+                break;
+            }
+        }
+
+        if let Some(idx) = hit {
+            self.push_undo();
+            self.select_note(idx);
+            self.dragging_velocity = true;
+            // Apply the velocity from the click position immediately.
+            self.set_velocity_from_y(my, vel_lane_y);
+        }
+    }
+
+    /// Set velocity of selected notes from a y position within the velocity lane.
+    fn set_velocity_from_y(&mut self, my: f32, vel_lane_y: f32) {
+        let bar_margin = 1.0_f32;
+        let usable_h = VELOCITY_LANE_HEIGHT - 2.0 * bar_margin;
+        // Bottom of lane = velocity 0, top of lane = velocity 127.
+        let frac = ((vel_lane_y + VELOCITY_LANE_HEIGHT - bar_margin - my) / usable_h).clamp(0.0, 1.0);
+        let velocity = (frac * 127.0).round() as u8;
+        let velocity = velocity.max(1); // Minimum velocity is 1.
+
+        let ch = self.selected_channel;
+        let indices = self.selected_notes.clone();
+        for &idx in &indices {
+            if let Some(note) = self.tracks[ch].notes.get_mut(idx) {
+                note.velocity = velocity;
+            }
+        }
+    }
+
+    /// Handle continuous velocity drag in the velocity lane.
+    fn drag_velocity(&mut self, my: f32) {
+        let content_y = TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT;
+        let screen_h = WINDOW_HEIGHT as f32;
+        let roll_h = screen_h - content_y - VELOCITY_LANE_HEIGHT;
+        let vel_lane_y = content_y + roll_h;
+        self.set_velocity_from_y(my, vel_lane_y);
     }
 
     /// Handle a click on the synth setup page.
@@ -2609,7 +2680,9 @@ impl DawState {
         let content_h = screen_h - content_y;
         match self.current_page {
             DawPage::PianoRoll => {
-                self.render_piano_roll(renderer, screen_w, content_y, content_h);
+                let roll_h = content_h - VELOCITY_LANE_HEIGHT;
+                self.render_piano_roll(renderer, screen_w, content_y, roll_h);
+                self.render_velocity_lane(renderer, screen_w, content_y + roll_h, VELOCITY_LANE_HEIGHT);
             }
             DawPage::SynthSetup => {
                 self.render_synth_setup(renderer, screen_w, content_y, content_h);
@@ -2912,6 +2985,78 @@ impl DawState {
             let playhead_x = PIANO_KEY_WIDTH + self.transport.position_ticks as f32 * tick_width - self.scroll_x;
             if playhead_x >= PIANO_KEY_WIDTH && playhead_x <= screen_w {
                 renderer.draw_vline(playhead_x, roll_y, roll_y + roll_h, PLAYHEAD);
+            }
+        }
+    }
+
+    /// Render the velocity lane below the piano roll.
+    ///
+    /// Each note in the current channel is drawn as a vertical bar whose height
+    /// is proportional to velocity (1-127). Selected notes use the selection color.
+    fn render_velocity_lane<R: Renderer>(
+        &self,
+        renderer: &mut R,
+        screen_w: f32,
+        lane_y: f32,
+        lane_h: f32,
+    ) {
+        let roll_w = screen_w - PIANO_KEY_WIDTH;
+
+        // Lane background.
+        renderer.fill_rect(0.0, lane_y, PIANO_KEY_WIDTH, lane_h, Color::rgb(35, 35, 40));
+        renderer.fill_rect(PIANO_KEY_WIDTH, lane_y, roll_w, lane_h, Color::rgb(40, 40, 46));
+
+        // Separator line at top of velocity lane.
+        renderer.draw_hline(0.0, screen_w, lane_y, GRID_BAR);
+
+        // Label in the key area.
+        renderer.draw_text("Vel", 4.0, lane_y + 4.0, FontSize::Small, TEXT_SECONDARY);
+
+        // Guideline at 50% and 100% velocity.
+        let mid_y = lane_y + lane_h * 0.5;
+        renderer.draw_hline(PIANO_KEY_WIDTH, screen_w, mid_y, GRID_LINE);
+        renderer.draw_hline(PIANO_KEY_WIDTH, screen_w, lane_y + 1.0, GRID_LINE);
+
+        // Draw velocity bars for each note.
+        let tw = self.tick_width();
+        let track = &self.tracks[self.selected_channel];
+        let ch_color = CHANNEL_COLORS[self.selected_channel];
+        let bar_margin = 1.0_f32;
+
+        for (i, note) in track.notes.iter().enumerate() {
+            let note_x = PIANO_KEY_WIDTH + note.tick as f32 * tw - self.scroll_x;
+            let note_w = (note.duration as f32 * tw).max(3.0);
+
+            // Skip notes outside visible range.
+            if note_x + note_w < PIANO_KEY_WIDTH || note_x > screen_w {
+                continue;
+            }
+
+            let vel_frac = note.velocity as f32 / 127.0;
+            let bar_h = vel_frac * (lane_h - 2.0 * bar_margin);
+            let bar_y = lane_y + lane_h - bar_margin - bar_h;
+
+            let is_selected = self.is_note_selected(i);
+            let fill = if is_selected {
+                NOTE_SELECTED
+            } else {
+                Color::rgba(
+                    (ch_color.r as f32 * 0.8) as u8,
+                    (ch_color.g as f32 * 0.8) as u8,
+                    (ch_color.b as f32 * 0.8) as u8,
+                    200,
+                )
+            };
+
+            renderer.fill_rect(note_x, bar_y, note_w, bar_h, fill);
+        }
+
+        // Playhead in velocity lane.
+        if self.transport.playing || self.transport.position_ticks > 0 {
+            let playhead_x =
+                PIANO_KEY_WIDTH + self.transport.position_ticks as f32 * tw - self.scroll_x;
+            if playhead_x >= PIANO_KEY_WIDTH && playhead_x <= screen_w {
+                renderer.draw_vline(playhead_x, lane_y, lane_y + lane_h, PLAYHEAD);
             }
         }
     }

@@ -655,6 +655,16 @@ impl DawState {
                 }
             }
         }
+
+        // Auto-scroll piano roll to follow the playhead.
+        if self.current_page == DawPage::PianoRoll {
+            let tw = self.tick_width();
+            let playhead_x = current_ticks as f32 * tw - self.scroll_x;
+            let roll_w = WINDOW_WIDTH as f32 - PIANO_KEY_WIDTH;
+            if playhead_x > roll_w * 0.85 {
+                self.scroll_x = current_ticks as f32 * tw - roll_w * 0.15;
+            }
+        }
     }
 
     /// Stop all active notes across all channels.
@@ -894,6 +904,7 @@ impl DawState {
             DawInput::TempoDown => self.adjust_tempo(-1.0),
             DawInput::Quantize => self.quantize_notes(),
             DawInput::Duplicate => self.duplicate_notes(),
+            DawInput::SelectAll => self.select_all_notes(),
             DawInput::ToggleLoop => self.toggle_loop(),
             DawInput::ShiftUp => {
                 if self.current_page == DawPage::PianoRoll && !self.selected_notes.is_empty() {
@@ -1287,6 +1298,17 @@ impl DawState {
     }
 
     /// Duplicate selected notes, offset by one grid unit to the right.
+    /// Select all notes in the current channel track.
+    fn select_all_notes(&mut self) {
+        if self.current_page != DawPage::PianoRoll {
+            return;
+        }
+        let ch = self.selected_channel;
+        let count = self.tracks[ch].notes.len();
+        self.selected_notes = (0..count).collect();
+        self.status_message = Some(format!("Selected {count} note(s)"));
+    }
+
     fn duplicate_notes(&mut self) {
         if self.selected_notes.is_empty() || self.current_page != DawPage::PianoRoll {
             return;

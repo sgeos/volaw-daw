@@ -78,4 +78,6 @@ pub enum DawInput {
     ShiftDown,
     /// Duplicate selected notes (Ctrl+D).
     Duplicate,
+    /// Select all notes in the current track (Ctrl+A).
+    SelectAll,
 }

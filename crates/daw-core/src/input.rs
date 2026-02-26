@@ -62,4 +62,10 @@ pub enum DawInput {
     Paste,
     /// Shift-click at pixel coordinates for multi-select.
     ShiftClick(f32, f32),
+    /// Cycle grid subdivision (1/1 -> 1/2 -> 1/4 -> 1/8 -> 1/16 -> 1/32 -> 1/1).
+    GridCycle,
+    /// Increase tempo by 1 BPM.
+    TempoUp,
+    /// Decrease tempo by 1 BPM.
+    TempoDown,
 }

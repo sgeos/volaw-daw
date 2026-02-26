@@ -786,6 +786,12 @@ impl DawState {
                 }
             }
             DawInput::Scroll(delta) => {
+                // Scroll over tempo display adjusts BPM.
+                let (mx, my) = self.last_mouse;
+                if my < TOOLBAR_HEIGHT && (600.0..=720.0).contains(&mx) {
+                    self.adjust_tempo(delta as f64);
+                    return;
+                }
                 if self.current_page == DawPage::PianoRoll {
                     // If notes are selected, scroll adjusts velocity.
                     if !self.selected_notes.is_empty() {
@@ -867,6 +873,9 @@ impl DawState {
                     self.toggle_pedal_bypass();
                 }
             }
+            DawInput::GridCycle => self.cycle_grid(),
+            DawInput::TempoUp => self.adjust_tempo(1.0),
+            DawInput::TempoDown => self.adjust_tempo(-1.0),
             DawInput::MouseMove(mx, my) => {
                 self.last_mouse = (mx, my);
                 if let Some(ref target) = self.dragging_param {
@@ -1165,6 +1174,29 @@ impl DawState {
         }
     }
 
+    /// Cycle the snap grid subdivision through common note values.
+    /// 1/1 (whole) -> 1/2 -> 1/4 -> 1/8 -> 1/16 -> 1/32 -> 1/1.
+    fn cycle_grid(&mut self) {
+        let tpb = self.project.ticks_per_beat as u64;
+        // Grid subdivisions in ticks: whole, half, quarter, eighth, sixteenth, thirty-second.
+        let subdivisions = [tpb * 4, tpb * 2, tpb, tpb / 2, tpb / 4, tpb / 8];
+        let current_idx = subdivisions.iter().position(|&s| s == self.snap_ticks);
+        let next_idx = match current_idx {
+            Some(i) => (i + 1) % subdivisions.len(),
+            None => 2, // Default to quarter note if current value is non-standard.
+        };
+        self.snap_ticks = subdivisions[next_idx];
+        let label = grid_label(self.snap_ticks, tpb);
+        self.status_message = Some(format!("Grid: {label}"));
+    }
+
+    /// Adjust the project tempo by a given BPM delta, clamped to 20-300 BPM.
+    fn adjust_tempo(&mut self, delta: f64) {
+        self.project.tempo = (self.project.tempo + delta).clamp(20.0, 300.0);
+        self.transport.tempo = self.project.tempo;
+        self.status_message = Some(format!("{:.0} BPM", self.project.tempo));
+    }
+
     /// Apply all channel patches to the audio engine. Called after loading
     /// a project to synchronize saved patch data with the engine state.
     fn apply_all_patches(&self) {
@@ -1200,17 +1232,33 @@ impl DawState {
     }
 
     /// Drag the selected note's right edge to adjust duration.
+    ///
+    /// When multiple notes are selected, the primary (last) note determines
+    /// the new duration and the delta is applied to all other selected notes.
     fn drag_note_duration(&mut self, mx: f32) {
-        if let Some(idx) = self.primary_selected_note() {
-            let ch = self.selected_channel;
-            let tw = self.tick_width();
-            let sx = self.scroll_x;
-            let snap = self.snap_ticks;
+        let Some(primary_idx) = self.primary_selected_note() else {
+            return;
+        };
+        let ch = self.selected_channel;
+        let tw = self.tick_width();
+        let sx = self.scroll_x;
+        let snap = self.snap_ticks;
+        let Some(primary) = self.tracks[ch].notes.get(primary_idx) else {
+            return;
+        };
+        let note_x = PIANO_KEY_WIDTH + primary.tick as f32 * tw - sx;
+        let raw_end_tick = ((mx - note_x) / tw).max(0.0) as u64 + primary.tick;
+        let new_duration = ((raw_end_tick - primary.tick) / snap).max(1) * snap;
+        let old_duration = primary.duration;
+        let delta = new_duration as i64 - old_duration as i64;
+
+        // Apply to all selected notes.
+        let indices = self.selected_notes.clone();
+        for &idx in &indices {
             if let Some(note) = self.tracks[ch].notes.get_mut(idx) {
-                let note_x = PIANO_KEY_WIDTH + note.tick as f32 * tw - sx;
-                let raw_end_tick = ((mx - note_x) / tw).max(0.0) as u64 + note.tick;
-                let snapped = ((raw_end_tick - note.tick) / snap).max(1) * snap;
-                note.duration = snapped;
+                let adjusted = (note.duration as i64 + delta).max(snap as i64) as u64;
+                // Snap to grid.
+                note.duration = (adjusted / snap).max(1) * snap;
             }
         }
     }
@@ -2412,6 +2460,10 @@ impl DawState {
         let tempo_text = format!("{:.0} BPM", self.project.tempo);
         renderer.draw_text(&tempo_text, 620.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
 
+        // Grid subdivision display.
+        let grid_text = grid_label(self.snap_ticks, self.project.ticks_per_beat as u64);
+        renderer.draw_text(grid_text, 740.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
+
         // Status message, selected note info, or page-specific hints.
         if let Some(ref msg) = self.status_message {
             renderer.draw_text(msg, screen_w - 620.0, 12.0, FontSize::Small, TEXT_ACCENT);
@@ -2434,7 +2486,7 @@ impl DawState {
             renderer.draw_text(&info, screen_w - 720.0, 12.0, FontSize::Small, TEXT_ACCENT);
         } else {
             let hints = if self.current_page == DawPage::PianoRoll {
-                "Space=Play  S=Stop  1-8=Ch  P=Preset  M=Mute  Click=Note  Del=Remove  Tab=Setup"
+                "Space=Play  S=Stop  1-8=Ch  P=Preset  M=Mute  G=Grid  Click=Note  Del=Remove  Tab=Setup"
             } else {
                 "Click=Edit  Drag=Adjust  Left/Right=Navigate  Esc=Back  P=Preset  Ctrl+S=Save"
             };
@@ -2992,6 +3044,25 @@ fn draw_section_panel<R: Renderer>(
 }
 
 /// Check whether a parameter label represents a frequency (for log mapping).
+/// Return a human-readable label for a grid subdivision.
+fn grid_label(snap_ticks: u64, ticks_per_beat: u64) -> &'static str {
+    if snap_ticks == ticks_per_beat * 4 {
+        "1/1 (Whole)"
+    } else if snap_ticks == ticks_per_beat * 2 {
+        "1/2 (Half)"
+    } else if snap_ticks == ticks_per_beat {
+        "1/4 (Quarter)"
+    } else if snap_ticks == ticks_per_beat / 2 {
+        "1/8 (Eighth)"
+    } else if snap_ticks == ticks_per_beat / 4 {
+        "1/16 (Sixteenth)"
+    } else if snap_ticks == ticks_per_beat / 8 {
+        "1/32 (Thirty-second)"
+    } else {
+        "Custom"
+    }
+}
+
 fn is_log_label(label: &str) -> bool {
     let lower = label.to_lowercase();
     lower == "cutoff"

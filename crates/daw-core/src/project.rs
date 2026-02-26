@@ -44,6 +44,10 @@ pub struct ChannelConfig {
     /// Filename of the MIDI file in the midi/ folder.
     #[serde(default)]
     pub midi_file: String,
+    /// Filename of the Keleos script in the scripts/ folder.
+    /// Empty string means no script is assigned to this channel.
+    #[serde(default)]
+    pub script_file: String,
     /// Whether this channel is muted.
     #[serde(default)]
     pub muted: bool,
@@ -96,6 +100,7 @@ impl Default for ChannelConfig {
             patch_file: String::new(),
             effect_chain_file: String::new(),
             midi_file: String::new(),
+            script_file: String::new(),
             muted: false,
             solo: false,
             volume: 0.8,

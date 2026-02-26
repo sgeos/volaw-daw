@@ -17,6 +17,7 @@ use daw_core::midi::{MidiNote, MidiTrack};
 use daw_core::patch::{EffectChainConfig, PatchConfig, PedalConfig};
 use daw_core::presets;
 use daw_core::project::DawProject;
+use daw_core::script::{self, ScriptRunner};
 use daw_core::render::{
     self as colors, BG_DARK, BG_PANEL, BG_TRACK, CHANNEL_COLORS, GRID_BAR, GRID_BEAT, GRID_LINE,
     KEY_BLACK, KEY_LABEL, KEY_WHITE, NOTE_SELECTED, PLAYHEAD, TEXT_ACCENT,
@@ -292,6 +293,8 @@ struct DawState {
     preset_indices: [Option<usize>; 8],
     /// Undo stack: each entry is (channel_index, track_snapshot_before_edit).
     undo_stack: Vec<(usize, MidiTrack)>,
+    /// Per-channel Keleos script runners. None if no script assigned.
+    scripts: [Option<ScriptRunner>; 8],
 }
 
 /// Maximum undo history depth.
@@ -320,6 +323,7 @@ impl DawState {
             prev_ticks: 0,
             preset_indices: [None; 8],
             undo_stack: Vec::new(),
+            scripts: core::array::from_fn(|_| None),
         }
     }
 
@@ -362,9 +366,55 @@ impl DawState {
         }
     }
 
+    /// Load Keleos scripts for all channels that have a script_file set.
+    ///
+    /// Reads each script file from the scripts/ folder under the project root
+    /// and compiles it into a ScriptRunner. Errors are logged but do not
+    /// prevent other channels from loading.
+    fn load_scripts(&mut self) {
+        let scripts_dir = self.project_root.join("scripts");
+        for ch in 0..8 {
+            let filename = &self.project.channels[ch].script_file;
+            if filename.is_empty() {
+                self.scripts[ch] = None;
+                continue;
+            }
+            let path = scripts_dir.join(filename);
+            match std::fs::read_to_string(&path) {
+                Ok(source) => {
+                    match ScriptRunner::from_source(&source) {
+                        Ok(runner) => {
+                            eprintln!("[INFO] Ch{}: loaded script {}", ch + 1, filename);
+                            self.scripts[ch] = Some(runner);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[ERROR] Ch{}: script compile error in {}: {}",
+                                ch + 1,
+                                filename,
+                                e.0
+                            );
+                            self.scripts[ch] = None;
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[ERROR] Ch{}: could not read script {}: {}",
+                        ch + 1,
+                        filename,
+                        e
+                    );
+                    self.scripts[ch] = None;
+                }
+            }
+        }
+    }
+
     /// Advance playback by one frame. Scans all channels for note start/end
     /// events in the tick range since the last frame. Sends note_on/note_off
-    /// to the audio engine via the shared Arc<Mutex>.
+    /// to the audio engine via the shared Arc<Mutex>. Also ticks per-channel
+    /// Keleos scripts and applies their audio commands.
     fn advance_playback(&mut self) {
         if !self.transport.playing {
             return;
@@ -378,7 +428,10 @@ impl DawState {
         let prev_ticks = self.prev_ticks;
         self.prev_ticks = current_ticks;
 
-        // Lock the engine to send note events.
+        // Compute beat position for scripts.
+        let beat = current_ticks as f64 / self.transport.ticks_per_beat as f64;
+
+        // Lock the engine to send note events and apply script commands.
         let Ok(mut engine) = self.engine.try_lock() else {
             return;
         };
@@ -386,6 +439,18 @@ impl DawState {
         for ch in 0..8 {
             if self.project.channels[ch].muted {
                 continue;
+            }
+
+            // Tick the channel script if present.
+            if let Some(runner) = &mut self.scripts[ch] {
+                let cmds = runner.tick(
+                    current_ticks,
+                    self.transport.tempo,
+                    beat,
+                );
+                if !cmds.is_empty() {
+                    script::apply_commands(&mut engine, ch, &cmds);
+                }
             }
 
             let track = &self.tracks[ch];
@@ -1432,6 +1497,7 @@ fn main() {
     let mut load_name: Option<String> = None;
     let mut import_midi: Option<String> = None;
     let mut import_channel: usize = 0;
+    let mut script_args: Vec<(usize, String)> = Vec::new();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -1450,6 +1516,13 @@ fn main() {
             "--import-channel" if i + 1 < args.len() => {
                 import_channel = args[i + 1].parse::<usize>().unwrap_or(0);
                 i += 2;
+            }
+            "--script" if i + 2 < args.len() => {
+                // --script <channel> <file.kel>
+                let ch = args[i + 1].parse::<usize>().unwrap_or(0);
+                let file = args[i + 2].clone();
+                script_args.push((ch, file));
+                i += 3;
             }
             _ => {
                 eprintln!("[WARN] Unknown argument: {}", args[i]);
@@ -1558,6 +1631,16 @@ fn main() {
             }
         }
     }
+
+    // Apply script assignments from CLI arguments.
+    for (ch, file) in &script_args {
+        if *ch < 8 {
+            state.project.channels[*ch].script_file = file.clone();
+        }
+    }
+
+    // Load Keleos scripts for channels that have them.
+    state.load_scripts();
 
     // Sync channel configuration and patches to the audio engine.
     state.sync_engine_channels();

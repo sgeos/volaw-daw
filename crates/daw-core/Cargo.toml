@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 audio = { workspace = true }
+keleos = { workspace = true }
 serde = { workspace = true }
 libm = "0.2"
 

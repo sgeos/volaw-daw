@@ -434,6 +434,8 @@ struct DawState {
     pedal_picker_open: bool,
     /// Which chain the pedal picker will insert into.
     pedal_picker_chain: u8,
+    /// Scroll offset for the pedal picker overlay.
+    pedal_picker_scroll: f32,
 }
 
 /// Maximum undo history depth.
@@ -474,6 +476,7 @@ impl DawState {
             selected_pedal: None,
             pedal_picker_open: false,
             pedal_picker_chain: 0,
+            pedal_picker_scroll: 0.0,
         }
     }
 
@@ -826,6 +829,21 @@ impl DawState {
                 }
             }
             DawInput::Scroll(delta) => {
+                // Pedal picker scroll.
+                if self.pedal_picker_open {
+                    // Compute total content height for pedal picker.
+                    let item_h = 22.0_f32;
+                    let header_h = 28.0_f32;
+                    let total_h: f32 = PEDAL_TYPES
+                        .iter()
+                        .map(|(_, types)| header_h + types.len() as f32 * item_h)
+                        .sum();
+                    let visible_h = 500.0 - 32.0 - 4.0;
+                    let max_scroll = (total_h - visible_h).max(0.0);
+                    self.pedal_picker_scroll =
+                        (self.pedal_picker_scroll - delta as f32 * 20.0).clamp(0.0, max_scroll);
+                    return;
+                }
                 // Scroll over tempo display adjusts BPM.
                 let (mx, my) = self.last_mouse;
                 if my < TOOLBAR_HEIGHT && (600.0..=720.0).contains(&mx) {
@@ -885,11 +903,13 @@ impl DawState {
                 if self.current_page == DawPage::MonoChain {
                     self.pedal_picker_open = true;
                     self.pedal_picker_chain = 0;
+                    self.pedal_picker_scroll = 0.0;
                 } else if self.current_page == DawPage::StereoChain {
                     // Default to left chain. Can be toggled.
                     self.pedal_picker_open = true;
                     let chain = if let Some((c, _)) = self.selected_pedal { c } else { 1 };
                     self.pedal_picker_chain = chain;
+                    self.pedal_picker_scroll = 0.0;
                 }
             }
             DawInput::ShiftLeft => {
@@ -2541,10 +2561,10 @@ impl DawState {
             return;
         }
 
-        // Check which item was clicked.
+        // Check which item was clicked (accounting for scroll offset).
         let item_h = 22.0;
         let header_h = 28.0;
-        let mut cy = picker_y + 32.0; // Title bar height.
+        let mut cy = picker_y + 32.0 - self.pedal_picker_scroll;
 
         for (_category, types) in PEDAL_TYPES {
             // Category header.
@@ -2729,19 +2749,42 @@ impl DawState {
 
         let item_h = 22.0;
         let header_h = 28.0;
-        let mut cy = picker_y + 32.0;
+        let content_top = picker_y + 32.0;
+        let content_bottom = picker_y + picker_h - 4.0;
+        let mut cy = content_top - self.pedal_picker_scroll;
         let accent = CHANNEL_COLORS[self.selected_channel];
 
         for (category, types) in PEDAL_TYPES {
             // Category header.
-            renderer.fill_rect(picker_x + 4.0, cy, picker_w - 8.0, header_h - 2.0, BG_DARK);
-            renderer.draw_text(category, picker_x + 12.0, cy + 6.0, FontSize::Small, accent);
+            if cy + header_h > content_top && cy < content_bottom {
+                renderer.fill_rect(picker_x + 4.0, cy, picker_w - 8.0, header_h - 2.0, BG_DARK);
+                renderer.draw_text(category, picker_x + 12.0, cy + 6.0, FontSize::Small, accent);
+            }
             cy += header_h;
 
             for pedal_type in *types {
-                renderer.draw_text(pedal_type, picker_x + 24.0, cy + 3.0, FontSize::Small, TEXT_PRIMARY);
+                if cy + item_h > content_top && cy < content_bottom {
+                    renderer.draw_text(pedal_type, picker_x + 24.0, cy + 3.0, FontSize::Small, TEXT_PRIMARY);
+                }
                 cy += item_h;
             }
+        }
+
+        // Scroll indicator when content overflows.
+        let total_content_h = cy + self.pedal_picker_scroll - content_top;
+        let visible_h = content_bottom - content_top;
+        if total_content_h > visible_h {
+            let scrollbar_h = (visible_h / total_content_h * visible_h).max(20.0);
+            let scrollbar_y = content_top
+                + (self.pedal_picker_scroll / (total_content_h - visible_h))
+                    * (visible_h - scrollbar_h);
+            renderer.fill_rect(
+                picker_x + picker_w - 8.0,
+                scrollbar_y,
+                4.0,
+                scrollbar_h,
+                Color::rgba(255, 255, 255, 60),
+            );
         }
     }
 

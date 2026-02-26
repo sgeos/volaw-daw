@@ -23,7 +23,7 @@ use daw_core::project::DawProject;
 use daw_core::script::{self, ScriptRunner};
 use daw_core::render::{
     self as colors, BG_DARK, BG_PANEL, BG_TRACK, CHANNEL_COLORS, GRID_BAR, GRID_BEAT, GRID_LINE,
-    KEY_BLACK, KEY_LABEL, KEY_WHITE, NOTE_SELECTED, PLAYHEAD, TEXT_ACCENT,
+    KEY_BLACK, KEY_LABEL, KEY_WHITE, LOOP_MARKER, NOTE_SELECTED, PLAYHEAD, TEXT_ACCENT,
     TEXT_PRIMARY, TEXT_SECONDARY,
 };
 use daw_core::render::{Color, FontSize, Renderer};
@@ -876,6 +876,8 @@ impl DawState {
             DawInput::GridCycle => self.cycle_grid(),
             DawInput::TempoUp => self.adjust_tempo(1.0),
             DawInput::TempoDown => self.adjust_tempo(-1.0),
+            DawInput::Quantize => self.quantize_notes(),
+            DawInput::ToggleLoop => self.toggle_loop(),
             DawInput::MouseMove(mx, my) => {
                 self.last_mouse = (mx, my);
                 if let Some(ref target) = self.dragging_param {
@@ -1195,6 +1197,62 @@ impl DawState {
         self.project.tempo = (self.project.tempo + delta).clamp(20.0, 300.0);
         self.transport.tempo = self.project.tempo;
         self.status_message = Some(format!("{:.0} BPM", self.project.tempo));
+    }
+
+    /// Quantize selected notes (or all notes if none selected) to the current grid.
+    fn quantize_notes(&mut self) {
+        if self.current_page != DawPage::PianoRoll {
+            return;
+        }
+        self.push_undo();
+        let ch = self.selected_channel;
+        let snap = self.snap_ticks;
+        let indices: Vec<usize> = if self.selected_notes.is_empty() {
+            (0..self.tracks[ch].notes.len()).collect()
+        } else {
+            self.selected_notes.clone()
+        };
+        let mut count = 0usize;
+        for &idx in &indices {
+            if let Some(note) = self.tracks[ch].notes.get_mut(idx) {
+                let quantized = ((note.tick + snap / 2) / snap) * snap;
+                if quantized != note.tick {
+                    note.tick = quantized;
+                    count += 1;
+                }
+            }
+        }
+        self.tracks[ch].sort();
+        self.status_message = Some(format!("Quantized {count} note(s)"));
+    }
+
+    /// Toggle loop mode. When enabling, auto-set the loop region to cover
+    /// all notes in the current channel track.
+    fn toggle_loop(&mut self) {
+        self.transport.loop_enabled = !self.transport.loop_enabled;
+        if self.transport.loop_enabled {
+            let ch = self.selected_channel;
+            let tpb = self.project.ticks_per_beat as u64;
+            let ticks_per_bar = tpb * 4;
+            if !self.tracks[ch].notes.is_empty() {
+                let max_end = self.tracks[ch]
+                    .notes
+                    .iter()
+                    .map(|n| n.tick + n.duration)
+                    .max()
+                    .unwrap_or(ticks_per_bar);
+                // Round up to the next bar boundary.
+                let bars = max_end.div_ceil(ticks_per_bar);
+                self.transport.loop_start = 0;
+                self.transport.loop_end = bars * ticks_per_bar;
+            } else {
+                self.transport.loop_start = 0;
+                self.transport.loop_end = ticks_per_bar * 4; // Default 4 bars.
+            }
+            self.status_message = Some(String::from("Loop ON"));
+        } else {
+            self.status_message = Some(String::from("Loop OFF"));
+        }
     }
 
     /// Apply all channel patches to the audio engine. Called after loading
@@ -2464,6 +2522,11 @@ impl DawState {
         let grid_text = grid_label(self.snap_ticks, self.project.ticks_per_beat as u64);
         renderer.draw_text(grid_text, 740.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
 
+        // Loop indicator.
+        if self.transport.loop_enabled {
+            renderer.draw_text("LOOP", 900.0, 8.0, FontSize::Medium, LOOP_MARKER);
+        }
+
         // Status message, selected note info, or page-specific hints.
         if let Some(ref msg) = self.status_message {
             renderer.draw_text(msg, screen_w - 620.0, 12.0, FontSize::Small, TEXT_ACCENT);
@@ -2486,7 +2549,7 @@ impl DawState {
             renderer.draw_text(&info, screen_w - 720.0, 12.0, FontSize::Small, TEXT_ACCENT);
         } else {
             let hints = if self.current_page == DawPage::PianoRoll {
-                "Space=Play  S=Stop  1-8=Ch  P=Preset  M=Mute  G=Grid  Click=Note  Del=Remove  Tab=Setup"
+                "Space=Play  S=Stop  1-8=Ch  G=Grid  Shift+G=Quantize  L=Loop  Click=Note  Tab=Setup"
             } else {
                 "Click=Edit  Drag=Adjust  Left/Right=Navigate  Esc=Back  P=Preset  Ctrl+S=Save"
             };
@@ -2570,10 +2633,16 @@ impl DawState {
         let first_tick = (self.scroll_x / tick_width) as u64;
         let visible_ticks = (roll_w / tick_width) as u64 + 1;
 
-        for tick_offset in 0..visible_ticks {
-            let tick = first_tick + tick_offset;
+        // Step through at the snap grid resolution for subdivision lines.
+        let grid_step = self.snap_ticks.max(1);
+        let first_grid = (first_tick / grid_step) * grid_step;
+        let last_grid = first_tick + visible_ticks + grid_step;
+
+        let mut tick = first_grid;
+        while tick <= last_grid {
             let x = PIANO_KEY_WIDTH + tick as f32 * tick_width - self.scroll_x;
             if x < PIANO_KEY_WIDTH || x > screen_w {
+                tick += grid_step;
                 continue;
             }
 
@@ -2583,7 +2652,7 @@ impl DawState {
             } else if tick.is_multiple_of(self.project.ticks_per_beat as u64) {
                 GRID_BEAT
             } else {
-                continue; // Only draw beat and bar lines.
+                GRID_LINE
             };
             renderer.draw_vline(x, roll_y, roll_y + roll_h, color);
 
@@ -2593,6 +2662,7 @@ impl DawState {
                 let bar_label = format!("{bar}");
                 renderer.draw_text(&bar_label, x + 2.0, roll_y + 2.0, FontSize::Small, TEXT_SECONDARY);
             }
+            tick += grid_step;
         }
 
         // Render notes for the selected channel.
@@ -2630,6 +2700,31 @@ impl DawState {
                 Color::rgba(255, 255, 255, 40)
             };
             renderer.draw_rect(note_x, note_y, note_w, NOTE_HEIGHT - 1.0, border);
+        }
+
+        // Loop region markers.
+        if self.transport.loop_enabled && self.transport.loop_end > self.transport.loop_start {
+            let start_x = PIANO_KEY_WIDTH + self.transport.loop_start as f32 * tick_width - self.scroll_x;
+            let end_x = PIANO_KEY_WIDTH + self.transport.loop_end as f32 * tick_width - self.scroll_x;
+            // Shade the loop region.
+            let vis_start = start_x.max(PIANO_KEY_WIDTH);
+            let vis_end = end_x.min(screen_w);
+            if vis_end > vis_start {
+                renderer.fill_rect(
+                    vis_start,
+                    roll_y,
+                    vis_end - vis_start,
+                    roll_h,
+                    Color::rgba(80, 200, 120, 15),
+                );
+            }
+            // Draw loop boundary lines.
+            if start_x >= PIANO_KEY_WIDTH && start_x <= screen_w {
+                renderer.draw_vline(start_x, roll_y, roll_y + roll_h, LOOP_MARKER);
+            }
+            if end_x >= PIANO_KEY_WIDTH && end_x <= screen_w {
+                renderer.draw_vline(end_x, roll_y, roll_y + roll_h, LOOP_MARKER);
+            }
         }
 
         // Playhead.

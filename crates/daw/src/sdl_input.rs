@@ -98,6 +98,7 @@ fn translate_shift_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
         SDL_SCANCODE_TAB => Some(DawInput::PrevPage),
         SDL_SCANCODE_LEFT => Some(DawInput::ShiftLeft),
         SDL_SCANCODE_RIGHT => Some(DawInput::ShiftRight),
+        SDL_SCANCODE_G => Some(DawInput::Quantize),
         _ => None,
     }
 }
@@ -132,6 +133,7 @@ fn translate_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
         SDL_SCANCODE_A => Some(DawInput::Insert),
         SDL_SCANCODE_B => Some(DawInput::ToggleBypass),
         SDL_SCANCODE_G => Some(DawInput::GridCycle),
+        SDL_SCANCODE_L => Some(DawInput::ToggleLoop),
         _ => None,
     }
 }

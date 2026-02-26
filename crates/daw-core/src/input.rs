@@ -68,4 +68,8 @@ pub enum DawInput {
     TempoUp,
     /// Decrease tempo by 1 BPM.
     TempoDown,
+    /// Quantize selected notes to current grid.
+    Quantize,
+    /// Toggle loop mode on/off.
+    ToggleLoop,
 }

@@ -31,6 +31,7 @@ pub const GRID_LINE: Color = Color::rgb(60, 60, 68);
 pub const GRID_BEAT: Color = Color::rgb(80, 80, 90);
 pub const GRID_BAR: Color = Color::rgb(100, 100, 115);
 pub const PLAYHEAD: Color = Color::rgb(255, 80, 80);
+pub const LOOP_MARKER: Color = Color::rgb(80, 200, 120);
 pub const TEXT_PRIMARY: Color = Color::rgb(220, 220, 230);
 pub const TEXT_SECONDARY: Color = Color::rgb(150, 150, 165);
 pub const TEXT_ACCENT: Color = Color::rgb(100, 180, 255);

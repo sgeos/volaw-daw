@@ -1101,8 +1101,17 @@ impl DawState {
             return;
         }
 
-        // Piano roll grid click (to the right of the piano keys).
+        // Piano key click (audition note).
         let roll_y = content_y;
+        if my >= roll_y && my < vel_lane_y && mx < PIANO_KEY_WIDTH {
+            let pitch = self.y_to_pitch(my, roll_y);
+            if (LOWEST_NOTE..LOWEST_NOTE + VISIBLE_NOTE_RANGE).contains(&pitch) {
+                self.preview_note(pitch, DEFAULT_VELOCITY);
+            }
+            return;
+        }
+
+        // Piano roll grid click (to the right of the piano keys).
         if my >= roll_y && mx >= PIANO_KEY_WIDTH {
             let tick = self.x_to_tick(mx);
             let pitch = self.y_to_pitch(my, roll_y);
@@ -2960,6 +2969,13 @@ impl DawState {
                 name.clone()
             };
             renderer.draw_text(&label, x + 8.0, y + 7.0, FontSize::Small, color);
+
+            // Note count.
+            let note_count = self.tracks[i].notes.len();
+            if note_count > 0 {
+                let count_text = format!("{note_count}");
+                renderer.draw_text(&count_text, x + tab_w - 60.0, y + 7.0, FontSize::Small, TEXT_SECONDARY);
+            }
 
             if self.solo_channel == Some(i) {
                 renderer.draw_text("S", x + tab_w - 40.0, y + 7.0, FontSize::Small, Color::rgb(255, 200, 80));

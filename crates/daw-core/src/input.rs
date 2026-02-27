@@ -86,4 +86,6 @@ pub enum DawInput {
     Home,
     /// Cycle time signature (Shift+T): 4/4 -> 3/4 -> 6/4 -> 5/4 -> 7/4 -> 4/4.
     CycleTimeSig,
+    /// Export project as Standard MIDI File (Ctrl+E).
+    ExportMidi,
 }

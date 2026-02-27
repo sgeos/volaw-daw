@@ -549,6 +549,29 @@ impl DawState {
         }
     }
 
+    /// Export all tracks as a Standard MIDI File (.mid).
+    fn export_midi(&mut self) {
+        let filename = self.project.name.replace(' ', "_").to_lowercase();
+        let midi_data = daw_core::smf::build_smf(&self.tracks, self.project.ticks_per_beat);
+        let export_dir = self.project_root.join("exports");
+        if let Err(e) = std::fs::create_dir_all(&export_dir) {
+            self.status_message = Some(format!("Export failed: {e}"));
+            eprintln!("[ERROR] Export failed: {e}");
+            return;
+        }
+        let path = export_dir.join(format!("{filename}.mid"));
+        match std::fs::write(&path, &midi_data) {
+            Ok(()) => {
+                self.status_message = Some(format!("Exported: {}", path.display()));
+                eprintln!("[INFO] MIDI exported to {} ({} bytes)", path.display(), midi_data.len());
+            }
+            Err(e) => {
+                self.status_message = Some(format!("Export failed: {e}"));
+                eprintln!("[ERROR] MIDI export failed: {e}");
+            }
+        }
+    }
+
     /// Load Keleos scripts for all channels that have a script_file set.
     ///
     /// Reads each script file from the scripts/ folder under the project root
@@ -756,6 +779,7 @@ impl DawState {
                 }
             }
             DawInput::Save => self.save(),
+            DawInput::ExportMidi => self.export_midi(),
             DawInput::Undo => self.undo(),
             DawInput::Redo => self.redo(),
             DawInput::NextPreset => self.cycle_preset(1),

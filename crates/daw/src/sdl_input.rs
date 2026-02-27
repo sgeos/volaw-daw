@@ -88,6 +88,7 @@ fn translate_ctrl_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
         SDL_SCANCODE_C => Some(DawInput::Copy),
         SDL_SCANCODE_V => Some(DawInput::Paste),
         SDL_SCANCODE_D => Some(DawInput::Duplicate),
+        SDL_SCANCODE_E => Some(DawInput::ExportMidi),
         SDL_SCANCODE_A => Some(DawInput::SelectAll),
         SDL_SCANCODE_Q => Some(DawInput::Quit),
         _ => None,

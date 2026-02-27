@@ -1339,9 +1339,14 @@ impl DawState {
                     self.pedal_picker_chain = 0;
                     self.pedal_picker_scroll = 0.0;
                 } else if self.current_page == DawPage::StereoChain {
-                    // Default to left chain. Can be toggled.
                     self.pedal_picker_open = true;
-                    let chain = if let Some((c, _)) = self.selected_pedal { c } else { 1 };
+                    let chain = if let Some((c, _)) = self.selected_pedal {
+                        c
+                    } else if self.pedal_picker_chain == 2 {
+                        2
+                    } else {
+                        1
+                    };
                     self.pedal_picker_chain = chain;
                     self.pedal_picker_scroll = 0.0;
                 }
@@ -2616,6 +2621,10 @@ impl DawState {
             }
             None => {
                 self.selected_pedal = None;
+                // Remember which chain section was clicked so 'A' targets it.
+                if chain_id == 1 || chain_id == 2 {
+                    self.pedal_picker_chain = chain_id;
+                }
             }
         }
     }

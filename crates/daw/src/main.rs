@@ -2497,7 +2497,7 @@ impl DawState {
             return;
         }
         let pedals_y = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP + 48.0;
-        self.handle_pedal_chain_click(mx, my, pedals_y, 0);
+        self.handle_pedal_chain_click(mx, my, pedals_y, 0, SETUP_MARGIN);
     }
 
     /// Handle a click on the stereo chain page (positional controls and
@@ -2557,21 +2557,23 @@ impl DawState {
         let right_x = SETUP_MARGIN + half_w + SETUP_MARGIN;
 
         if mx < right_x {
-            self.handle_pedal_chain_click(mx, my, pedals_y, 1);
+            self.handle_pedal_chain_click(mx, my, pedals_y, 1, SETUP_MARGIN);
         } else {
-            self.handle_pedal_chain_click(mx, my, pedals_y, 2);
+            self.handle_pedal_chain_click(mx, my, pedals_y, 2, right_x);
         }
     }
 
     /// Handle a click within a pedal chain layout.
     ///
     /// `chain_id`: 0 = pre (mono), 1 = post-left, 2 = post-right.
+    /// `start_x`: the left edge x coordinate where this chain's pedals begin.
     fn handle_pedal_chain_click(
         &mut self,
         mx: f32,
         my: f32,
         pedals_y: f32,
         chain_id: u8,
+        start_x: f32,
     ) {
         let ch = self.selected_channel;
         let pedals = match chain_id {
@@ -2586,7 +2588,7 @@ impl DawState {
         let bar_inset = 8.0;
         let bar_w = pedal_w - 16.0;
         let header_h = 28.0;
-        let mut px = SETUP_MARGIN;
+        let mut px = start_x;
 
         // Scan for hit targets without mutable self access.
         enum HitKind {
@@ -3068,13 +3070,15 @@ impl DawState {
 
         if self.current_page == DawPage::StereoChain {
             let y0 = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP;
-            let chains_y = y0 + 44.0 + SETUP_ROW_GAP;
+            let ch = self.selected_channel;
+            let pos_rows = if self.effects[ch].position_3d_enabled { 4 } else { 2 };
+            let pos_h = SECTION_HEADER_H + pos_rows as f32 * PARAM_ROW_H + 8.0;
+            let chains_y = y0 + pos_h + SETUP_ROW_GAP;
             let left_header_h = 28.0;
             let pedals_y = chains_y + left_header_h + 4.0;
 
             let half_w = (screen_w - 3.0 * SETUP_MARGIN) / 2.0;
             let right_x = SETUP_MARGIN + half_w + SETUP_MARGIN;
-            let ch = self.selected_channel;
 
             if mx < right_x {
                 return find_pedal_param_in_chain(

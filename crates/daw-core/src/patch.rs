@@ -151,7 +151,7 @@ impl Default for PatchConfig {
             velocity_filter_depth: 0.0,
             velocity_envelope_depth: 0.0,
             velocity_pitch_depth: 0.0,
-            mod_routings: Vec::new(),
+            mod_routings: default_mod_routings(),
         }
     }
 }
@@ -418,6 +418,35 @@ fn default_glide_time() -> f64 {
 }
 fn default_voice_mode() -> String {
     String::from("high_1")
+}
+
+/// Return the three standard MS-20 modulation routings.
+///
+/// These match `ModMatrix::ms20_default()` in the audio crate:
+/// - EG1 -> HPF cutoff (depth 2.0 octaves)
+/// - EG2 -> LPF cutoff (depth 4.0 octaves)
+/// - EG2 -> VCA level (depth 1.0, full envelope control)
+///
+/// The EG2 -> VCA routing is critical for producing audible output.
+/// Without it, the VCA multiplier is zero and the channel is silent.
+fn default_mod_routings() -> Vec<ModRoutingConfig> {
+    alloc::vec![
+        ModRoutingConfig {
+            source: String::from("eg1"),
+            dest: String::from("hpf_cutoff"),
+            depth: 2.0,
+        },
+        ModRoutingConfig {
+            source: String::from("eg2"),
+            dest: String::from("lpf_cutoff"),
+            depth: 4.0,
+        },
+        ModRoutingConfig {
+            source: String::from("eg2"),
+            dest: String::from("vca_level"),
+            depth: 1.0,
+        },
+    ]
 }
 
 #[cfg(test)]

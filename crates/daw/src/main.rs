@@ -712,6 +712,9 @@ impl DawState {
         let current_ticks = self.transport.position_ticks;
         let prev_ticks = self.prev_ticks;
 
+        // Detect loop wrap: transport jumped backward.
+        let looped = current_ticks < prev_ticks;
+
         // Compute beat position for scripts.
         let beat = current_ticks as f64 / self.transport.ticks_per_beat as f64;
 
@@ -724,8 +727,18 @@ impl DawState {
         };
         self.prev_ticks = current_ticks;
 
+        // On loop wrap, release all active notes so nothing gets stuck.
+        if looped {
+            for ch in 0..8 {
+                if !self.active_notes[ch].is_empty() {
+                    engine.channels[ch].synth.note_off();
+                    self.active_notes[ch].clear();
+                }
+            }
+        }
+
         // Trigger metronome clicks on beat boundaries.
-        if engine.metronome.enabled && prev_ticks < current_ticks {
+        if engine.metronome.enabled && !looped && prev_ticks < current_ticks {
             let tpb = self.transport.ticks_per_beat as u64;
             let prev_beat = prev_ticks / tpb;
             let current_beat = current_ticks / tpb;
@@ -741,7 +754,12 @@ impl DawState {
         }
 
         for ch in 0..8 {
+            // Release active notes on muted channels instead of skipping.
             if self.project.channels[ch].muted {
+                if !self.active_notes[ch].is_empty() {
+                    engine.channels[ch].synth.note_off();
+                    self.active_notes[ch].clear();
+                }
                 continue;
             }
 
@@ -765,6 +783,7 @@ impl DawState {
             // Check if any active notes should end (per-note release for polyphony).
             self.active_notes[ch].retain(|&note_idx| {
                 if note_idx >= track.notes.len() {
+                    engine.channels[ch].synth.note_off();
                     return false;
                 }
                 let note = &track.notes[note_idx];
@@ -778,9 +797,13 @@ impl DawState {
                 }
             });
 
-            // Check if new notes should start in the tick range [prev_ticks, current_ticks).
+            // After a loop wrap, scan from the loop start (0 if no explicit
+            // loop_start) up to the current position for new note-ons.
+            let scan_start = if looped { self.transport.loop_start } else { prev_ticks };
+
+            // Check if new notes should start in the tick range [scan_start, current_ticks).
             for (i, note) in track.notes.iter().enumerate() {
-                if note.tick >= prev_ticks && note.tick < current_ticks {
+                if note.tick >= scan_start && note.tick < current_ticks {
                     let freq = MidiTrack::note_to_freq(note.pitch);
                     let vel = note.velocity as f64 / 127.0;
                     engine.channels[ch].synth.note_on_with_velocity(freq, vel);
@@ -803,8 +826,12 @@ impl DawState {
     }
 
     /// Stop all active notes across all channels.
+    ///
+    /// Uses a blocking lock instead of try_lock to guarantee that note-off
+    /// events are delivered. This is called during user-initiated stop/reset
+    /// where a brief block is acceptable to prevent stuck notes.
     fn stop_all_notes(&mut self) {
-        let Ok(mut engine) = self.engine.try_lock() else {
+        let Ok(mut engine) = self.engine.lock() else {
             return;
         };
         for ch in 0..8 {
@@ -834,10 +861,12 @@ impl DawState {
         if let Some((ch, freq, start)) = self.preview_note
             && start.elapsed() >= std::time::Duration::from_millis(200)
         {
+            // Only clear the preview state after a successful note-off.
+            // If the lock fails, retry next frame to avoid stuck notes.
             if let Ok(mut engine) = self.engine.try_lock() {
                 engine.channels[ch].synth.note_off_freq(freq);
+                self.preview_note = None;
             }
-            self.preview_note = None;
         }
     }
 

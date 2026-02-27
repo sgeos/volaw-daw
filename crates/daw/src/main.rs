@@ -436,6 +436,8 @@ struct DawState {
     pedal_picker_chain: u8,
     /// Scroll offset for the pedal picker overlay.
     pedal_picker_scroll: f32,
+    /// Preview note: (channel, frequency, timestamp in ms) for auto-off after 200ms.
+    preview_note: Option<(usize, f64, std::time::Instant)>,
 }
 
 /// Maximum undo history depth.
@@ -477,6 +479,7 @@ impl DawState {
             pedal_picker_open: false,
             pedal_picker_chain: 0,
             pedal_picker_scroll: 0.0,
+            preview_note: None,
         }
     }
 
@@ -657,6 +660,9 @@ impl DawState {
                 if !cmds.is_empty() {
                     script::apply_commands(&mut engine, ch, &cmds);
                 }
+                if let Some(err) = &runner.last_error {
+                    self.status_message = Some(format!("Script Ch{}: {err}", ch + 1));
+                }
             }
 
             let track = &self.tracks[ch];
@@ -710,6 +716,41 @@ impl DawState {
                 engine.channels[ch].synth.note_off();
                 self.active_notes[ch].clear();
             }
+        }
+    }
+
+    /// Play a brief preview of a note on the selected channel (for note placement feedback).
+    fn preview_note(&mut self, pitch: u8, velocity: u8) {
+        // Stop any existing preview first.
+        self.stop_preview();
+        let ch = self.selected_channel;
+        let freq = MidiTrack::note_to_freq(pitch);
+        let vel = velocity as f64 / 127.0;
+        if let Ok(mut engine) = self.engine.try_lock() {
+            engine.channels[ch].synth.note_on_with_velocity(freq, vel);
+            engine.channels[ch].enabled = true;
+        }
+        self.preview_note = Some((ch, freq, std::time::Instant::now()));
+    }
+
+    /// Stop any currently playing preview note if its duration has elapsed.
+    fn check_preview_timeout(&mut self) {
+        if let Some((ch, freq, start)) = self.preview_note
+            && start.elapsed() >= std::time::Duration::from_millis(200)
+        {
+            if let Ok(mut engine) = self.engine.try_lock() {
+                engine.channels[ch].synth.note_off_freq(freq);
+            }
+            self.preview_note = None;
+        }
+    }
+
+    /// Immediately stop any playing preview note.
+    fn stop_preview(&mut self) {
+        if let Some((ch, freq, _)) = self.preview_note.take()
+            && let Ok(mut engine) = self.engine.try_lock()
+        {
+            engine.channels[ch].synth.note_off_freq(freq);
         }
     }
 
@@ -1109,6 +1150,10 @@ impl DawState {
                     .position(|n| n.tick == tick && n.pitch == pitch);
                 if let Some(i) = idx {
                     self.select_note(i);
+                }
+                // Preview the note (only when not playing back).
+                if !self.transport.playing {
+                    self.preview_note(pitch, DEFAULT_VELOCITY);
                 }
             }
         }
@@ -4046,6 +4091,9 @@ fn main() {
 
         // Advance playback (note events to audio engine).
         state.advance_playback();
+
+        // Auto-off preview notes after timeout.
+        state.check_preview_timeout();
 
         // Render.
         state.render(&mut renderer);

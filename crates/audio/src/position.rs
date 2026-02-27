@@ -70,6 +70,13 @@ pub struct PositionalStage {
     /// Distance attenuation lowpass filter for the right channel.
     distance_lpf_right: Biquad,
 
+    /// Elevation high-shelf filter for the left channel.
+    /// Simulates pinna filtering: above boosts highs, below cuts highs.
+    elevation_shelf_left: Biquad,
+
+    /// Elevation high-shelf filter for the right channel.
+    elevation_shelf_right: Biquad,
+
     /// Cached sample rate for filter coefficient updates.
     cached_sample_rate: f64,
 }
@@ -86,6 +93,8 @@ impl PositionalStage {
             distance: 0.0,
             distance_lpf_left: Biquad::new(BiquadType::Lowpass, 20000.0, 0.707, sample_rate),
             distance_lpf_right: Biquad::new(BiquadType::Lowpass, 20000.0, 0.707, sample_rate),
+            elevation_shelf_left: Biquad::passthrough(),
+            elevation_shelf_right: Biquad::passthrough(),
             cached_sample_rate: sample_rate,
         }
     }
@@ -178,24 +187,51 @@ impl PositionalStage {
         // Combined LPF frequency.
         let lpf_freq = rear_lpf_freq.min(dist_lpf_freq).max(200.0);
 
-        // Elevation: apply a subtle spectral tilt.
-        // Above: slight high boost. Below: slight high cut.
+        // Elevation: spectral tilt via high-shelf filter to simulate pinna
+        // filtering. Above (+90): high-shelf boost. Below (-90): high-shelf cut.
+        // Range is +-8 dB at 3 kHz, clearly audible across the full elevation range.
         let elev = self.elevation_deg.clamp(-90.0, 90.0);
-        let elev_factor = 1.0 + elev / 90.0 * 0.15; // 0.85 to 1.15.
+        let elev_gain_db = elev / 90.0 * 8.0; // -8 dB to +8 dB.
 
-        // Update distance lowpass filters.
+        // Update distance lowpass and elevation shelf filters.
         if (sample_rate - self.cached_sample_rate).abs() > 1.0 || self.active {
             self.distance_lpf_left
                 .set_coefficients(BiquadType::Lowpass, lpf_freq, 0.707, sample_rate);
             self.distance_lpf_right
                 .set_coefficients(BiquadType::Lowpass, lpf_freq, 0.707, sample_rate);
+            if elev_gain_db.abs() > 0.1 {
+                self.elevation_shelf_left.set_coefficients(
+                    BiquadType::HighShelf {
+                        gain_db: elev_gain_db,
+                    },
+                    3000.0,
+                    0.707,
+                    sample_rate,
+                );
+                self.elevation_shelf_right.set_coefficients(
+                    BiquadType::HighShelf {
+                        gain_db: elev_gain_db,
+                    },
+                    3000.0,
+                    0.707,
+                    sample_rate,
+                );
+            } else {
+                // Near zero elevation: passthrough (no shelf).
+                self.elevation_shelf_left =
+                    Biquad::passthrough();
+                self.elevation_shelf_right =
+                    Biquad::passthrough();
+            }
             self.cached_sample_rate = sample_rate;
         }
 
         for i in 0..len {
-            let sample = mono_in[i] * dist_gain * elev_factor;
-            left_out[i] = self.distance_lpf_left.tick(sample * gain_l);
-            right_out[i] = self.distance_lpf_right.tick(sample * gain_r);
+            let sample = mono_in[i] * dist_gain;
+            let left_sample = self.distance_lpf_left.tick(sample * gain_l);
+            let right_sample = self.distance_lpf_right.tick(sample * gain_r);
+            left_out[i] = self.elevation_shelf_left.tick(left_sample);
+            right_out[i] = self.elevation_shelf_right.tick(right_sample);
         }
     }
 
@@ -203,6 +239,8 @@ impl PositionalStage {
     pub fn reset(&mut self) {
         self.distance_lpf_left.reset();
         self.distance_lpf_right.reset();
+        self.elevation_shelf_left.reset();
+        self.elevation_shelf_right.reset();
     }
 }
 
@@ -346,6 +384,80 @@ mod tests {
             left_energy > right_energy * 2.0,
             "90 deg azimuth should favor left"
         );
+    }
+
+    #[test]
+    fn elevation_above_boosts_highs() {
+        let sr = 48000.0;
+        // Generate a broadband test signal (white-ish noise approximation
+        // via a high-frequency sine to exercise the shelf filter).
+        let mut mono = [0.0_f64; 2048];
+        for (i, sample) in mono.iter_mut().enumerate() {
+            // Mix of 200 Hz (low) and 8000 Hz (high).
+            *sample = 0.5 * libm::sin(2.0 * core::f64::consts::PI * 200.0 * i as f64 / sr)
+                + 0.5 * libm::sin(2.0 * core::f64::consts::PI * 8000.0 * i as f64 / sr);
+        }
+
+        // Process with elevation +90 (above).
+        let mut pos_above = PositionalStage::new(sr);
+        pos_above.active = true;
+        pos_above.position_3d_enabled = true;
+        pos_above.elevation_deg = 90.0;
+        let mut above_l = [0.0_f64; 2048];
+        let mut above_r = [0.0_f64; 2048];
+        pos_above.process(&mono, &mut above_l, &mut above_r, sr);
+
+        // Process with elevation -90 (below).
+        let mut pos_below = PositionalStage::new(sr);
+        pos_below.active = true;
+        pos_below.position_3d_enabled = true;
+        pos_below.elevation_deg = -90.0;
+        let mut below_l = [0.0_f64; 2048];
+        let mut below_r = [0.0_f64; 2048];
+        pos_below.process(&mono, &mut below_l, &mut below_r, sr);
+
+        // Measure energy in the settled portion (skip first 512 samples for
+        // filter transient). Above should have more energy due to +8 dB
+        // high-shelf boost on the 8 kHz component.
+        let above_energy: f64 = above_l[512..].iter().map(|s| s * s).sum();
+        let below_energy: f64 = below_l[512..].iter().map(|s| s * s).sum();
+        assert!(
+            above_energy > below_energy * 1.5,
+            "Elevation +90 (above) should have more energy than -90 (below) \
+             due to high-shelf boost: above={above_energy:.4}, below={below_energy:.4}"
+        );
+    }
+
+    #[test]
+    fn elevation_zero_is_neutral() {
+        let sr = 48000.0;
+        let len = 1024;
+        let mut mono = [0.0_f64; 1024];
+        for (i, sample) in mono.iter_mut().enumerate().take(len) {
+            *sample = libm::sin(2.0 * core::f64::consts::PI * 1000.0 * i as f64 / sr);
+        }
+
+        // Elevation at 0 should be passthrough (no shelf filter applied).
+        let mut pos = PositionalStage::new(sr);
+        pos.active = true;
+        pos.position_3d_enabled = true;
+        pos.elevation_deg = 0.0;
+        let mut left = [0.0_f64; 1024];
+        let mut right = [0.0_f64; 1024];
+        pos.process(&mono, &mut left, &mut right, sr);
+
+        // Compare with a reference at elevation 0 (should be roughly 0.5 * mono
+        // since azimuth 0 gives gain_l = 0.5).
+        let expected_gain = 0.5;
+        for i in 256..len {
+            let expected = mono[i] * expected_gain;
+            assert!(
+                (left[i] - expected).abs() < 0.05,
+                "At elevation 0, output should match simple gain: \
+                 sample {i}, got {}, expected {expected}",
+                left[i]
+            );
+        }
     }
 
     #[test]

@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::channel::{clamp_volume, Channel};
+use crate::limiter::LookaheadLimiter;
 use crate::metronome::Metronome;
 
 /// Number of synthesizer channels.
@@ -74,6 +75,8 @@ pub struct AudioEngine {
     pub sample_rate: u32,
     /// Metronome click generator (mixed into output independently of channels).
     pub metronome: Metronome,
+    /// Master bus lookahead brickwall limiter.
+    pub limiter: LookaheadLimiter,
     /// Scratch buffer for per-channel mono rendering.
     mono_buffer: Vec<f64>,
     /// Scratch buffer for per-channel left stereo output.
@@ -102,6 +105,7 @@ impl AudioEngine {
             master_volume: 0.8,
             sample_rate,
             metronome: Metronome::new(),
+            limiter: LookaheadLimiter::new(sample_rate as f64),
             mono_buffer: vec![0.0f64; 1024],
             left_buffer: vec![0.0f64; 1024],
             right_buffer: vec![0.0f64; 1024],
@@ -194,6 +198,9 @@ impl AudioEngine {
         for s in buffer.iter_mut() {
             *s *= mv;
         }
+
+        // Brickwall limiter: prevent output from exceeding 0 dBFS.
+        self.limiter.process_interleaved(buffer);
     }
 
     /// Fill a stereo interleaved f32 buffer for SDL3 interoperability.

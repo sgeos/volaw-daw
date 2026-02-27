@@ -56,7 +56,7 @@ cargo run -p daw -- --root my_music --import-midi track.mid --import-channel 3
 | S | Stop playback |
 | 0 / Home | Reset to beginning |
 | 1-8 | Select channel |
-| Tab | Next page (Piano Roll, Synth, Mono Chain, Stereo Chain) |
+| Tab | Next page (Piano Roll, Overview, Synth, Mono Chain, Stereo Chain) |
 | Shift+Tab | Previous page |
 | P | Next preset |
 | Shift+P | Previous preset |
@@ -120,6 +120,7 @@ cargo run -p daw -- --root my_music --import-midi track.mid --import-channel 3
 - **8-channel MIDI sequencer** with per-channel patch, effect chain, mute, solo, volume, and pan
 - **Piano roll editor** spanning C2 to C7 (5 octaves, 60 notes) with note snap quantization
 - **Velocity lane** below the piano roll for visual velocity feedback and direct editing
+- **Multi-track overview** page showing all 8 channels with note blocks, bar/beat lines, and playhead
 - **Time signature support** with Shift+T cycling (4/4, 3/4, 6/4, 5/4, 7/4)
 - **Note preview** with 200ms audition on placement and piano key click
 - **Per-channel note counts** displayed on the channel bar

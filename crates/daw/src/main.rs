@@ -1578,7 +1578,7 @@ impl DawState {
 
     /// Adjust the project tempo by a given BPM delta, clamped to 20-300 BPM.
     fn adjust_tempo(&mut self, delta: f64) {
-        self.project.tempo = (self.project.tempo + delta).clamp(20.0, 300.0);
+        self.project.tempo = (self.project.tempo + delta).clamp(1.0, 1200.0);
         self.transport.tempo = self.project.tempo;
         self.status_message = Some(format!("{:.0} BPM", self.project.tempo));
     }
@@ -1612,7 +1612,7 @@ impl DawState {
             }
             Some(ToolbarEdit::Bpm) => {
                 if let Ok(bpm) = self.edit_buffer.trim().parse::<f64>() {
-                    let clamped = bpm.clamp(20.0, 300.0);
+                    let clamped = bpm.clamp(1.0, 1200.0);
                     self.project.tempo = clamped;
                     self.transport.tempo = clamped;
                     self.status_message = Some(format!("{clamped:.0} BPM"));

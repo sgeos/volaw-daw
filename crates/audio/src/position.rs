@@ -250,6 +250,114 @@ impl Default for PositionalStage {
     }
 }
 
+/// Compute 3D positional coordinates from Keplerian orbital elements.
+///
+/// Given a phase (0.0 to 1.0 representing one full orbit) and five orbital
+/// parameters, returns (azimuth_deg, elevation_deg, distance) suitable for
+/// feeding directly into the `PositionalStage` 3D processing.
+///
+/// ## Coordinate System
+///
+/// - x = front (positive toward listener front)
+/// - y = left (positive toward listener left)
+/// - z = up (positive above listener)
+///
+/// This matches the existing 3D position convention where azimuth 0 = front,
+/// 90 = left, 180 = rear, 270 = right.
+///
+/// ## Special Cases
+///
+/// A circular equatorial orbit (e=0, i=0) produces a constant-distance
+/// horizontal sweep, equivalent to an autopanning "lighthouse" effect.
+///
+/// ## Parameters
+///
+/// - `phase`: Position along the orbit, 0.0 to 1.0 (wraps).
+/// - `a`: Semi-major axis, 0.0 to 1.0 (maps to distance scale).
+/// - `e`: Eccentricity, 0.0 to < 1.0 (0 = circular).
+/// - `i_deg`: Inclination in degrees (0 = equatorial, 90 = polar).
+/// - `big_omega_deg`: Longitude of ascending node in degrees.
+/// - `small_omega_deg`: Argument of periapsis in degrees.
+pub fn compute_orbital_position(
+    phase: f64,
+    a: f64,
+    e: f64,
+    i_deg: f64,
+    big_omega_deg: f64,
+    small_omega_deg: f64,
+) -> (f64, f64, f64) {
+    let two_pi = 2.0 * core::f64::consts::PI;
+    let deg_to_rad = core::f64::consts::PI / 180.0;
+
+    // Clamp parameters to valid ranges.
+    let a = a.clamp(0.0, 1.0);
+    let e = e.clamp(0.0, 0.99);
+    let i_rad = i_deg.clamp(0.0, 180.0) * deg_to_rad;
+    let big_omega = big_omega_deg * deg_to_rad;
+    let small_omega = small_omega_deg * deg_to_rad;
+
+    // Mean anomaly from phase.
+    let m = (phase % 1.0) * two_pi;
+
+    // Solve Kepler equation: E - e * sin(E) = M via Newton-Raphson.
+    let mut ea = m; // Initial guess: E = M.
+    for _ in 0..10 {
+        let f = ea - e * libm::sin(ea) - m;
+        let fp = 1.0 - e * libm::cos(ea);
+        if fp.abs() > 1e-12 {
+            ea -= f / fp;
+        }
+    }
+
+    // True anomaly from eccentric anomaly.
+    let half_e = ea * 0.5;
+    let nu = 2.0
+        * libm::atan2(
+            libm::sqrt(1.0 + e) * libm::sin(half_e),
+            libm::sqrt(1.0 - e) * libm::cos(half_e),
+        );
+
+    // Orbital radius.
+    let denom = 1.0 + e * libm::cos(nu);
+    let r = if denom.abs() > 1e-12 {
+        a * (1.0 - e * e) / denom
+    } else {
+        a
+    };
+
+    // Perifocal to reference frame rotation.
+    // Combined angle: argument of latitude = nu + small_omega.
+    let u = nu + small_omega;
+    let cos_u = libm::cos(u);
+    let sin_u = libm::sin(u);
+    let cos_o = libm::cos(big_omega);
+    let sin_o = libm::sin(big_omega);
+    let cos_i = libm::cos(i_rad);
+    let sin_i = libm::sin(i_rad);
+
+    let x = r * (cos_u * cos_o - sin_u * sin_o * cos_i);
+    let y = r * (cos_u * sin_o + sin_u * cos_o * cos_i);
+    let z = r * (sin_u * sin_i);
+
+    // Convert to spherical coordinates.
+    let dist = libm::sqrt(x * x + y * y + z * z);
+
+    if dist < 1e-12 {
+        return (0.0, 0.0, 0.0);
+    }
+
+    let mut azimuth_rad = libm::atan2(y, x);
+    if azimuth_rad < 0.0 {
+        azimuth_rad += two_pi;
+    }
+    let azimuth_deg = azimuth_rad / deg_to_rad;
+
+    let elevation_rad = libm::asin((z / dist).clamp(-1.0, 1.0));
+    let elevation_deg = elevation_rad / deg_to_rad;
+
+    (azimuth_deg, elevation_deg, dist.clamp(0.0, 1.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,6 +589,106 @@ mod tests {
         for i in 0..16 {
             assert!(left2[i].abs() < 0.1);
             assert!(right2[i].abs() < 0.1);
+        }
+    }
+
+    // --- Orbital position tests ---
+
+    #[test]
+    fn orbital_circular_equatorial_constant_distance() {
+        // Circular orbit (e=0) in horizontal plane (i=0) should give
+        // constant distance equal to the semi-major axis.
+        let a = 0.5;
+        for step in 0..36 {
+            let phase = step as f64 / 36.0;
+            let (_, _, dist) = compute_orbital_position(phase, a, 0.0, 0.0, 0.0, 0.0);
+            assert!(
+                (dist - a).abs() < 0.01,
+                "Phase {phase}: distance {dist}, expected {a}"
+            );
+        }
+    }
+
+    #[test]
+    fn orbital_circular_equatorial_azimuth_sweeps() {
+        // Circular equatorial orbit should sweep azimuth from 0 to 360
+        // linearly (the "lighthouse" autopan effect).
+        let (az0, el0, _) = compute_orbital_position(0.0, 0.5, 0.0, 0.0, 0.0, 0.0);
+        assert!(az0.abs() < 1.0, "Phase 0 should be near azimuth 0");
+        assert!(el0.abs() < 1.0, "Equatorial orbit should have zero elevation");
+
+        let (az25, _, _) = compute_orbital_position(0.25, 0.5, 0.0, 0.0, 0.0, 0.0);
+        assert!(
+            (az25 - 90.0).abs() < 5.0,
+            "Phase 0.25 should be near azimuth 90: got {az25}"
+        );
+
+        let (az50, _, _) = compute_orbital_position(0.5, 0.5, 0.0, 0.0, 0.0, 0.0);
+        assert!(
+            (az50 - 180.0).abs() < 5.0,
+            "Phase 0.5 should be near azimuth 180: got {az50}"
+        );
+    }
+
+    #[test]
+    fn orbital_polar_orbit_varies_elevation() {
+        // Inclination 90 (polar orbit) should produce elevation changes.
+        let mut max_elev = -100.0_f64;
+        let mut min_elev = 100.0_f64;
+        for step in 0..72 {
+            let phase = step as f64 / 72.0;
+            let (_, el, _) = compute_orbital_position(phase, 0.5, 0.0, 90.0, 0.0, 0.0);
+            max_elev = max_elev.max(el);
+            min_elev = min_elev.min(el);
+        }
+        assert!(
+            max_elev > 45.0,
+            "Polar orbit should reach high elevation: max {max_elev}"
+        );
+        assert!(
+            min_elev < -45.0,
+            "Polar orbit should reach low elevation: min {min_elev}"
+        );
+    }
+
+    #[test]
+    fn orbital_eccentric_distance_varies() {
+        // Eccentric orbit (e=0.8) should have varying distance.
+        let mut min_dist = 2.0_f64;
+        let mut max_dist = -1.0_f64;
+        for step in 0..72 {
+            let phase = step as f64 / 72.0;
+            let (_, _, dist) = compute_orbital_position(phase, 0.8, 0.8, 0.0, 0.0, 0.0);
+            min_dist = min_dist.min(dist);
+            max_dist = max_dist.max(dist);
+        }
+        // Periapsis distance = a * (1 - e) = 0.8 * 0.2 = 0.16
+        // Apoapsis distance = a * (1 + e) = 0.8 * 1.8 = 1.44 (clamped to 1.0)
+        assert!(
+            min_dist < 0.25,
+            "Periapsis should be close: min {min_dist}"
+        );
+        assert!(
+            max_dist > 0.8,
+            "Apoapsis should be far: max {max_dist}"
+        );
+    }
+
+    #[test]
+    fn orbital_no_nan_inf() {
+        // Verify no NaN or Inf for a variety of parameters.
+        let params = [
+            (0.0, 0.5, 0.0, 0.0, 0.0, 0.0),
+            (0.5, 1.0, 0.99, 90.0, 180.0, 270.0),
+            (0.999, 0.01, 0.5, 45.0, 45.0, 45.0),
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            (1.0, 1.0, 0.0, 180.0, 360.0, 360.0),
+        ];
+        for (phase, a, e, i, o, w) in params {
+            let (az, el, dist) = compute_orbital_position(phase, a, e, i, o, w);
+            assert!(az.is_finite(), "NaN/Inf azimuth for params {phase},{a},{e},{i},{o},{w}");
+            assert!(el.is_finite(), "NaN/Inf elevation for params {phase},{a},{e},{i},{o},{w}");
+            assert!(dist.is_finite(), "NaN/Inf distance for params {phase},{a},{e},{i},{o},{w}");
         }
     }
 }

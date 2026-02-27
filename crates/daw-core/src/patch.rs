@@ -199,6 +199,37 @@ pub struct EffectChainConfig {
     /// Distance from listener: 0.0 = closest, 1.0 = farthest.
     #[serde(default)]
     pub position_distance: f64,
+
+    // Orbital positional mode parameters.
+    /// Whether orbital positioning is enabled (overrides manual 3D when active).
+    #[serde(default)]
+    pub orbital_enabled: bool,
+    /// Semi-major axis (orbit size): 0.0 to 1.0.
+    #[serde(default = "default_orbital_semi_major")]
+    pub orbital_semi_major: f64,
+    /// Eccentricity (orbit shape): 0.0 (circular) to 0.99 (very elliptical).
+    #[serde(default)]
+    pub orbital_eccentricity: f64,
+    /// Inclination in degrees: 0.0 (equatorial) to 180.0.
+    #[serde(default)]
+    pub orbital_inclination: f64,
+    /// Longitude of ascending node in degrees: 0.0 to 360.0.
+    #[serde(default)]
+    pub orbital_ascending_node: f64,
+    /// Argument of periapsis in degrees: 0.0 to 360.0.
+    #[serde(default)]
+    pub orbital_periapsis: f64,
+    /// Orbital period in measures (bars): 0.25 to 64.0.
+    #[serde(default = "default_orbital_period")]
+    pub orbital_period: f64,
+}
+
+fn default_orbital_semi_major() -> f64 {
+    0.5
+}
+
+fn default_orbital_period() -> f64 {
+    4.0
 }
 
 impl EffectChainConfig {
@@ -240,6 +271,13 @@ impl Default for EffectChainConfig {
             azimuth: 0.0,
             elevation: 0.0,
             position_distance: 0.0,
+            orbital_enabled: false,
+            orbital_semi_major: 0.5,
+            orbital_eccentricity: 0.0,
+            orbital_inclination: 0.0,
+            orbital_ascending_node: 0.0,
+            orbital_periapsis: 0.0,
+            orbital_period: 4.0,
         }
     }
 }

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use audio::modmatrix::{ModDest, ModRouting, ModSource};
 use audio::vco::{Scale, Waveform};
 use audio::effects::Pedal;
+use audio::position::compute_orbital_position;
 use audio::{AudioEngine, VoiceMode};
 use daw_core::input::DawInput;
 use daw_core::midi::{MidiNote, MidiTrack};
@@ -134,6 +135,12 @@ enum SynthParam {
     Azimuth,
     Elevation,
     PositionDistance,
+    OrbitalSemiMajor,
+    OrbitalEccentricity,
+    OrbitalInclination,
+    OrbitalAscendingNode,
+    OrbitalPeriapsis,
+    OrbitalPeriod,
 }
 
 /// Identifies a parameter being dragged on a setup page.
@@ -419,16 +426,20 @@ fn apply_patch_to_engine(
 }
 
 /// Apply positional stage parameters from EffectChainConfig to the audio engine.
+///
+/// When orbital mode is enabled, `position_3d_enabled` and `active` are forced
+/// true. The actual azimuth, elevation, and distance values are updated
+/// per-frame in `advance_playback()` from the orbital computation.
 fn apply_position_to_engine(
     engine: &mut AudioEngine,
     ch: usize,
     effects: &EffectChainConfig,
 ) {
     let pos = &mut engine.channels[ch].position;
-    let has_position = effects.position_3d_enabled || effects.pan.abs() > 1e-10;
+    let has_position = effects.position_3d_enabled || effects.orbital_enabled || effects.pan.abs() > 1e-10;
     pos.active = has_position;
     pos.pan = effects.pan;
-    pos.position_3d_enabled = effects.position_3d_enabled;
+    pos.position_3d_enabled = effects.position_3d_enabled || effects.orbital_enabled;
     pos.azimuth_deg = effects.azimuth;
     pos.elevation_deg = effects.elevation;
     pos.distance = effects.position_distance;
@@ -921,6 +932,33 @@ impl DawState {
                 } else {
                     engine.metronome.click_beat(sr);
                 }
+            }
+        }
+
+        // Update orbital positions for channels with orbital mode enabled.
+        let tpbar = self.transport.ticks_per_bar() as f64;
+        for ch in 0..8 {
+            if self.effects[ch].orbital_enabled {
+                let period_ticks = self.effects[ch].orbital_period * tpbar;
+                let phase = if period_ticks > 0.0 {
+                    (current_ticks as f64 % period_ticks) / period_ticks
+                } else {
+                    0.0
+                };
+                let (az, el, dist) = compute_orbital_position(
+                    phase,
+                    self.effects[ch].orbital_semi_major,
+                    self.effects[ch].orbital_eccentricity,
+                    self.effects[ch].orbital_inclination,
+                    self.effects[ch].orbital_ascending_node,
+                    self.effects[ch].orbital_periapsis,
+                );
+                let pos = &mut engine.channels[ch].position;
+                pos.active = true;
+                pos.position_3d_enabled = true;
+                pos.azimuth_deg = az;
+                pos.elevation_deg = el;
+                pos.distance = dist;
             }
         }
 
@@ -2510,7 +2548,8 @@ impl DawState {
         // Positional stage geometry (must match render_stereo_chain layout).
         let ch = self.selected_channel;
         let is_3d = self.effects[ch].position_3d_enabled;
-        let pos_rows = if is_3d { 4 } else { 2 };
+        let is_orbital = self.effects[ch].orbital_enabled;
+        let pos_rows = if is_orbital { 7 } else if is_3d { 4 } else { 2 };
         let pos_h = SECTION_HEADER_H + pos_rows as f32 * PARAM_ROW_H + 8.0;
 
         // Check clicks within the positional stage section.
@@ -2519,9 +2558,23 @@ impl DawState {
             let bar_w = full_w - 16.0;
             let mut py = y0 + SECTION_HEADER_H;
 
-            // Mode toggle row.
+            let is_orbital = self.effects[ch].orbital_enabled;
+
+            // Mode toggle row: Pan -> 3D Position -> Orbital -> Pan.
             if hit_row(mx, my, SETUP_MARGIN, py, full_w) {
-                self.effects[ch].position_3d_enabled = !is_3d;
+                if !is_3d && !is_orbital {
+                    // Pan -> 3D Position
+                    self.effects[ch].position_3d_enabled = true;
+                    self.effects[ch].orbital_enabled = false;
+                } else if is_3d && !is_orbital {
+                    // 3D Position -> Orbital
+                    self.effects[ch].position_3d_enabled = true;
+                    self.effects[ch].orbital_enabled = true;
+                } else {
+                    // Orbital -> Pan
+                    self.effects[ch].position_3d_enabled = false;
+                    self.effects[ch].orbital_enabled = false;
+                }
                 if let Ok(mut engine) = self.engine.try_lock() {
                     apply_position_to_engine(&mut engine, ch, &self.effects[ch]);
                 }
@@ -2529,7 +2582,23 @@ impl DawState {
             }
             py += PARAM_ROW_H;
 
-            if is_3d {
+            if is_orbital {
+                // Orbital mode: 6 parameter bars.
+                let bars: [(f32, SynthParam, f64, f64); 6] = [
+                    (py, SynthParam::OrbitalSemiMajor, 0.0, 1.0),
+                    (py + PARAM_ROW_H, SynthParam::OrbitalEccentricity, 0.0, 0.99),
+                    (py + 2.0 * PARAM_ROW_H, SynthParam::OrbitalInclination, 0.0, 180.0),
+                    (py + 3.0 * PARAM_ROW_H, SynthParam::OrbitalAscendingNode, 0.0, 360.0),
+                    (py + 4.0 * PARAM_ROW_H, SynthParam::OrbitalPeriapsis, 0.0, 360.0),
+                    (py + 5.0 * PARAM_ROW_H, SynthParam::OrbitalPeriod, 0.25, 64.0),
+                ];
+                for (bar_y, param, min, max) in bars {
+                    if hit_row(mx, my, SETUP_MARGIN, bar_y, full_w) {
+                        self.start_bar_drag(mx, SETUP_MARGIN + bar_inset, bar_w, param, min, max);
+                        return;
+                    }
+                }
+            } else if is_3d {
                 let bars: [(f32, SynthParam, f64, f64); 3] = [
                     (py, SynthParam::Azimuth, 0.0, 360.0),
                     (py + PARAM_ROW_H, SynthParam::Elevation, -90.0, 90.0),
@@ -3131,6 +3200,12 @@ impl DawState {
             SynthParam::Azimuth => self.effects[ch].azimuth,
             SynthParam::Elevation => self.effects[ch].elevation,
             SynthParam::PositionDistance => self.effects[ch].position_distance,
+            SynthParam::OrbitalSemiMajor => self.effects[ch].orbital_semi_major,
+            SynthParam::OrbitalEccentricity => self.effects[ch].orbital_eccentricity,
+            SynthParam::OrbitalInclination => self.effects[ch].orbital_inclination,
+            SynthParam::OrbitalAscendingNode => self.effects[ch].orbital_ascending_node,
+            SynthParam::OrbitalPeriapsis => self.effects[ch].orbital_periapsis,
+            SynthParam::OrbitalPeriod => self.effects[ch].orbital_period,
         }
     }
 
@@ -3339,12 +3414,21 @@ impl DawState {
             SynthParam::VelocityPitch => patch.velocity_pitch_depth = value,
             SynthParam::GlideTime => patch.glide_time = value,
             SynthParam::Pan | SynthParam::Azimuth | SynthParam::Elevation
-            | SynthParam::PositionDistance => {
+            | SynthParam::PositionDistance
+            | SynthParam::OrbitalSemiMajor | SynthParam::OrbitalEccentricity
+            | SynthParam::OrbitalInclination | SynthParam::OrbitalAscendingNode
+            | SynthParam::OrbitalPeriapsis | SynthParam::OrbitalPeriod => {
                 match param {
                     SynthParam::Pan => self.effects[ch].pan = value,
                     SynthParam::Azimuth => self.effects[ch].azimuth = value,
                     SynthParam::Elevation => self.effects[ch].elevation = value,
                     SynthParam::PositionDistance => self.effects[ch].position_distance = value,
+                    SynthParam::OrbitalSemiMajor => self.effects[ch].orbital_semi_major = value,
+                    SynthParam::OrbitalEccentricity => self.effects[ch].orbital_eccentricity = value,
+                    SynthParam::OrbitalInclination => self.effects[ch].orbital_inclination = value,
+                    SynthParam::OrbitalAscendingNode => self.effects[ch].orbital_ascending_node = value,
+                    SynthParam::OrbitalPeriapsis => self.effects[ch].orbital_periapsis = value,
+                    SynthParam::OrbitalPeriod => self.effects[ch].orbital_period = value,
                     _ => unreachable!(),
                 }
                 if let Ok(mut engine) = self.engine.try_lock() {
@@ -4409,7 +4493,8 @@ impl DawState {
 
         // Positional stage controls.
         let is_3d = chain.position_3d_enabled;
-        let pos_rows = if is_3d { 4 } else { 2 }; // mode toggle + param bars
+        let is_orbital = chain.orbital_enabled;
+        let pos_rows = if is_orbital { 7 } else if is_3d { 4 } else { 2 };
         let pos_h = SECTION_HEADER_H + pos_rows as f32 * PARAM_ROW_H + 8.0;
         draw_section_panel(
             renderer,
@@ -4421,10 +4506,22 @@ impl DawState {
             accent,
         );
         let mut py = y0 + SECTION_HEADER_H;
-        let mode_label = if is_3d { "3D Position" } else { "Pan" };
+        let mode_label = if is_orbital { "Orbital" } else if is_3d { "3D Position" } else { "Pan" };
         draw_param_label(renderer, SETUP_MARGIN, py, full_w, "Mode (click to toggle)", mode_label);
         py += PARAM_ROW_H;
-        if is_3d {
+        if is_orbital {
+            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Semi-major", chain.orbital_semi_major, 0.0, 1.0, accent);
+            py += PARAM_ROW_H;
+            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Eccentricity", chain.orbital_eccentricity, 0.0, 0.99, accent);
+            py += PARAM_ROW_H;
+            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Inclination", chain.orbital_inclination, 0.0, 180.0, accent);
+            py += PARAM_ROW_H;
+            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Ascending Node", chain.orbital_ascending_node, 0.0, 360.0, accent);
+            py += PARAM_ROW_H;
+            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Periapsis", chain.orbital_periapsis, 0.0, 360.0, accent);
+            py += PARAM_ROW_H;
+            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Period (bars)", chain.orbital_period, 0.25, 64.0, accent);
+        } else if is_3d {
             draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Azimuth", chain.azimuth, 0.0, 360.0, accent);
             py += PARAM_ROW_H;
             draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Elevation", chain.elevation, -90.0, 90.0, accent);

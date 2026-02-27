@@ -711,15 +711,18 @@ impl DawState {
 
         let current_ticks = self.transport.position_ticks;
         let prev_ticks = self.prev_ticks;
-        self.prev_ticks = current_ticks;
 
         // Compute beat position for scripts.
         let beat = current_ticks as f64 / self.transport.ticks_per_beat as f64;
 
         // Lock the engine to send note events and apply script commands.
+        // prev_ticks is updated only after a successful lock so that if
+        // try_lock fails, the tick range is retried on the next frame
+        // rather than silently dropping notes in the skipped range.
         let Ok(mut engine) = self.engine.try_lock() else {
             return;
         };
+        self.prev_ticks = current_ticks;
 
         // Trigger metronome clicks on beat boundaries.
         if engine.metronome.enabled && prev_ticks < current_ticks {

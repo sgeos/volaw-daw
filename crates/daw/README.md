@@ -118,7 +118,7 @@ cargo run -p daw -- --root my_music --import-midi track.mid --import-channel 3
 ## Features
 
 - **8-channel MIDI sequencer** with per-channel patch, effect chain, mute, solo, volume, and pan
-- **Piano roll editor** spanning C2 to C7 (5 octaves, 60 notes) with note snap quantization
+- **Piano roll editor** spanning C-2 to G8 (full MIDI range, 128 notes) with note snap quantization
 - **Velocity lane** below the piano roll for visual velocity feedback and direct editing
 - **Multi-track overview** page showing all 8 channels with note blocks, bar/beat lines, and playhead
 - **Time signature support** with Shift+T cycling (4/4, 3/4, 6/4, 5/4, 7/4)

@@ -170,13 +170,13 @@ impl MidiTrack {
     }
 
     /// Return the note name and octave for a MIDI note number.
-    /// For example: note 60 returns ("C", 4).
+    /// Uses Cubase-compatible naming: note 0 = C-2, note 60 = C3, note 127 = G8.
     pub fn note_name(note: u8) -> (&'static str, i32) {
         const NAMES: [&str; 12] = [
             "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
         ];
         let name = NAMES[(note % 12) as usize];
-        let octave = (note as i32 / 12) - 1;
+        let octave = (note as i32 / 12) - 2;
         (name, octave)
     }
 
@@ -312,16 +312,18 @@ mod tests {
 
     #[test]
     fn note_name_middle_c() {
+        // Cubase convention: MIDI note 60 = C3.
         let (name, octave) = MidiTrack::note_name(60);
         assert_eq!(name, "C");
-        assert_eq!(octave, 4);
+        assert_eq!(octave, 3);
     }
 
     #[test]
-    fn note_name_a4() {
+    fn note_name_a3() {
+        // Cubase convention: MIDI note 69 = A3.
         let (name, octave) = MidiTrack::note_name(69);
         assert_eq!(name, "A");
-        assert_eq!(octave, 4);
+        assert_eq!(octave, 3);
     }
 
     #[test]

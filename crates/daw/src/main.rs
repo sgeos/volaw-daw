@@ -44,9 +44,9 @@ const TOOLBAR_HEIGHT: f32 = 32.0;
 const CHANNEL_BAR_HEIGHT: f32 = 28.0;
 const VELOCITY_LANE_HEIGHT: f32 = 60.0;
 
-/// Number of visible octaves in the piano roll (C2 to C7 = 5 octaves = 60 notes).
-const VISIBLE_NOTE_RANGE: u8 = 60;
-const LOWEST_NOTE: u8 = 36; // C2
+/// Full MIDI note range: C-2 (note 0) to G8 (note 127) = 128 notes.
+const VISIBLE_NOTE_RANGE: u8 = 128;
+const LOWEST_NOTE: u8 = 0; // C-2
 
 /// Pixels per beat at zoom level 1.0.
 const BASE_PIXELS_PER_BEAT: f32 = 80.0;
@@ -908,6 +908,12 @@ impl DawState {
         ppb / self.project.ticks_per_beat as f32
     }
 
+    /// Maximum scroll_y before the piano roll content runs out.
+    fn max_scroll_y() -> f32 {
+        let roll_h = WINDOW_HEIGHT as f32 - TOOLBAR_HEIGHT - CHANNEL_BAR_HEIGHT - VELOCITY_LANE_HEIGHT;
+        (VISIBLE_NOTE_RANGE as f32 * NOTE_HEIGHT - roll_h).max(0.0)
+    }
+
     /// Convert a pixel x-coordinate on the grid to a tick value, snapped to the grid.
     fn x_to_tick(&self, x: f32) -> u64 {
         let raw_tick = ((x - PIANO_KEY_WIDTH + self.scroll_x) / self.tick_width()).max(0.0) as u64;
@@ -1006,7 +1012,7 @@ impl DawState {
                     if !self.selected_notes.is_empty() {
                         self.transpose_notes(1);
                     } else {
-                        self.scroll_y = (self.scroll_y - 20.0).max(0.0);
+                        self.scroll_y = (self.scroll_y - 20.0).clamp(0.0, Self::max_scroll_y());
                     }
                 }
             }
@@ -1015,7 +1021,7 @@ impl DawState {
                     if !self.selected_notes.is_empty() {
                         self.transpose_notes(-1);
                     } else {
-                        self.scroll_y += 20.0;
+                        self.scroll_y = (self.scroll_y + 20.0).clamp(0.0, Self::max_scroll_y());
                     }
                 }
             }
@@ -1062,7 +1068,7 @@ impl DawState {
                                 Some(format!("Vel: {last_vel} ({count} notes)"));
                         }
                     } else {
-                        self.scroll_y = (self.scroll_y - delta as f32 * 20.0).max(0.0);
+                        self.scroll_y = (self.scroll_y - delta as f32 * 20.0).clamp(0.0, Self::max_scroll_y());
                     }
                 } else if self.current_page == DawPage::SynthSetup
                     || self.current_page == DawPage::MonoChain
@@ -3356,9 +3362,8 @@ impl DawState {
                 let nw = (note.duration as f32 * tw).max(1.0);
 
                 // Map pitch to vertical position within the lane.
-                // Pitch range: 36 (C2) to 96 (C7) = 60 semitones.
-                let pitch_min = 36.0_f32;
-                let pitch_range = 60.0_f32;
+                let pitch_min = LOWEST_NOTE as f32;
+                let pitch_range = VISIBLE_NOTE_RANGE as f32;
                 let note_h = (lane_h - 10.0) / pitch_range;
                 let ny = y + lane_h - 6.0 - (note.pitch as f32 - pitch_min).clamp(0.0, pitch_range) * note_h;
 

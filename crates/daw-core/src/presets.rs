@@ -88,6 +88,7 @@ pub fn preset_names() -> &'static [&'static str] {
 fn bass() -> PatchConfig {
     PatchConfig {
         name: String::from("Bass"),
+        voice_mode: String::from("low_1"),
         vco1_waveform: String::from("sawtooth"),
         vco1_scale: String::from("16'"),
         vco1_level: 1.0,
@@ -143,6 +144,7 @@ fn lead() -> PatchConfig {
 fn pad() -> PatchConfig {
     PatchConfig {
         name: String::from("Pad"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("sawtooth"),
         vco1_scale: String::from("8'"),
         vco1_level: 0.7,
@@ -165,6 +167,7 @@ fn pad() -> PatchConfig {
 fn strings() -> PatchConfig {
     PatchConfig {
         name: String::from("Strings"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("sawtooth"),
         vco1_scale: String::from("8'"),
         vco1_level: 0.6,
@@ -193,6 +196,7 @@ fn strings() -> PatchConfig {
 fn organ() -> PatchConfig {
     PatchConfig {
         name: String::from("Organ"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("square"),
         vco1_scale: String::from("8'"),
         vco1_level: 0.7,
@@ -216,6 +220,7 @@ fn organ() -> PatchConfig {
 fn brass() -> PatchConfig {
     PatchConfig {
         name: String::from("Brass"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("sawtooth"),
         vco1_scale: String::from("8'"),
         vco1_level: 1.0,
@@ -243,6 +248,7 @@ fn brass() -> PatchConfig {
 fn pluck() -> PatchConfig {
     PatchConfig {
         name: String::from("Pluck"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("sawtooth"),
         vco1_scale: String::from("8'"),
         vco1_level: 1.0,
@@ -266,6 +272,7 @@ fn pluck() -> PatchConfig {
 fn bell() -> PatchConfig {
     PatchConfig {
         name: String::from("Bell"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("sine"),
         vco1_scale: String::from("4'"),
         vco1_level: 0.8,
@@ -313,6 +320,7 @@ fn flute() -> PatchConfig {
 fn piano() -> PatchConfig {
     PatchConfig {
         name: String::from("Piano"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("sawtooth"),
         vco1_scale: String::from("8'"),
         vco1_level: 0.8,
@@ -429,6 +437,7 @@ fn synth_lead() -> PatchConfig {
 fn synth_bass() -> PatchConfig {
     PatchConfig {
         name: String::from("Synth Bass"),
+        voice_mode: String::from("low_1"),
         vco1_waveform: String::from("square"),
         vco1_scale: String::from("16'"),
         vco1_level: 1.0,
@@ -456,6 +465,7 @@ fn synth_bass() -> PatchConfig {
 fn accordion() -> PatchConfig {
     PatchConfig {
         name: String::from("Accordion"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("square"),
         vco1_scale: String::from("8'"),
         vco1_level: 0.7,
@@ -559,6 +569,7 @@ fn clarinet() -> PatchConfig {
 fn clavinet() -> PatchConfig {
     PatchConfig {
         name: String::from("Clavinet"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("square"),
         vco1_scale: String::from("8'"),
         vco1_level: 0.9,
@@ -628,6 +639,7 @@ fn cymbal() -> PatchConfig {
 fn harp() -> PatchConfig {
     PatchConfig {
         name: String::from("Harp"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("triangle"),
         vco1_scale: String::from("8'"),
         vco1_level: 0.8,
@@ -654,6 +666,7 @@ fn harp() -> PatchConfig {
 fn harpsichord() -> PatchConfig {
     PatchConfig {
         name: String::from("Harpsichord"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("square"),
         vco1_scale: String::from("8'"),
         vco1_level: 0.7,
@@ -704,6 +717,7 @@ fn harmonica() -> PatchConfig {
 fn marimba() -> PatchConfig {
     PatchConfig {
         name: String::from("Marimba"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("sine"),
         vco1_scale: String::from("8'"),
         vco1_level: 0.9,
@@ -752,6 +766,7 @@ fn oboe() -> PatchConfig {
 fn sitar() -> PatchConfig {
     PatchConfig {
         name: String::from("Sitar"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("sawtooth"),
         vco1_scale: String::from("8'"),
         vco1_level: 0.9,
@@ -837,6 +852,7 @@ fn trumpet() -> PatchConfig {
 fn vibraphone() -> PatchConfig {
     PatchConfig {
         name: String::from("Vibraphone"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("sine"),
         vco1_scale: String::from("8'"),
         vco1_level: 0.9,
@@ -865,6 +881,7 @@ fn vibraphone() -> PatchConfig {
 fn choir() -> PatchConfig {
     PatchConfig {
         name: String::from("Choir"),
+        voice_mode: String::from("high_10"),
         vco1_waveform: String::from("sawtooth"),
         vco1_scale: String::from("8'"),
         vco1_level: 0.6,

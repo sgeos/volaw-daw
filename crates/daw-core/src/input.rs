@@ -88,4 +88,6 @@ pub enum DawInput {
     CycleTimeSig,
     /// Export project as Standard MIDI File (Ctrl+E).
     ExportMidi,
+    /// Toggle metronome on/off (N key).
+    ToggleMetronome,
 }

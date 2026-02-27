@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::channel::{clamp_volume, Channel};
+use crate::metronome::Metronome;
 
 /// Number of synthesizer channels.
 ///
@@ -71,6 +72,8 @@ pub struct AudioEngine {
     pub master_volume: f64,
     /// Audio sample rate in Hz.
     pub sample_rate: u32,
+    /// Metronome click generator (mixed into output independently of channels).
+    pub metronome: Metronome,
     /// Scratch buffer for per-channel mono rendering.
     mono_buffer: Vec<f64>,
     /// Scratch buffer for per-channel left stereo output.
@@ -98,6 +101,7 @@ impl AudioEngine {
             ],
             master_volume: 0.8,
             sample_rate,
+            metronome: Metronome::new(),
             mono_buffer: vec![0.0f64; 1024],
             left_buffer: vec![0.0f64; 1024],
             right_buffer: vec![0.0f64; 1024],
@@ -168,6 +172,20 @@ impl AudioEngine {
             for i in 0..num_frames {
                 buffer[i * 2] += self.left_buffer[i];
                 buffer[i * 2 + 1] += self.right_buffer[i];
+            }
+        }
+
+        // Mix metronome click (center-panned, added to both channels).
+        if self.metronome.enabled && self.metronome.is_active() {
+            // Render metronome mono into the mono scratch buffer.
+            for s in self.mono_buffer[..num_frames].iter_mut() {
+                *s = 0.0;
+            }
+            self.metronome.render(&mut self.mono_buffer[..num_frames]);
+            for i in 0..num_frames {
+                let click = self.mono_buffer[i];
+                buffer[i * 2] += click;
+                buffer[i * 2 + 1] += click;
             }
         }
 

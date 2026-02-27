@@ -383,6 +383,8 @@ struct DawState {
     selected_channel: usize,
     /// Solo channel index, if any. When set, only this channel plays.
     solo_channel: Option<usize>,
+    /// Cached metronome enabled state for rendering (synced with engine).
+    metronome_enabled: bool,
     scroll_x: f32,
     scroll_y: f32,
     zoom: f32,
@@ -455,6 +457,7 @@ impl DawState {
             engine,
             selected_channel: 0,
             solo_channel: None,
+            metronome_enabled: false,
             scroll_x: 0.0,
             scroll_y: (VISIBLE_NOTE_RANGE as f32 / 2.0) * NOTE_HEIGHT,
             zoom: 1.0,
@@ -705,6 +708,22 @@ impl DawState {
         let Ok(mut engine) = self.engine.try_lock() else {
             return;
         };
+
+        // Trigger metronome clicks on beat boundaries.
+        if engine.metronome.enabled && prev_ticks < current_ticks {
+            let tpb = self.transport.ticks_per_beat as u64;
+            let prev_beat = prev_ticks / tpb;
+            let current_beat = current_ticks / tpb;
+            if current_beat > prev_beat {
+                let is_downbeat = (current_ticks / tpb).is_multiple_of(self.transport.beats_per_bar as u64);
+                let sr = self.transport.sample_rate;
+                if is_downbeat {
+                    engine.metronome.click_downbeat(sr);
+                } else {
+                    engine.metronome.click_beat(sr);
+                }
+            }
+        }
 
         for ch in 0..8 {
             if self.project.channels[ch].muted {
@@ -1067,6 +1086,7 @@ impl DawState {
             DawInput::SelectAll => self.select_all_notes(),
             DawInput::ToggleLoop => self.toggle_loop(),
             DawInput::ToggleSolo => self.toggle_solo(),
+            DawInput::ToggleMetronome => self.toggle_metronome(),
             DawInput::CycleTimeSig => self.cycle_time_sig(),
             DawInput::Home => {
                 self.transport.reset();
@@ -1580,6 +1600,20 @@ impl DawState {
             self.status_message = Some(format!("Solo Ch{}", ch + 1));
         }
         self.sync_engine_channels();
+    }
+
+    /// Toggle metronome click on or off.
+    fn toggle_metronome(&mut self) {
+        if let Ok(mut engine) = self.engine.try_lock() {
+            let enabled = !engine.metronome.enabled;
+            engine.metronome.enabled = enabled;
+            self.metronome_enabled = enabled;
+            self.status_message = Some(if enabled {
+                String::from("Metronome ON")
+            } else {
+                String::from("Metronome OFF")
+            });
+        }
     }
 
     /// Cycle through common time signatures: 4/4 -> 3/4 -> 6/4 -> 5/4 -> 7/4 -> 4/4.
@@ -2977,7 +3011,12 @@ impl DawState {
 
         // Loop indicator.
         if self.transport.loop_enabled {
-            renderer.draw_text("LOOP", 950.0, 8.0, FontSize::Medium, LOOP_MARKER);
+            renderer.draw_text("LOOP", 870.0, 8.0, FontSize::Medium, LOOP_MARKER);
+        }
+
+        // Metronome indicator.
+        if self.metronome_enabled {
+            renderer.draw_text("MET", 940.0, 8.0, FontSize::Medium, TEXT_ACCENT);
         }
 
         // Status message, selected note info, or page-specific hints.

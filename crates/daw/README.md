@@ -61,6 +61,7 @@ cargo run -p daw -- --root my_music --import-midi track.mid --import-channel 3
 | P | Next preset |
 | Shift+P | Previous preset |
 | M | Toggle channel mute |
+| N | Toggle metronome |
 | O | Toggle channel solo |
 | Ctrl+S | Save project |
 | Ctrl+E | Export MIDI file |
@@ -127,6 +128,7 @@ cargo run -p daw -- --root my_music --import-midi track.mid --import-channel 3
 - **Synth setup page** with VCO, filter, envelope, LFO, and modulation parameters
 - **25-pedal DSP effect chain** with mono and stereo chain setup pages
 - **Pedal picker** with scrollable category list
+- **Metronome click** with distinct downbeat and beat sounds (N key toggle)
 - **Loop region** with auto-sizing to bar boundaries
 - **Playback auto-scroll** following the playhead
 - **Standard MIDI File import** with monophonic autofix strategies
@@ -179,7 +181,7 @@ daw_projects/
 ### Library Crates
 
 - **daw-core** (no_std+alloc): Shared DAW logic including MIDI track representation, transport state, patch configuration, preset definitions, rendering trait, Standard MIDI File parser/builder, and Keleos script runner
-- **audio** (no_std+alloc): 8-channel synthesizer engine with dual VCO, dual envelope generator, HPF/LPF filters, LFO, modulation matrix, and 25-pedal DSP effect chain
+- **audio** (no_std+alloc): 8-channel synthesizer engine with dual VCO, dual envelope generator, HPF/LPF filters, LFO, modulation matrix, 25-pedal DSP effect chain, and metronome click generator
 - **keleos** (no_std+alloc): Keleos scripting language with lexer, parser, compiler, and virtual machine
 
 ## Testing

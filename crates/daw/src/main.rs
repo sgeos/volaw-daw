@@ -130,6 +130,10 @@ enum SynthParam {
     VelocityEnv,
     VelocityPitch,
     GlideTime,
+    Pan,
+    Azimuth,
+    Elevation,
+    PositionDistance,
 }
 
 /// Identifies a parameter being dragged on a setup page.
@@ -412,6 +416,22 @@ fn apply_patch_to_engine(
             });
         }
     }
+}
+
+/// Apply positional stage parameters from EffectChainConfig to the audio engine.
+fn apply_position_to_engine(
+    engine: &mut AudioEngine,
+    ch: usize,
+    effects: &EffectChainConfig,
+) {
+    let pos = &mut engine.channels[ch].position;
+    let has_position = effects.position_3d_enabled || effects.pan.abs() > 1e-10;
+    pos.active = has_position;
+    pos.pan = effects.pan;
+    pos.position_3d_enabled = effects.position_3d_enabled;
+    pos.azimuth_deg = effects.azimuth;
+    pos.elevation_deg = effects.elevation;
+    pos.distance = effects.position_distance;
 }
 
 /// Parse a voice mode string into a VoiceMode enum.
@@ -2120,6 +2140,7 @@ impl DawState {
                 &config.post_pedals_right,
                 sr,
             );
+            apply_position_to_engine(&mut engine, ch, config);
         }
     }
 
@@ -2479,11 +2500,55 @@ impl DawState {
         self.handle_pedal_chain_click(mx, my, pedals_y, 0);
     }
 
-    /// Handle a click on the stereo chain page (pedal parameter editing).
+    /// Handle a click on the stereo chain page (positional controls and
+    /// pedal parameter editing).
     fn handle_stereo_chain_click(&mut self, mx: f32, my: f32, content_y: f32) {
         let screen_w = WINDOW_WIDTH as f32;
+        let full_w = screen_w - 2.0 * SETUP_MARGIN;
         let y0 = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP;
-        let pos_h = 44.0;
+
+        // Positional stage geometry (must match render_stereo_chain layout).
+        let ch = self.selected_channel;
+        let is_3d = self.effects[ch].position_3d_enabled;
+        let pos_rows = if is_3d { 4 } else { 2 };
+        let pos_h = SECTION_HEADER_H + pos_rows as f32 * PARAM_ROW_H + 8.0;
+
+        // Check clicks within the positional stage section.
+        if my >= y0 && my < y0 + pos_h {
+            let bar_inset = 8.0;
+            let bar_w = full_w - 16.0;
+            let mut py = y0 + SECTION_HEADER_H;
+
+            // Mode toggle row.
+            if hit_row(mx, my, SETUP_MARGIN, py, full_w) {
+                self.effects[ch].position_3d_enabled = !is_3d;
+                if let Ok(mut engine) = self.engine.try_lock() {
+                    apply_position_to_engine(&mut engine, ch, &self.effects[ch]);
+                }
+                return;
+            }
+            py += PARAM_ROW_H;
+
+            if is_3d {
+                let bars: [(f32, SynthParam, f64, f64); 3] = [
+                    (py, SynthParam::Azimuth, 0.0, 360.0),
+                    (py + PARAM_ROW_H, SynthParam::Elevation, -90.0, 90.0),
+                    (py + 2.0 * PARAM_ROW_H, SynthParam::PositionDistance, 0.0, 1.0),
+                ];
+                for (bar_y, param, min, max) in bars {
+                    if hit_row(mx, my, SETUP_MARGIN, bar_y, full_w) {
+                        self.start_bar_drag(mx, SETUP_MARGIN + bar_inset, bar_w, param, min, max);
+                        return;
+                    }
+                }
+            } else if hit_row(mx, my, SETUP_MARGIN, py, full_w) {
+                self.start_bar_drag(mx, SETUP_MARGIN + bar_inset, bar_w, SynthParam::Pan, -1.0, 1.0);
+                return;
+            }
+            return;
+        }
+
+        // Pedal chain area below positional stage.
         let chains_y = y0 + pos_h + SETUP_ROW_GAP;
         let left_header_h = 28.0;
         let pedals_y = chains_y + left_header_h + 4.0;
@@ -2491,7 +2556,6 @@ impl DawState {
         let half_w = (screen_w - 3.0 * SETUP_MARGIN) / 2.0;
         let right_x = SETUP_MARGIN + half_w + SETUP_MARGIN;
 
-        // Check if click is in left or right half.
         if mx < right_x {
             self.handle_pedal_chain_click(mx, my, pedals_y, 1);
         } else {
@@ -3059,6 +3123,10 @@ impl DawState {
             SynthParam::VelocityEnv => patch.velocity_envelope_depth,
             SynthParam::VelocityPitch => patch.velocity_pitch_depth,
             SynthParam::GlideTime => patch.glide_time,
+            SynthParam::Pan => self.effects[ch].pan,
+            SynthParam::Azimuth => self.effects[ch].azimuth,
+            SynthParam::Elevation => self.effects[ch].elevation,
+            SynthParam::PositionDistance => self.effects[ch].position_distance,
         }
     }
 
@@ -3266,6 +3334,20 @@ impl DawState {
             SynthParam::VelocityEnv => patch.velocity_envelope_depth = value,
             SynthParam::VelocityPitch => patch.velocity_pitch_depth = value,
             SynthParam::GlideTime => patch.glide_time = value,
+            SynthParam::Pan | SynthParam::Azimuth | SynthParam::Elevation
+            | SynthParam::PositionDistance => {
+                match param {
+                    SynthParam::Pan => self.effects[ch].pan = value,
+                    SynthParam::Azimuth => self.effects[ch].azimuth = value,
+                    SynthParam::Elevation => self.effects[ch].elevation = value,
+                    SynthParam::PositionDistance => self.effects[ch].position_distance = value,
+                    _ => unreachable!(),
+                }
+                if let Ok(mut engine) = self.engine.try_lock() {
+                    apply_position_to_engine(&mut engine, ch, &self.effects[ch]);
+                }
+                return;
+            }
         }
         // Sync the full patch to the engine. This is slightly wasteful (writes all
         // parameters) but ensures consistency and avoids per-parameter engine access.
@@ -4321,8 +4403,10 @@ impl DawState {
         let y0 = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP;
         let full_w = screen_w - 2.0 * SETUP_MARGIN;
 
-        // Positional stage indicator.
-        let pos_h = 44.0;
+        // Positional stage controls.
+        let is_3d = chain.position_3d_enabled;
+        let pos_rows = if is_3d { 4 } else { 2 }; // mode toggle + param bars
+        let pos_h = SECTION_HEADER_H + pos_rows as f32 * PARAM_ROW_H + 8.0;
         draw_section_panel(
             renderer,
             SETUP_MARGIN,
@@ -4332,13 +4416,19 @@ impl DawState {
             "POSITIONAL STAGE",
             accent,
         );
-        renderer.draw_text(
-            "Mono signal splits to stereo here (Pan / 3D Position)",
-            SETUP_MARGIN + 8.0,
-            y0 + SECTION_HEADER_H,
-            FontSize::Small,
-            TEXT_SECONDARY,
-        );
+        let mut py = y0 + SECTION_HEADER_H;
+        let mode_label = if is_3d { "3D Position" } else { "Pan" };
+        draw_param_label(renderer, SETUP_MARGIN, py, full_w, "Mode (click to toggle)", mode_label);
+        py += PARAM_ROW_H;
+        if is_3d {
+            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Azimuth", chain.azimuth, 0.0, 360.0, accent);
+            py += PARAM_ROW_H;
+            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Elevation", chain.elevation, -90.0, 90.0, accent);
+            py += PARAM_ROW_H;
+            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Distance", chain.position_distance, 0.0, 1.0, accent);
+        } else {
+            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Pan", chain.pan, -1.0, 1.0, accent);
+        }
 
         let chains_y = y0 + pos_h + SETUP_ROW_GAP;
         let half_w = (screen_w - 3.0 * SETUP_MARGIN) / 2.0;

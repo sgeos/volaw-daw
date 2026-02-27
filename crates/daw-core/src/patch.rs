@@ -182,6 +182,23 @@ pub struct EffectChainConfig {
     pub post_pedals_left: Vec<PedalConfig>,
     #[serde(default)]
     pub post_pedals_right: Vec<PedalConfig>,
+
+    // Positional stage parameters.
+    /// Pan position: -1.0 (hard left) to 1.0 (hard right). 0.0 = center.
+    #[serde(default)]
+    pub pan: f64,
+    /// Whether 3D positioning is enabled (overrides pan when active).
+    #[serde(default)]
+    pub position_3d_enabled: bool,
+    /// Horizontal angle in degrees (0 = front, 90 = left, 180 = rear, 270 = right).
+    #[serde(default)]
+    pub azimuth: f64,
+    /// Vertical angle in degrees (-90 = below, 0 = ear level, 90 = above).
+    #[serde(default)]
+    pub elevation: f64,
+    /// Distance from listener: 0.0 = closest, 1.0 = farthest.
+    #[serde(default)]
+    pub position_distance: f64,
 }
 
 impl EffectChainConfig {
@@ -218,6 +235,11 @@ impl Default for EffectChainConfig {
             pre_pedals: Vec::new(),
             post_pedals_left: Vec::new(),
             post_pedals_right: Vec::new(),
+            pan: 0.0,
+            position_3d_enabled: false,
+            azimuth: 0.0,
+            elevation: 0.0,
+            position_distance: 0.0,
         }
     }
 }

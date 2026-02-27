@@ -381,6 +381,13 @@ fn parse_voice_mode(s: &str) -> VoiceMode {
     }
 }
 
+/// Which toolbar field is being edited inline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolbarEdit {
+    SongName,
+    Bpm,
+}
+
 /// DAW application state.
 struct DawState {
     project: DawProject,
@@ -451,6 +458,10 @@ struct DawState {
     script_mtimes: [Option<std::time::SystemTime>; 8],
     /// Last time script files were checked for changes.
     last_script_check: std::time::Instant,
+    /// Which toolbar field is being edited inline (None = normal mode).
+    toolbar_edit: Option<ToolbarEdit>,
+    /// Text buffer for inline toolbar editing.
+    edit_buffer: String,
 }
 
 /// Maximum undo history depth.
@@ -496,6 +507,8 @@ impl DawState {
             preview_note: None,
             script_mtimes: [None; 8],
             last_script_check: std::time::Instant::now(),
+            toolbar_edit: None,
+            edit_buffer: String::new(),
         }
     }
 
@@ -928,6 +941,42 @@ impl DawState {
     }
 
     fn handle_input(&mut self, input: DawInput) {
+        // Toolbar inline editing mode: intercept inputs for text editing.
+        if self.toolbar_edit.is_some() {
+            match input {
+                DawInput::Confirm => {
+                    self.apply_toolbar_edit();
+                    return;
+                }
+                DawInput::Cancel => {
+                    self.toolbar_edit = None;
+                    self.edit_buffer.clear();
+                    return;
+                }
+                DawInput::TextChar(ch) => {
+                    self.toolbar_edit_char(ch);
+                    return;
+                }
+                DawInput::Backspace => {
+                    self.edit_buffer.pop();
+                    return;
+                }
+                DawInput::Click(mx, my) | DawInput::ShiftClick(mx, my) => {
+                    // Apply current edit, then process click normally.
+                    self.apply_toolbar_edit();
+                    self.handle_click(mx, my);
+                    return;
+                }
+                DawInput::Quit => {
+                    self.apply_toolbar_edit();
+                    self.running = false;
+                    return;
+                }
+                // Suppress all other inputs while editing.
+                _ => return,
+            }
+        }
+
         match input {
             // Global inputs (all pages).
             DawInput::Quit => self.running = false,
@@ -1087,7 +1136,7 @@ impl DawState {
                     self.zoom = (self.zoom / 1.2).max(0.25);
                 }
             }
-            DawInput::Delete => {
+            DawInput::Delete | DawInput::Backspace => {
                 if self.current_page == DawPage::PianoRoll {
                     self.delete_selected_notes();
                 } else if self.current_page == DawPage::MonoChain
@@ -1175,6 +1224,22 @@ impl DawState {
     /// note or place a new one. If over the channel bar, select a channel.
     fn handle_click(&mut self, mx: f32, my: f32) {
         let content_y = TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT;
+
+        // Toolbar click: edit song name, BPM, cycle time sig, cycle grid.
+        if my < TOOLBAR_HEIGHT {
+            if mx < 200.0 {
+                self.toolbar_edit = Some(ToolbarEdit::SongName);
+                self.edit_buffer = self.project.name.clone();
+            } else if (620.0..720.0).contains(&mx) {
+                self.toolbar_edit = Some(ToolbarEdit::Bpm);
+                self.edit_buffer = format!("{:.0}", self.project.tempo);
+            } else if (720.0..780.0).contains(&mx) {
+                self.cycle_time_sig();
+            } else if (780.0..870.0).contains(&mx) {
+                self.cycle_grid();
+            }
+            return;
+        }
 
         // Channel bar click (all pages).
         if my >= TOOLBAR_HEIGHT && my < content_y {
@@ -1487,17 +1552,24 @@ impl DawState {
         }
     }
 
-    /// Cycle the snap grid subdivision through common note values.
-    /// 1/1 (whole) -> 1/2 -> 1/4 -> 1/8 -> 1/16 -> 1/32 -> 1/1.
+    /// Cycle the snap grid subdivision through straight, triplet, and dotted values.
+    /// Each base division (1/1 through 1/32) has straight, T (triplet), and D (dotted) variants.
     fn cycle_grid(&mut self) {
         let tpb = self.project.ticks_per_beat as u64;
         let tpbar = self.transport.ticks_per_bar();
-        // Grid subdivisions in ticks: whole bar, half, quarter, eighth, sixteenth, thirty-second.
-        let subdivisions = [tpbar, tpb * 2, tpb, tpb / 2, tpb / 4, tpb / 8];
+        // Base values: bar, half, quarter, eighth, sixteenth, thirty-second.
+        let bases: [u64; 6] = [tpbar, tpb * 2, tpb, tpb / 2, tpb / 4, tpb / 8];
+        // Build full list: for each base, straight then triplet (2/3) then dotted (3/2).
+        let mut subdivisions = Vec::with_capacity(18);
+        for &b in &bases {
+            subdivisions.push(b);
+            subdivisions.push(b * 2 / 3);
+            subdivisions.push(b * 3 / 2);
+        }
         let current_idx = subdivisions.iter().position(|&s| s == self.snap_ticks);
         let next_idx = match current_idx {
             Some(i) => (i + 1) % subdivisions.len(),
-            None => 2, // Default to quarter note if current value is non-standard.
+            None => 6, // Default to quarter note (index 6 = 1/4 straight).
         };
         self.snap_ticks = subdivisions[next_idx];
         let label = grid_label(self.snap_ticks, tpb, tpbar);
@@ -1509,6 +1581,50 @@ impl DawState {
         self.project.tempo = (self.project.tempo + delta).clamp(20.0, 300.0);
         self.transport.tempo = self.project.tempo;
         self.status_message = Some(format!("{:.0} BPM", self.project.tempo));
+    }
+
+    /// Apply the current toolbar edit buffer to the relevant project field.
+    fn apply_toolbar_edit(&mut self) {
+        match self.toolbar_edit {
+            Some(ToolbarEdit::SongName) => {
+                let name = self.edit_buffer.trim().to_string();
+                if !name.is_empty() {
+                    self.project.name = name;
+                }
+            }
+            Some(ToolbarEdit::Bpm) => {
+                if let Ok(bpm) = self.edit_buffer.trim().parse::<f64>() {
+                    let clamped = bpm.clamp(20.0, 300.0);
+                    self.project.tempo = clamped;
+                    self.transport.tempo = clamped;
+                    self.status_message = Some(format!("{clamped:.0} BPM"));
+                }
+            }
+            None => {}
+        }
+        self.toolbar_edit = None;
+        self.edit_buffer.clear();
+    }
+
+    /// Append a character to the toolbar edit buffer with field-specific validation.
+    fn toolbar_edit_char(&mut self, ch: char) {
+        match self.toolbar_edit {
+            Some(ToolbarEdit::SongName) => {
+                if self.edit_buffer.len() < 32
+                    && (ch.is_alphanumeric() || ch == ' ' || ch == '-' || ch == '_')
+                {
+                    self.edit_buffer.push(ch);
+                }
+            }
+            Some(ToolbarEdit::Bpm) => {
+                if self.edit_buffer.len() < 6
+                    && (ch.is_ascii_digit() || (ch == '.' && !self.edit_buffer.contains('.')))
+                {
+                    self.edit_buffer.push(ch);
+                }
+            }
+            None => {}
+        }
     }
 
     /// Nudge selected notes horizontally by a tick delta.
@@ -3043,8 +3159,14 @@ impl DawState {
     fn render_toolbar<R: Renderer>(&self, renderer: &mut R, screen_w: f32) {
         renderer.fill_rect(0.0, 0.0, screen_w, TOOLBAR_HEIGHT, BG_PANEL);
 
-        // Project name.
-        renderer.draw_text(&self.project.name, 10.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
+        // Project name (clickable, editable).
+        if self.toolbar_edit == Some(ToolbarEdit::SongName) {
+            renderer.fill_rect(8.0, 4.0, 184.0, 24.0, Color::rgb(50, 50, 70));
+            let display = format!("{}|", self.edit_buffer);
+            renderer.draw_text(&display, 10.0, 8.0, FontSize::Medium, TEXT_ACCENT);
+        } else {
+            renderer.draw_text(&self.project.name, 10.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
+        }
 
         // Page indicator.
         renderer.draw_text(self.current_page.name(), 200.0, 8.0, FontSize::Medium, TEXT_ACCENT);
@@ -3059,15 +3181,21 @@ impl DawState {
         let pos_text = format!("{bar}:{beat}:{tick:03}");
         renderer.draw_text(&pos_text, 500.0, 8.0, FontSize::Medium, TEXT_ACCENT);
 
-        // Tempo display.
-        let tempo_text = format!("{:.0} BPM", self.project.tempo);
-        renderer.draw_text(&tempo_text, 620.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
+        // Tempo display (clickable, editable).
+        if self.toolbar_edit == Some(ToolbarEdit::Bpm) {
+            renderer.fill_rect(618.0, 4.0, 94.0, 24.0, Color::rgb(50, 50, 70));
+            let display = format!("{}| BPM", self.edit_buffer);
+            renderer.draw_text(&display, 620.0, 8.0, FontSize::Medium, TEXT_ACCENT);
+        } else {
+            let tempo_text = format!("{:.0} BPM", self.project.tempo);
+            renderer.draw_text(&tempo_text, 620.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
+        }
 
-        // Time signature display.
+        // Time signature display (clickable, cycles on click).
         let ts_text = format!("{}/4", self.project.beats_per_bar);
         renderer.draw_text(&ts_text, 720.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
 
-        // Grid subdivision display.
+        // Grid subdivision display (clickable, cycles on click).
         let grid_text = grid_label(self.snap_ticks, self.project.ticks_per_beat as u64, self.transport.ticks_per_bar());
         renderer.draw_text(grid_text, 780.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
 
@@ -3082,8 +3210,10 @@ impl DawState {
         }
 
         // Status message, selected note info, or page-specific hints.
+        // Positioned after all toolbar indicators to avoid overlap.
+        let hint_x = screen_w - 430.0;
         if let Some(ref msg) = self.status_message {
-            renderer.draw_text(msg, screen_w - 620.0, 12.0, FontSize::Small, TEXT_ACCENT);
+            renderer.draw_text(msg, hint_x, 12.0, FontSize::Small, TEXT_ACCENT);
         } else if self.current_page == DawPage::PianoRoll
             && let Some(idx) = self.primary_selected_note()
             && let Some(note) = self.tracks[self.selected_channel].notes.get(idx)
@@ -3097,17 +3227,17 @@ impl DawState {
                 String::new()
             };
             let info = format!(
-                "{}{} vel:{} dur:{:.1}b{}  Scroll=Vel  Del=Remove  Ctrl+C/V=Copy/Paste",
+                "{}{} vel:{} dur:{:.1}b{}",
                 name, octave, note.velocity, beats, sel_info
             );
-            renderer.draw_text(&info, screen_w - 720.0, 12.0, FontSize::Small, TEXT_ACCENT);
+            renderer.draw_text(&info, hint_x, 12.0, FontSize::Small, TEXT_ACCENT);
         } else {
             let hints = if self.current_page == DawPage::PianoRoll {
-                "Space=Play  S=Stop  1-8=Ch  G=Grid  Shift+G=Quantize  L=Loop  Click=Note  Tab=Setup"
+                "Space=Play  G=Grid  L=Loop  Click=Note"
             } else {
-                "Click=Edit  Drag=Adjust  Left/Right=Navigate  Esc=Back  P=Preset  Ctrl+S=Save"
+                "Click=Edit  Drag=Adjust  P=Preset  Ctrl+S=Save"
             };
-            renderer.draw_text(hints, screen_w - 720.0, 12.0, FontSize::Small, TEXT_SECONDARY);
+            renderer.draw_text(hints, hint_x, 12.0, FontSize::Small, TEXT_SECONDARY);
         }
     }
 
@@ -3891,24 +4021,31 @@ fn draw_section_panel<R: Renderer>(
     renderer.draw_text(title, x + 8.0, y + 5.0, FontSize::Small, TEXT_PRIMARY);
 }
 
-/// Check whether a parameter label represents a frequency (for log mapping).
 /// Return a human-readable label for a grid subdivision.
+/// Supports straight, triplet (T), and dotted (D) variants.
 fn grid_label(snap_ticks: u64, ticks_per_beat: u64, ticks_per_bar: u64) -> &'static str {
-    if snap_ticks == ticks_per_bar {
-        "1/1 (Bar)"
-    } else if snap_ticks == ticks_per_beat * 2 {
-        "1/2 (Half)"
-    } else if snap_ticks == ticks_per_beat {
-        "1/4 (Quarter)"
-    } else if snap_ticks == ticks_per_beat / 2 {
-        "1/8 (Eighth)"
-    } else if snap_ticks == ticks_per_beat / 4 {
-        "1/16 (Sixteenth)"
-    } else if snap_ticks == ticks_per_beat / 8 {
-        "1/32 (Thirty-second)"
-    } else {
-        "Custom"
-    }
+    // Straight values.
+    if snap_ticks == ticks_per_bar { return "1/1"; }
+    if snap_ticks == ticks_per_beat * 2 { return "1/2"; }
+    if snap_ticks == ticks_per_beat { return "1/4"; }
+    if snap_ticks == ticks_per_beat / 2 { return "1/8"; }
+    if snap_ticks == ticks_per_beat / 4 { return "1/16"; }
+    if snap_ticks == ticks_per_beat / 8 { return "1/32"; }
+    // Triplet values (base * 2/3).
+    if snap_ticks == ticks_per_bar * 2 / 3 { return "1/1T"; }
+    if snap_ticks == ticks_per_beat * 2 * 2 / 3 { return "1/2T"; }
+    if snap_ticks == ticks_per_beat * 2 / 3 { return "1/4T"; }
+    if snap_ticks == ticks_per_beat / 2 * 2 / 3 { return "1/8T"; }
+    if snap_ticks == ticks_per_beat / 4 * 2 / 3 { return "1/16T"; }
+    if snap_ticks == ticks_per_beat / 8 * 2 / 3 { return "1/32T"; }
+    // Dotted values (base * 3/2).
+    if snap_ticks == ticks_per_bar * 3 / 2 { return "1/1D"; }
+    if snap_ticks == ticks_per_beat * 2 * 3 / 2 { return "1/2D"; }
+    if snap_ticks == ticks_per_beat * 3 / 2 { return "1/4D"; }
+    if snap_ticks == ticks_per_beat / 2 * 3 / 2 { return "1/8D"; }
+    if snap_ticks == ticks_per_beat / 4 * 3 / 2 { return "1/16D"; }
+    if snap_ticks == ticks_per_beat / 8 * 3 / 2 { return "1/32D"; }
+    "Custom"
 }
 
 fn is_log_label(label: &str) -> bool {

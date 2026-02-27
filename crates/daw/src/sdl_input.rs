@@ -70,6 +70,19 @@ pub unsafe fn translate_event(event: &SDL_Event) -> Option<DawInput> {
         return Some(DawInput::Scroll(wheel.y as i32));
     }
 
+    // Text input events (for inline editing of song name, BPM, etc.).
+    if event_type == SDL_EventType::TEXT_INPUT.0 {
+        let text_event = unsafe { &event.text };
+        if !text_event.text.is_null() {
+            let c_str = unsafe { std::ffi::CStr::from_ptr(text_event.text) };
+            if let Ok(s) = c_str.to_str()
+                && let Some(ch) = s.chars().next()
+            {
+                return Some(DawInput::TextChar(ch));
+            }
+        }
+    }
+
     None
 }
 
@@ -120,7 +133,8 @@ fn translate_scancode(scancode: SDL_Scancode) -> Option<DawInput> {
         SDL_SCANCODE_RIGHT => Some(DawInput::Right),
         SDL_SCANCODE_RETURN => Some(DawInput::Confirm),
         SDL_SCANCODE_ESCAPE => Some(DawInput::Cancel),
-        SDL_SCANCODE_DELETE | SDL_SCANCODE_BACKSPACE => Some(DawInput::Delete),
+        SDL_SCANCODE_DELETE => Some(DawInput::Delete),
+        SDL_SCANCODE_BACKSPACE => Some(DawInput::Backspace),
         SDL_SCANCODE_EQUALS | SDL_SCANCODE_KP_PLUS => Some(DawInput::ZoomIn),
         SDL_SCANCODE_MINUS | SDL_SCANCODE_KP_MINUS => Some(DawInput::ZoomOut),
         // Channel selection: number keys 1-8.

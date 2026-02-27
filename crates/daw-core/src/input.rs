@@ -90,4 +90,8 @@ pub enum DawInput {
     ExportMidi,
     /// Toggle metronome on/off (N key).
     ToggleMetronome,
+    /// Character typed during text editing.
+    TextChar(char),
+    /// Backspace key (remove last character during text editing).
+    Backspace,
 }

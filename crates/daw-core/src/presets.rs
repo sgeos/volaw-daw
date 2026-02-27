@@ -1,8 +1,26 @@
 extern crate alloc;
 use alloc::string::String;
-use alloc::vec;
 
 use crate::patch::{ModRoutingConfig, PatchConfig};
+
+/// Build modulation routings from the standard MS-20 defaults plus extra
+/// preset-specific routings. If an extra routing targets the same source and
+/// destination as a standard routing, it replaces the default depth.
+fn routings_with(extra: &[(&str, &str, f64)]) -> alloc::vec::Vec<ModRoutingConfig> {
+    let mut routes = crate::patch::default_mod_routings();
+    for &(source, dest, depth) in extra {
+        if let Some(existing) = routes.iter_mut().find(|r| r.source == source && r.dest == dest) {
+            existing.depth = depth;
+        } else {
+            routes.push(ModRoutingConfig {
+                source: String::from(source),
+                dest: String::from(dest),
+                depth,
+            });
+        }
+    }
+    routes
+}
 
 /// Create a named preset patch configuration.
 ///
@@ -119,11 +137,7 @@ fn bass() -> PatchConfig {
         eg2_release: 0.15,
         lpf_cutoff: 1200.0,
         lpf_resonance: 1.2,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("eg2"),
-            dest: String::from("lpf_cutoff"),
-            depth: 0.5,
-        }],
+        mod_routings: routings_with(&[("eg2", "lpf_cutoff", 0.5)]),
         ..PatchConfig::default()
     }
 }
@@ -147,11 +161,7 @@ fn lead() -> PatchConfig {
         lpf_cutoff: 3000.0,
         lpf_resonance: 1.0,
         lfo_rate: 5.5,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("lfo"),
-            dest: String::from("vco1_pitch"),
-            depth: 0.02,
-        }],
+        mod_routings: routings_with(&[("lfo", "vco1_pitch", 0.02)]),
         ..PatchConfig::default()
     }
 }
@@ -199,11 +209,7 @@ fn strings() -> PatchConfig {
         lpf_cutoff: 4000.0,
         lpf_resonance: 0.3,
         lfo_rate: 4.0,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("lfo"),
-            dest: String::from("vco1_pitch"),
-            depth: 0.01,
-        }],
+        mod_routings: routings_with(&[("lfo", "vco1_pitch", 0.01)]),
         ..PatchConfig::default()
     }
 }
@@ -251,11 +257,7 @@ fn brass() -> PatchConfig {
         eg2_release: 0.2,
         lpf_cutoff: 1500.0,
         lpf_resonance: 0.8,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("eg2"),
-            dest: String::from("lpf_cutoff"),
-            depth: 0.7,
-        }],
+        mod_routings: routings_with(&[("eg2", "lpf_cutoff", 0.7)]),
         ..PatchConfig::default()
     }
 }
@@ -275,11 +277,7 @@ fn pluck() -> PatchConfig {
         eg2_release: 0.3,
         lpf_cutoff: 5000.0,
         lpf_resonance: 1.5,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("eg2"),
-            dest: String::from("lpf_cutoff"),
-            depth: 0.8,
-        }],
+        mod_routings: routings_with(&[("eg2", "lpf_cutoff", 0.8)]),
         ..PatchConfig::default()
     }
 }
@@ -323,11 +321,7 @@ fn flute() -> PatchConfig {
         lpf_cutoff: 3000.0,
         lpf_resonance: 0.2,
         lfo_rate: 5.0,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("lfo"),
-            dest: String::from("vco1_pitch"),
-            depth: 0.015,
-        }],
+        mod_routings: routings_with(&[("lfo", "vco1_pitch", 0.015)]),
         ..PatchConfig::default()
     }
 }
@@ -351,11 +345,7 @@ fn piano() -> PatchConfig {
         eg2_release: 0.5,
         lpf_cutoff: 4000.0,
         lpf_resonance: 0.5,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("eg2"),
-            dest: String::from("lpf_cutoff"),
-            depth: 0.4,
-        }],
+        mod_routings: routings_with(&[("eg2", "lpf_cutoff", 0.4)]),
         ..PatchConfig::default()
     }
 }
@@ -374,11 +364,7 @@ fn kick() -> PatchConfig {
         eg2_release: 0.1,
         lpf_cutoff: 500.0,
         lpf_resonance: 0.5,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("eg2"),
-            dest: String::from("vco1_pitch"),
-            depth: 0.9,
-        }],
+        mod_routings: routings_with(&[("eg2", "vco1_pitch", 0.9)]),
         ..PatchConfig::default()
     }
 }
@@ -440,11 +426,7 @@ fn synth_lead() -> PatchConfig {
         lpf_resonance: 2.0,
         glide_enabled: true,
         glide_time: 0.08,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("eg2"),
-            dest: String::from("lpf_cutoff"),
-            depth: 0.6,
-        }],
+        mod_routings: routings_with(&[("eg2", "lpf_cutoff", 0.6)]),
         ..PatchConfig::default()
     }
 }
@@ -468,11 +450,7 @@ fn synth_bass() -> PatchConfig {
         eg2_release: 0.1,
         lpf_cutoff: 800.0,
         lpf_resonance: 2.5,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("eg2"),
-            dest: String::from("lpf_cutoff"),
-            depth: 0.7,
-        }],
+        mod_routings: routings_with(&[("eg2", "lpf_cutoff", 0.7)]),
         ..PatchConfig::default()
     }
 }
@@ -499,11 +477,7 @@ fn accordion() -> PatchConfig {
         lpf_cutoff: 3500.0,
         lpf_resonance: 0.4,
         lfo_rate: 5.5,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("lfo"),
-            dest: String::from("vco1_pitch"),
-            depth: 0.008,
-        }],
+        mod_routings: routings_with(&[("lfo", "vco1_pitch", 0.008)]),
         ..PatchConfig::default()
     }
 }
@@ -527,11 +501,7 @@ fn cello() -> PatchConfig {
         lpf_cutoff: 2500.0,
         lpf_resonance: 0.5,
         lfo_rate: 5.0,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("lfo"),
-            dest: String::from("vco1_pitch"),
-            depth: 0.012,
-        }],
+        mod_routings: routings_with(&[("lfo", "vco1_pitch", 0.012)]),
         ..PatchConfig::default()
     }
 }
@@ -572,11 +542,7 @@ fn clarinet() -> PatchConfig {
         lpf_cutoff: 2200.0,
         lpf_resonance: 0.6,
         lfo_rate: 4.5,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("lfo"),
-            dest: String::from("vco1_pitch"),
-            depth: 0.01,
-        }],
+        mod_routings: routings_with(&[("lfo", "vco1_pitch", 0.01)]),
         ..PatchConfig::default()
     }
 }
@@ -600,11 +566,7 @@ fn clavinet() -> PatchConfig {
         eg2_release: 0.15,
         lpf_cutoff: 5500.0,
         lpf_resonance: 1.8,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("eg2"),
-            dest: String::from("lpf_cutoff"),
-            depth: 0.6,
-        }],
+        mod_routings: routings_with(&[("eg2", "lpf_cutoff", 0.6)]),
         ..PatchConfig::default()
     }
 }
@@ -669,11 +631,7 @@ fn harp() -> PatchConfig {
         eg2_release: 0.8,
         lpf_cutoff: 6000.0,
         lpf_resonance: 0.4,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("eg2"),
-            dest: String::from("lpf_cutoff"),
-            depth: 0.5,
-        }],
+        mod_routings: routings_with(&[("eg2", "lpf_cutoff", 0.5)]),
         ..PatchConfig::default()
     }
 }
@@ -720,11 +678,7 @@ fn harmonica() -> PatchConfig {
         lpf_cutoff: 2800.0,
         lpf_resonance: 0.7,
         lfo_rate: 5.0,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("lfo"),
-            dest: String::from("vco1_pitch"),
-            depth: 0.018,
-        }],
+        mod_routings: routings_with(&[("lfo", "vco1_pitch", 0.018)]),
         ..PatchConfig::default()
     }
 }
@@ -769,11 +723,7 @@ fn oboe() -> PatchConfig {
         lpf_cutoff: 2000.0,
         lpf_resonance: 1.0,
         lfo_rate: 5.5,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("lfo"),
-            dest: String::from("vco1_pitch"),
-            depth: 0.012,
-        }],
+        mod_routings: routings_with(&[("lfo", "vco1_pitch", 0.012)]),
         ..PatchConfig::default()
     }
 }
@@ -797,11 +747,7 @@ fn sitar() -> PatchConfig {
         eg2_release: 0.8,
         lpf_cutoff: 3000.0,
         lpf_resonance: 2.5,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("eg2"),
-            dest: String::from("lpf_cutoff"),
-            depth: 0.9,
-        }],
+        mod_routings: routings_with(&[("eg2", "lpf_cutoff", 0.9)]),
         ..PatchConfig::default()
     }
 }
@@ -820,11 +766,7 @@ fn tom() -> PatchConfig {
         eg2_release: 0.15,
         lpf_cutoff: 800.0,
         lpf_resonance: 0.6,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("eg2"),
-            dest: String::from("vco1_pitch"),
-            depth: 0.5,
-        }],
+        mod_routings: routings_with(&[("eg2", "vco1_pitch", 0.5)]),
         ..PatchConfig::default()
     }
 }
@@ -848,18 +790,10 @@ fn trumpet() -> PatchConfig {
         lpf_cutoff: 2000.0,
         lpf_resonance: 0.6,
         lfo_rate: 5.0,
-        mod_routings: vec![
-            ModRoutingConfig {
-                source: String::from("eg2"),
-                dest: String::from("lpf_cutoff"),
-                depth: 0.8,
-            },
-            ModRoutingConfig {
-                source: String::from("lfo"),
-                dest: String::from("vco1_pitch"),
-                depth: 0.008,
-            },
-        ],
+        mod_routings: routings_with(&[
+            ("eg2", "lpf_cutoff", 0.8),
+            ("lfo", "vco1_pitch", 0.008),
+        ]),
         ..PatchConfig::default()
     }
 }
@@ -884,11 +818,7 @@ fn vibraphone() -> PatchConfig {
         lpf_cutoff: 5000.0,
         lpf_resonance: 0.3,
         lfo_rate: 4.5,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("lfo"),
-            dest: String::from("vca_level"),
-            depth: 0.15,
-        }],
+        mod_routings: routings_with(&[("lfo", "vca_level", 0.15)]),
         ..PatchConfig::default()
     }
 }
@@ -913,11 +843,7 @@ fn choir() -> PatchConfig {
         lpf_cutoff: 2500.0,
         lpf_resonance: 0.4,
         lfo_rate: 3.5,
-        mod_routings: vec![ModRoutingConfig {
-            source: String::from("lfo"),
-            dest: String::from("vco2_pitch"),
-            depth: 0.015,
-        }],
+        mod_routings: routings_with(&[("lfo", "vco2_pitch", 0.015)]),
         ..PatchConfig::default()
     }
 }

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use std::path::PathBuf;
 
-use audio::modmatrix::{ModDest, ModMatrix, ModRouting, ModSource};
+use audio::modmatrix::{ModDest, ModRouting, ModSource};
 use audio::vco::{Scale, Waveform};
 use audio::effects::Pedal;
 use audio::{AudioEngine, VoiceMode};
@@ -352,11 +352,11 @@ fn apply_patch_to_engine(engine: &mut AudioEngine, channel: usize, patch: &Patch
     synth.vco_mix = patch.vco_mix;
     synth.lfo_rate = patch.lfo_rate;
 
-    // Modulation matrix: start from MS-20 defaults and apply patch routings
-    // additively. The MS-20 defaults include EG1->HPF, EG2->LPF, and the
-    // critical EG2->VCA routing that controls output amplitude. Patch configs
-    // add character-defining routings (vibrato, filter sweep, etc.) on top.
-    synth.mod_matrix = ModMatrix::ms20_default();
+    // Modulation matrix: built entirely from the patch's mod_routings.
+    // Each preset is responsible for including all routings it needs,
+    // including the standard EG2->VCA routing for audible output.
+    // PatchConfig::default() provides the three standard MS-20 routings.
+    synth.mod_matrix.clear();
     for routing_cfg in &patch.mod_routings {
         if let (Some(src), Some(dst)) = (
             parse_mod_source(&routing_cfg.source),

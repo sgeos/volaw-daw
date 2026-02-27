@@ -429,7 +429,7 @@ fn default_voice_mode() -> String {
 ///
 /// The EG2 -> VCA routing is critical for producing audible output.
 /// Without it, the VCA multiplier is zero and the channel is silent.
-fn default_mod_routings() -> Vec<ModRoutingConfig> {
+pub fn default_mod_routings() -> Vec<ModRoutingConfig> {
     alloc::vec![
         ModRoutingConfig {
             source: String::from("eg1"),

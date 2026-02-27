@@ -872,10 +872,11 @@ impl DawState {
 
     /// Immediately stop any playing preview note.
     fn stop_preview(&mut self) {
-        if let Some((ch, freq, _)) = self.preview_note.take()
-            && let Ok(mut engine) = self.engine.try_lock()
-        {
-            engine.channels[ch].synth.note_off_freq(freq);
+        if let Some((ch, freq, _)) = self.preview_note.take() {
+            // Use blocking lock to guarantee the note-off is delivered.
+            if let Ok(mut engine) = self.engine.lock() {
+                engine.channels[ch].synth.note_off_freq(freq);
+            }
         }
     }
 
@@ -1470,7 +1471,10 @@ impl DawState {
             self.patches[ch] = patch;
             self.preset_indices[ch] = Some(next);
             self.project.channels[ch].name = String::from(name);
-            if let Ok(mut engine) = self.engine.try_lock() {
+            // Use blocking lock to guarantee the engine receives the patch.
+            // try_lock could silently fail, leaving the label updated but
+            // the synth unchanged.
+            if let Ok(mut engine) = self.engine.lock() {
                 apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
             }
             self.status_message = Some(format!("Ch{}: {}", ch + 1, name));

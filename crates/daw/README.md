@@ -2,7 +2,7 @@
 
 > [Top-level README](../../README.md) | [Server README](../server/README.md) | [Client README](../client/README.md)
 
-SDL3-based Digital Audio Workstation (DAW) for composing music using the game audio engine. An 8-channel MIDI sequencer with piano roll editing, patch preset selection, effect chains, and real-time audio playback through the MS-20 synthesizer architecture.
+SDL3-based Digital Audio Workstation (DAW) for composing music using the game audio engine. An 8-channel MIDI sequencer with piano roll editing, velocity lane, patch preset selection, effect chains, Keleos scripting, and real-time audio playback through the MS-20 synthesizer architecture.
 
 ## Prerequisites
 
@@ -48,47 +48,94 @@ cargo run -p daw -- --root my_music --import-midi track.mid --import-channel 3
 
 ## Controls
 
-### Keyboard
+### Global
 
 | Key | Action |
 |-----|--------|
 | Space | Toggle play/pause |
 | S | Stop playback |
+| 0 / Home | Reset to beginning |
 | 1-8 | Select channel |
+| Tab | Next page (Piano Roll, Synth, Mono Chain, Stereo Chain) |
+| Shift+Tab | Previous page |
 | P | Next preset |
 | Shift+P | Previous preset |
 | M | Toggle channel mute |
-| Up/Down | Scroll vertically |
-| Left/Right | Scroll horizontally |
+| O | Toggle channel solo |
+| Ctrl+S | Save project |
+| Ctrl+E | Export MIDI file |
+| Ctrl+Z | Undo |
+| Ctrl+Shift+Z / Ctrl+Y | Redo |
+| Q / Ctrl+Q | Quit |
+
+### Piano Roll
+
+| Key | Action |
+|-----|--------|
+| Up/Down | Transpose selected notes by semitone (scroll if none selected) |
+| Shift+Up/Down | Transpose selected notes by octave |
+| Left/Right | Nudge selected notes by grid unit (scroll if none selected) |
 | +/= | Zoom in |
 | - | Zoom out |
-| Enter | Confirm selection |
-| Escape | Cancel |
-| Delete/Backspace | Delete selected note |
-| Ctrl+S (Cmd+S) | Save project |
-| Ctrl+Z | Undo |
-| Q or Ctrl+Q | Quit |
+| G | Cycle grid subdivision (1/1 Bar, 1/2, 1/4, 1/8, 1/16, 1/32) |
+| Shift+G | Quantize selected notes to grid |
+| Shift+T | Cycle time signature (4/4, 3/4, 6/4, 5/4, 7/4) |
+| L | Toggle loop mode |
+| Ctrl+A | Select all notes |
+| Ctrl+C | Copy selected notes |
+| Ctrl+V | Paste (at playhead if playing, at original position otherwise) |
+| Ctrl+D | Duplicate selected notes |
+| Delete/Backspace | Delete selected notes |
+| Escape | Clear selection |
 
 ### Mouse
 
 | Action | Effect |
 |--------|--------|
 | Click on grid | Place or select a note |
-| Click on piano key | Place a note at that pitch |
-| Click on channel bar | Select that channel |
-| Scroll wheel | Scroll vertically |
+| Click on piano key | Audition note (play preview) |
+| Click on channel bar | Select channel |
+| Click note right edge + drag | Resize note duration |
+| Shift+Click | Toggle note in selection |
+| Click in velocity lane | Select note and set velocity |
+| Drag in velocity lane | Adjust velocity continuously |
+| Scroll wheel | Scroll vertically (adjust velocity if notes selected) |
+| Scroll over tempo | Adjust BPM |
+
+### Setup Pages
+
+| Key | Action |
+|-----|--------|
+| A | Add pedal to chain |
+| B | Toggle pedal bypass |
+| Delete | Remove selected pedal |
+| Shift+Left/Right | Reorder pedals |
+| Click parameter bar + drag | Adjust parameter value |
+| Click enum label | Cycle enum value |
+| Scroll wheel | Adjust focused parameter |
 
 ## Features
 
-- **8-channel MIDI sequencer** with per-channel patch, effect chain, and mute state
+- **8-channel MIDI sequencer** with per-channel patch, effect chain, mute, solo, volume, and pan
 - **Piano roll editor** spanning C2 to C7 (5 octaves, 60 notes) with note snap quantization
+- **Velocity lane** below the piano roll for visual velocity feedback and direct editing
+- **Time signature support** with Shift+T cycling (4/4, 3/4, 6/4, 5/4, 7/4)
+- **Note preview** with 200ms audition on placement and piano key click
+- **Per-channel note counts** displayed on the channel bar
 - **16 built-in presets**: bass, lead, pad, strings, organ, brass, pluck, bell, flute, piano, kick, snare, hihat, synth_lead, synth_bass, choir
 - **Real-time audio playback** at 48 kHz through the MS-20 synthesizer engine
-- **Patch-to-engine bridge** mapping TOML configuration to VCO waveforms, filters, envelopes, LFO, and modulation matrix
-- **25-pedal DSP effect chain** per channel
-- **Standard MIDI File import** with monophonic autofix (latest note, highest note, or lowest note strategies)
+- **Synth setup page** with VCO, filter, envelope, LFO, and modulation parameters
+- **25-pedal DSP effect chain** with mono and stereo chain setup pages
+- **Pedal picker** with scrollable category list
+- **Loop region** with auto-sizing to bar boundaries
+- **Playback auto-scroll** following the playhead
+- **Standard MIDI File import** with monophonic autofix strategies
+- **Standard MIDI File export** (Ctrl+E) to exports/ directory
 - **TOML project save/load** with per-channel patch, effects, and MIDI files
-- **Undo system** with 64-level undo stack
+- **Keleos scripting** with per-channel script assignment and hot-reload
+- **Script hot-reload** checking file modifications once per second
+- **Script error display** in the status bar
+- **Undo/redo system** with 64-level stack and inverse capture pattern
 - **Zoom and scroll** for navigating large compositions
 
 ## Project File Format
@@ -98,18 +145,24 @@ Projects are saved under the project root directory (default: `daw_projects/`). 
 ```
 daw_projects/
   my_song/
-    project.toml          # Metadata (tempo, ticks per beat, channel assignments)
+    saves/
+      my_song.toml        # Metadata (tempo, time signature, channel assignments)
     patches/
-      ch0_patch.toml      # Patch configuration per channel
-      ch1_patch.toml
+      ch1.toml            # Patch configuration per channel
+      ch2.toml
       ...
     effects/
-      ch0_effects.toml    # Effect chain configuration per channel
+      ch1.toml            # Effect chain configuration per channel
       ...
     midi/
-      ch0.mid             # Monophonic MIDI data per channel
-      ch1.mid
+      ch1.toml            # MIDI track data per channel
+      ch2.toml
       ...
+    scripts/
+      ch1.kel             # Keleos script per channel (optional)
+      ...
+    exports/
+      my_song.mid         # Exported Standard MIDI File
 ```
 
 ## Architecture
@@ -117,7 +170,7 @@ daw_projects/
 | Module | Purpose |
 |--------|---------|
 | `main.rs` | Application entry point, DAW state machine, event loop, input handling, rendering |
-| `save_load.rs` | Project persistence (TOML save/load, MIDI export/import) |
+| `save_load.rs` | Project persistence (TOML save/load) |
 | `sdl_audio.rs` | Audio device bridge (SDL3 audio callback to AudioEngine) |
 | `sdl_input.rs` | SDL3 keyboard and mouse event translation |
 | `sdl_platform.rs` | Platform trait implementation for std file I/O |
@@ -125,8 +178,9 @@ daw_projects/
 
 ### Library Crates
 
-- **daw-core** (no_std+alloc): Shared DAW logic including MIDI track representation, transport state, patch configuration, preset definitions, rendering trait, and Standard MIDI File parser
+- **daw-core** (no_std+alloc): Shared DAW logic including MIDI track representation, transport state, patch configuration, preset definitions, rendering trait, Standard MIDI File parser/builder, and Keleos script runner
 - **audio** (no_std+alloc): 8-channel synthesizer engine with dual VCO, dual envelope generator, HPF/LPF filters, LFO, modulation matrix, and 25-pedal DSP effect chain
+- **keleos** (no_std+alloc): Keleos scripting language with lexer, parser, compiler, and virtual machine
 
 ## Testing
 
@@ -135,4 +189,4 @@ cargo test -p daw
 cargo test -p daw-core
 ```
 
-The DAW binary has 3 unit tests. The daw-core library has 45 tests covering MIDI track operations, transport logic, project serialization, preset loading, rendering calculations, and Standard MIDI File parsing.
+The DAW binary has 3 unit tests. The daw-core library has 60 tests covering MIDI track operations, transport logic, project serialization, preset loading, rendering calculations, Standard MIDI File parsing, and Keleos script integration.

@@ -3133,11 +3133,8 @@ impl DawState {
                 continue;
             }
 
-            let line_color = if note.is_multiple_of(12) {
-                GRID_BAR
-            } else {
-                GRID_LINE
-            };
+            // Solid line at the B/C boundary (bottom of C row, top of B row).
+            let line_color = if note % 12 == 11 { GRID_BAR } else { GRID_LINE };
             renderer.draw_hline(PIANO_KEY_WIDTH, screen_w, y, line_color);
 
             // Shade black keys.

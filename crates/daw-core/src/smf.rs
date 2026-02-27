@@ -353,8 +353,9 @@ impl<'a> Cursor<'a> {
 ///
 /// All tracks are merged into a single SMF track. This is useful for
 /// exporting DAW compositions to standard .mid files. The output uses the
-/// given ticks per beat for timing resolution.
-pub fn build_smf(tracks: &[MidiTrack], ticks_per_beat: u16) -> Vec<u8> {
+/// given ticks per beat for timing resolution. The tempo and time signature
+/// are written as meta events at tick 0.
+pub fn build_smf(tracks: &[MidiTrack], ticks_per_beat: u16, tempo_bpm: f64, beats_per_bar: u8) -> Vec<u8> {
     // Collect all note events from all tracks with channel assignment.
     let mut events: Vec<(u64, u8, u8, u8, bool)> = Vec::new(); // (tick, channel, pitch, velocity, is_on)
 
@@ -370,8 +371,31 @@ pub fn build_smf(tracks: &[MidiTrack], ticks_per_beat: u16) -> Vec<u8> {
     // Sort events by tick, with note-off before note-on at the same tick.
     events.sort_by(|a, b| a.0.cmp(&b.0).then(a.4.cmp(&b.4)));
 
-    // Build track data.
+    // Build track data with tempo and time signature meta events at tick 0.
     let mut track_data: Vec<u8> = Vec::new();
+
+    // Tempo meta event: FF 51 03 tt tt tt (microseconds per quarter note).
+    let usec_per_beat = (60_000_000.0 / tempo_bpm) as u32;
+    write_var_len(&mut track_data, 0); // delta time = 0
+    track_data.push(0xFF);
+    track_data.push(0x51);
+    track_data.push(0x03);
+    track_data.push((usec_per_beat >> 16) as u8);
+    track_data.push((usec_per_beat >> 8) as u8);
+    track_data.push(usec_per_beat as u8);
+
+    // Time signature meta event: FF 58 04 nn dd cc bb.
+    // nn = numerator (beats_per_bar), dd = denominator power (2 = quarter note),
+    // cc = MIDI clocks per metronome click (24), bb = 32nd notes per quarter (8).
+    write_var_len(&mut track_data, 0); // delta time = 0
+    track_data.push(0xFF);
+    track_data.push(0x58);
+    track_data.push(0x04);
+    track_data.push(beats_per_bar);
+    track_data.push(0x02); // 2^2 = 4, meaning quarter note denominator
+    track_data.push(24);   // MIDI clocks per metronome click
+    track_data.push(8);    // 32nd notes per quarter note
+
     let mut prev_tick: u64 = 0;
 
     for (tick, channel, pitch, velocity, is_on) in &events {
@@ -678,7 +702,7 @@ mod tests {
             ticks_per_beat: 480,
         };
 
-        let smf_data = build_smf(core::slice::from_ref(&track), 480);
+        let smf_data = build_smf(core::slice::from_ref(&track), 480, 120.0, 4);
         let result = parse_smf(&smf_data).expect("roundtrip parse");
 
         assert_eq!(result.ticks_per_beat, 480);
@@ -695,7 +719,7 @@ mod tests {
 
     #[test]
     fn empty_track_roundtrip() {
-        let smf_data = build_smf(&[], 480);
+        let smf_data = build_smf(&[], 480, 120.0, 4);
         let result = parse_smf(&smf_data).expect("parse empty");
         assert_eq!(result.tracks.len(), 1);
         assert!(result.tracks[0].notes.is_empty());
@@ -807,5 +831,45 @@ mod tests {
         let result = parse_smf(&data).expect("parse with meta events");
         assert_eq!(result.tracks[0].notes.len(), 1);
         assert_eq!(result.tracks[0].notes[0].pitch, 60);
+    }
+
+    #[test]
+    fn build_smf_includes_tempo_meta_event() {
+        let smf_data = build_smf(&[], 480, 140.0, 4);
+        // At 140 BPM, microseconds per beat = 60_000_000 / 140 = 428571.
+        let expected_usec: u32 = (60_000_000.0 / 140.0) as u32;
+        let tempo_bytes = [
+            (expected_usec >> 16) as u8,
+            (expected_usec >> 8) as u8,
+            expected_usec as u8,
+        ];
+        // Search for the tempo meta event (FF 51 03 + 3 bytes) in the file.
+        let pattern = [0xFF, 0x51, 0x03, tempo_bytes[0], tempo_bytes[1], tempo_bytes[2]];
+        let found = smf_data.windows(pattern.len()).any(|w| w == pattern);
+        assert!(found, "tempo meta event not found in SMF data");
+    }
+
+    #[test]
+    fn build_smf_includes_time_signature_meta_event() {
+        let smf_data = build_smf(&[], 480, 120.0, 3);
+        // Time signature: FF 58 04 03 02 18 08 (3/4 time).
+        let pattern = [0xFF, 0x58, 0x04, 3, 0x02, 24, 8];
+        let found = smf_data.windows(pattern.len()).any(|w| w == pattern);
+        assert!(found, "time signature meta event not found in SMF data");
+    }
+
+    #[test]
+    fn build_smf_roundtrip_with_tempo() {
+        let track = MidiTrack {
+            notes: vec![
+                MidiNote { tick: 0, duration: 480, pitch: 60, velocity: 100 },
+            ],
+            ticks_per_beat: 480,
+        };
+        let smf_data = build_smf(core::slice::from_ref(&track), 480, 90.0, 3);
+        let result = parse_smf(&smf_data).expect("roundtrip with tempo");
+        assert_eq!(result.tracks[0].notes.len(), 1);
+        assert_eq!(result.tracks[0].notes[0].pitch, 60);
+        assert_eq!(result.tracks[0].notes[0].velocity, 100);
     }
 }

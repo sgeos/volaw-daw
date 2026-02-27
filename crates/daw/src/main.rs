@@ -564,7 +564,12 @@ impl DawState {
     /// Export all tracks as a Standard MIDI File (.mid).
     fn export_midi(&mut self) {
         let filename = self.project.name.replace(' ', "_").to_lowercase();
-        let midi_data = daw_core::smf::build_smf(&self.tracks, self.project.ticks_per_beat);
+        let midi_data = daw_core::smf::build_smf(
+            &self.tracks,
+            self.project.ticks_per_beat,
+            self.project.tempo,
+            self.project.beats_per_bar,
+        );
         let export_dir = self.project_root.join("exports");
         if let Err(e) = std::fs::create_dir_all(&export_dir) {
             self.status_message = Some(format!("Export failed: {e}"));

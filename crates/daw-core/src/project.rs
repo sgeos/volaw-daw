@@ -23,6 +23,9 @@ pub struct DawProject {
     /// Beats per bar (time signature numerator). Default is 4 (for 4/4 time).
     #[serde(default = "default_beats_per_bar")]
     pub beats_per_bar: u8,
+    /// Time signature denominator (power of 2: 1, 2, 4, 8, 16, 32). Default is 4.
+    #[serde(default = "default_beat_denominator")]
+    pub beat_denominator: u8,
     /// Per-channel configuration.
     pub channels: [ChannelConfig; NUM_CHANNELS],
     /// Timed events (PCM sample triggers, etc.).
@@ -96,6 +99,10 @@ fn default_beats_per_bar() -> u8 {
     4
 }
 
+fn default_beat_denominator() -> u8 {
+    4
+}
+
 fn default_volume() -> f64 {
     0.8
 }
@@ -132,6 +139,7 @@ impl Default for DawProject {
             tempo: default_tempo(),
             ticks_per_beat: default_ticks_per_beat(),
             beats_per_bar: default_beats_per_bar(),
+            beat_denominator: default_beat_denominator(),
             channels,
             events: Vec::new(),
         }

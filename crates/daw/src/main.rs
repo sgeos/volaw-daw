@@ -386,6 +386,8 @@ fn parse_voice_mode(s: &str) -> VoiceMode {
 enum ToolbarEdit {
     SongName,
     Bpm,
+    TimeSigNum,
+    TimeSigDen,
 }
 
 /// DAW application state.
@@ -592,6 +594,7 @@ impl DawState {
             self.project.ticks_per_beat,
             self.project.tempo,
             self.project.beats_per_bar,
+            self.project.beat_denominator,
         );
         let export_dir = self.project_root.join("exports");
         if let Err(e) = std::fs::create_dir_all(&export_dir) {
@@ -753,13 +756,13 @@ impl DawState {
             }
         }
 
-        // Trigger metronome clicks on beat boundaries.
+        // Trigger metronome clicks on beat-unit boundaries.
         if engine.metronome.enabled && !looped && prev_ticks < current_ticks {
-            let tpb = self.transport.ticks_per_beat as u64;
-            let prev_beat = prev_ticks / tpb;
-            let current_beat = current_ticks / tpb;
+            let tpbu = self.transport.ticks_per_beat_unit();
+            let prev_beat = prev_ticks / tpbu;
+            let current_beat = current_ticks / tpbu;
             if current_beat > prev_beat {
-                let is_downbeat = (current_ticks / tpb).is_multiple_of(self.transport.beats_per_bar as u64);
+                let is_downbeat = (current_ticks / tpbu).is_multiple_of(self.transport.beats_per_bar as u64);
                 let sr = self.transport.sample_rate;
                 if is_downbeat {
                     engine.metronome.click_downbeat(sr);
@@ -1092,10 +1095,16 @@ impl DawState {
                         (self.pedal_picker_scroll - delta as f32 * 20.0).clamp(0.0, max_scroll);
                     return;
                 }
-                // Scroll over tempo display adjusts BPM.
+                // Scroll over toolbar fields.
                 let (mx, my) = self.last_mouse;
-                if my < TOOLBAR_HEIGHT && (600.0..=720.0).contains(&mx) {
-                    self.adjust_tempo(delta as f64);
+                if my < TOOLBAR_HEIGHT {
+                    if (600.0..=720.0).contains(&mx) {
+                        self.adjust_tempo(delta as f64);
+                    } else if (720.0..=748.0).contains(&mx) {
+                        self.adjust_time_sig_num(delta);
+                    } else if (748.0..=780.0).contains(&mx) {
+                        self.adjust_time_sig_den(delta);
+                    }
                     return;
                 }
                 if self.current_page == DawPage::PianoRoll {
@@ -1190,7 +1199,7 @@ impl DawState {
             DawInput::ToggleLoop => self.toggle_loop(),
             DawInput::ToggleSolo => self.toggle_solo(),
             DawInput::ToggleMetronome => self.toggle_metronome(),
-            DawInput::CycleTimeSig => self.cycle_time_sig(),
+            DawInput::CycleTimeSig => self.adjust_time_sig_num(1),
             DawInput::Home => {
                 self.transport.reset();
                 self.stop_all_notes();
@@ -1233,8 +1242,10 @@ impl DawState {
                 self.start_toolbar_edit(ToolbarEdit::SongName, self.project.name.clone());
             } else if (620.0..720.0).contains(&mx) {
                 self.start_toolbar_edit(ToolbarEdit::Bpm, format!("{:.0}", self.project.tempo));
-            } else if (720.0..780.0).contains(&mx) {
-                self.cycle_time_sig();
+            } else if (720.0..748.0).contains(&mx) {
+                self.start_toolbar_edit(ToolbarEdit::TimeSigNum, format!("{}", self.project.beats_per_bar));
+            } else if (748.0..780.0).contains(&mx) {
+                self.start_toolbar_edit(ToolbarEdit::TimeSigDen, format!("{}", self.project.beat_denominator));
             } else if (780.0..870.0).contains(&mx) {
                 self.cycle_grid();
             }
@@ -1618,6 +1629,29 @@ impl DawState {
                     self.status_message = Some(format!("{clamped:.0} BPM"));
                 }
             }
+            Some(ToolbarEdit::TimeSigNum) => {
+                if let Ok(num) = self.edit_buffer.trim().parse::<u8>() {
+                    let clamped = num.clamp(1, 32);
+                    self.project.beats_per_bar = clamped;
+                    self.transport.beats_per_bar = clamped;
+                    let den = self.project.beat_denominator;
+                    self.status_message = Some(format!("{clamped}/{den} Time"));
+                }
+            }
+            Some(ToolbarEdit::TimeSigDen) => {
+                if let Ok(den) = self.edit_buffer.trim().parse::<u8>() {
+                    // Snap to nearest valid power of 2 (1, 2, 4, 8, 16, 32).
+                    const DENOMS: [u8; 6] = [1, 2, 4, 8, 16, 32];
+                    let snapped = DENOMS.iter()
+                        .min_by_key(|&&d| (d as i32 - den as i32).unsigned_abs())
+                        .copied()
+                        .unwrap_or(4);
+                    self.project.beat_denominator = snapped;
+                    self.transport.beat_denominator = snapped;
+                    let num = self.project.beats_per_bar;
+                    self.status_message = Some(format!("{num}/{snapped} Time"));
+                }
+            }
             None => {}
         }
         self.finish_toolbar_edit();
@@ -1637,6 +1671,11 @@ impl DawState {
                 if self.edit_buffer.len() < 6
                     && (ch.is_ascii_digit() || (ch == '.' && !self.edit_buffer.contains('.')))
                 {
+                    self.edit_buffer.push(ch);
+                }
+            }
+            Some(ToolbarEdit::TimeSigNum) | Some(ToolbarEdit::TimeSigDen) => {
+                if self.edit_buffer.len() < 2 && ch.is_ascii_digit() {
                     self.edit_buffer.push(ch);
                 }
             }
@@ -1808,21 +1847,32 @@ impl DawState {
         }
     }
 
-    /// Cycle through common time signatures: 4/4 -> 3/4 -> 6/4 -> 5/4 -> 7/4 -> 4/4.
-    fn cycle_time_sig(&mut self) {
-        let signatures: &[u8] = &[4, 3, 6, 5, 7];
-        let current_idx = signatures
-            .iter()
-            .position(|&s| s == self.project.beats_per_bar);
-        let next_idx = match current_idx {
-            Some(i) => (i + 1) % signatures.len(),
-            None => 0,
-        };
-        let bpb = signatures[next_idx];
-        self.project.beats_per_bar = bpb;
-        self.transport.beats_per_bar = bpb;
-        self.status_message = Some(format!("{bpb}/4 Time"));
+    /// Adjust the time signature numerator by a delta, clamped to 1-32.
+    fn adjust_time_sig_num(&mut self, delta: i32) {
+        let new_num = (self.project.beats_per_bar as i32 + delta).clamp(1, 32) as u8;
+        self.project.beats_per_bar = new_num;
+        self.transport.beats_per_bar = new_num;
+        let den = self.project.beat_denominator;
+        self.status_message = Some(format!("{new_num}/{den} Time"));
     }
+
+    /// Adjust the time signature denominator to the next/previous power of 2.
+    /// Valid values: 1, 2, 4, 8, 16, 32.
+    fn adjust_time_sig_den(&mut self, delta: i32) {
+        const DENOMS: [u8; 6] = [1, 2, 4, 8, 16, 32];
+        let current_idx = DENOMS
+            .iter()
+            .position(|&d| d == self.project.beat_denominator)
+            .unwrap_or(2); // Default to 4 if not found.
+        let new_idx = (current_idx as i32 + delta).clamp(0, DENOMS.len() as i32 - 1) as usize;
+        let den = DENOMS[new_idx];
+        self.project.beat_denominator = den;
+        self.transport.beat_denominator = den;
+        let num = self.project.beats_per_bar;
+        self.status_message = Some(format!("{num}/{den} Time"));
+    }
+
+
 
     /// Toggle loop mode. When enabling, auto-set the loop region to cover
     /// all notes in the current channel track.
@@ -3208,9 +3258,23 @@ impl DawState {
             renderer.draw_text(&tempo_text, 620.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
         }
 
-        // Time signature display (clickable, cycles on click).
-        let ts_text = format!("{}/4", self.project.beats_per_bar);
-        renderer.draw_text(&ts_text, 720.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
+        // Time signature display (clickable numerator and denominator, editable).
+        if self.toolbar_edit == Some(ToolbarEdit::TimeSigNum) {
+            renderer.fill_rect(718.0, 4.0, 28.0, 24.0, Color::rgb(50, 50, 70));
+            let display = format!("{}|", self.edit_buffer);
+            renderer.draw_text(&display, 720.0, 8.0, FontSize::Medium, TEXT_ACCENT);
+            let slash = format!("/{}", self.project.beat_denominator);
+            renderer.draw_text(&slash, 748.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
+        } else if self.toolbar_edit == Some(ToolbarEdit::TimeSigDen) {
+            let num_text = format!("{}/", self.project.beats_per_bar);
+            renderer.draw_text(&num_text, 720.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
+            renderer.fill_rect(748.0, 4.0, 28.0, 24.0, Color::rgb(50, 50, 70));
+            let display = format!("{}|", self.edit_buffer);
+            renderer.draw_text(&display, 750.0, 8.0, FontSize::Medium, TEXT_ACCENT);
+        } else {
+            let ts_text = format!("{}/{}", self.project.beats_per_bar, self.project.beat_denominator);
+            renderer.draw_text(&ts_text, 720.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
+        }
 
         // Grid subdivision display (clickable, cycles on click).
         let grid_text = grid_label(self.snap_ticks, self.project.ticks_per_beat as u64, self.transport.ticks_per_bar());
@@ -4452,6 +4516,7 @@ fn main() {
             Ok((project, tracks, patches, effects)) => {
                 state.transport.tempo = project.tempo;
                 state.transport.beats_per_bar = project.beats_per_bar;
+                state.transport.beat_denominator = project.beat_denominator;
                 state.project = project;
                 state.tracks = tracks;
                 state.patches = patches;
@@ -4525,6 +4590,7 @@ fn main() {
     state.apply_all_effects();
     state.transport.tempo = state.project.tempo;
     state.transport.beats_per_bar = state.project.beats_per_bar;
+    state.transport.beat_denominator = state.project.beat_denominator;
 
     println!("[INFO] DAW started: {WINDOW_WIDTH}x{WINDOW_HEIGHT} @ {SAMPLE_RATE}Hz");
     println!("[INFO] Controls: Space=Play/Pause, S=Stop, 1-8=Ch, P=Preset, Shift+P=Prev, M=Mute, Ctrl+S=Save, Q=Quit");

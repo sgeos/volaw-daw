@@ -23,6 +23,8 @@ pub struct Transport {
     pub sample_rate: u32,
     /// Beats per bar (time signature numerator). Default is 4.
     pub beats_per_bar: u8,
+    /// Time signature denominator (power of 2: 1, 2, 4, 8, 16, 32). Default is 4.
+    pub beat_denominator: u8,
 }
 
 impl Transport {
@@ -38,6 +40,7 @@ impl Transport {
             loop_enabled: false,
             sample_rate,
             beats_per_bar: 4,
+            beat_denominator: 4,
         }
     }
 
@@ -59,19 +62,27 @@ impl Transport {
     }
 
     /// Return the current position as (bar, beat, tick) using the current
-    /// beats_per_bar setting.
+    /// time signature. Beat size depends on the denominator.
     pub fn position_bbt(&self) -> (u64, u64, u64) {
         let bpb = self.beats_per_bar as u64;
-        let total_beats = self.position_ticks / self.ticks_per_beat as u64;
+        let tpbu = self.ticks_per_beat_unit();
+        let total_beats = self.position_ticks / tpbu;
         let bar = total_beats / bpb;
         let beat = total_beats % bpb;
-        let tick = self.position_ticks % self.ticks_per_beat as u64;
+        let tick = self.position_ticks % tpbu;
         (bar + 1, beat + 1, tick)
+    }
+
+    /// Return ticks per beat-unit based on the time signature denominator.
+    /// ticks_per_beat is ticks per quarter note (MIDI standard). The denominator
+    /// selects the note value that counts as one beat: 4 = quarter, 8 = eighth, etc.
+    pub fn ticks_per_beat_unit(&self) -> u64 {
+        self.ticks_per_beat as u64 * 4 / self.beat_denominator.max(1) as u64
     }
 
     /// Return ticks per bar based on the current time signature.
     pub fn ticks_per_bar(&self) -> u64 {
-        self.ticks_per_beat as u64 * self.beats_per_bar as u64
+        self.ticks_per_beat_unit() * self.beats_per_bar as u64
     }
 
     /// Advance the transport by the given number of audio samples.
@@ -219,5 +230,34 @@ mod tests {
         let mut transport = Transport::new(48000, 480);
         transport.beats_per_bar = 3;
         assert_eq!(transport.ticks_per_bar(), 1440);
+    }
+
+    #[test]
+    fn ticks_per_bar_six_eight() {
+        let mut transport = Transport::new(48000, 480);
+        transport.beats_per_bar = 6;
+        transport.beat_denominator = 8;
+        // 6 eighth-note beats per bar. Each eighth = 480*4/8 = 240 ticks.
+        assert_eq!(transport.ticks_per_bar(), 1440);
+    }
+
+    #[test]
+    fn ticks_per_bar_three_two() {
+        let mut transport = Transport::new(48000, 480);
+        transport.beats_per_bar = 3;
+        transport.beat_denominator = 2;
+        // 3 half-note beats per bar. Each half = 480*4/2 = 960 ticks.
+        assert_eq!(transport.ticks_per_bar(), 2880);
+    }
+
+    #[test]
+    fn position_bbt_six_eight() {
+        let mut transport = Transport::new(48000, 480);
+        transport.beats_per_bar = 6;
+        transport.beat_denominator = 8;
+        // 6 eighth-note beats = 1 bar = 1440 ticks.
+        transport.position_ticks = 1440;
+        let (bar, beat, tick) = transport.position_bbt();
+        assert_eq!((bar, beat, tick), (2, 1, 0));
     }
 }

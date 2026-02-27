@@ -355,7 +355,7 @@ impl<'a> Cursor<'a> {
 /// exporting DAW compositions to standard .mid files. The output uses the
 /// given ticks per beat for timing resolution. The tempo and time signature
 /// are written as meta events at tick 0.
-pub fn build_smf(tracks: &[MidiTrack], ticks_per_beat: u16, tempo_bpm: f64, beats_per_bar: u8) -> Vec<u8> {
+pub fn build_smf(tracks: &[MidiTrack], ticks_per_beat: u16, tempo_bpm: f64, beats_per_bar: u8, beat_denominator: u8) -> Vec<u8> {
     // Collect all note events from all tracks with channel assignment.
     let mut events: Vec<(u64, u8, u8, u8, bool)> = Vec::new(); // (tick, channel, pitch, velocity, is_on)
 
@@ -385,14 +385,23 @@ pub fn build_smf(tracks: &[MidiTrack], ticks_per_beat: u16, tempo_bpm: f64, beat
     track_data.push(usec_per_beat as u8);
 
     // Time signature meta event: FF 58 04 nn dd cc bb.
-    // nn = numerator (beats_per_bar), dd = denominator power (2 = quarter note),
+    // nn = numerator (beats_per_bar), dd = denominator power (2^dd),
     // cc = MIDI clocks per metronome click (24), bb = 32nd notes per quarter (8).
+    let denom_power = match beat_denominator {
+        1 => 0,   // 2^0 = 1
+        2 => 1,   // 2^1 = 2
+        4 => 2,   // 2^2 = 4
+        8 => 3,   // 2^3 = 8
+        16 => 4,  // 2^4 = 16
+        32 => 5,  // 2^5 = 32
+        _ => 2,   // Default to quarter note.
+    };
     write_var_len(&mut track_data, 0); // delta time = 0
     track_data.push(0xFF);
     track_data.push(0x58);
     track_data.push(0x04);
     track_data.push(beats_per_bar);
-    track_data.push(0x02); // 2^2 = 4, meaning quarter note denominator
+    track_data.push(denom_power);
     track_data.push(24);   // MIDI clocks per metronome click
     track_data.push(8);    // 32nd notes per quarter note
 
@@ -702,7 +711,7 @@ mod tests {
             ticks_per_beat: 480,
         };
 
-        let smf_data = build_smf(core::slice::from_ref(&track), 480, 120.0, 4);
+        let smf_data = build_smf(core::slice::from_ref(&track), 480, 120.0, 4, 4);
         let result = parse_smf(&smf_data).expect("roundtrip parse");
 
         assert_eq!(result.ticks_per_beat, 480);
@@ -719,7 +728,7 @@ mod tests {
 
     #[test]
     fn empty_track_roundtrip() {
-        let smf_data = build_smf(&[], 480, 120.0, 4);
+        let smf_data = build_smf(&[], 480, 120.0, 4, 4);
         let result = parse_smf(&smf_data).expect("parse empty");
         assert_eq!(result.tracks.len(), 1);
         assert!(result.tracks[0].notes.is_empty());
@@ -835,7 +844,7 @@ mod tests {
 
     #[test]
     fn build_smf_includes_tempo_meta_event() {
-        let smf_data = build_smf(&[], 480, 140.0, 4);
+        let smf_data = build_smf(&[], 480, 140.0, 4, 4);
         // At 140 BPM, microseconds per beat = 60_000_000 / 140 = 428571.
         let expected_usec: u32 = (60_000_000.0 / 140.0) as u32;
         let tempo_bytes = [
@@ -851,7 +860,7 @@ mod tests {
 
     #[test]
     fn build_smf_includes_time_signature_meta_event() {
-        let smf_data = build_smf(&[], 480, 120.0, 3);
+        let smf_data = build_smf(&[], 480, 120.0, 3, 4);
         // Time signature: FF 58 04 03 02 18 08 (3/4 time).
         let pattern = [0xFF, 0x58, 0x04, 3, 0x02, 24, 8];
         let found = smf_data.windows(pattern.len()).any(|w| w == pattern);
@@ -866,7 +875,7 @@ mod tests {
             ],
             ticks_per_beat: 480,
         };
-        let smf_data = build_smf(core::slice::from_ref(&track), 480, 90.0, 3);
+        let smf_data = build_smf(core::slice::from_ref(&track), 480, 90.0, 3, 4);
         let result = parse_smf(&smf_data).expect("roundtrip with tempo");
         assert_eq!(result.tracks[0].notes.len(), 1);
         assert_eq!(result.tracks[0].notes[0].pitch, 60);

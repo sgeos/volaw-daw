@@ -462,6 +462,8 @@ struct DawState {
     toolbar_edit: Option<ToolbarEdit>,
     /// Text buffer for inline toolbar editing.
     edit_buffer: String,
+    /// SDL window pointer for text input control.
+    sdl_window: *mut sdl3_sys::video::SDL_Window,
 }
 
 /// Maximum undo history depth.
@@ -509,6 +511,7 @@ impl DawState {
             last_script_check: std::time::Instant::now(),
             toolbar_edit: None,
             edit_buffer: String::new(),
+            sdl_window: std::ptr::null_mut(),
         }
     }
 
@@ -949,8 +952,7 @@ impl DawState {
                     return;
                 }
                 DawInput::Cancel => {
-                    self.toolbar_edit = None;
-                    self.edit_buffer.clear();
+                    self.finish_toolbar_edit();
                     return;
                 }
                 DawInput::TextChar(ch) => {
@@ -1228,11 +1230,9 @@ impl DawState {
         // Toolbar click: edit song name, BPM, cycle time sig, cycle grid.
         if my < TOOLBAR_HEIGHT {
             if mx < 200.0 {
-                self.toolbar_edit = Some(ToolbarEdit::SongName);
-                self.edit_buffer = self.project.name.clone();
+                self.start_toolbar_edit(ToolbarEdit::SongName, self.project.name.clone());
             } else if (620.0..720.0).contains(&mx) {
-                self.toolbar_edit = Some(ToolbarEdit::Bpm);
-                self.edit_buffer = format!("{:.0}", self.project.tempo);
+                self.start_toolbar_edit(ToolbarEdit::Bpm, format!("{:.0}", self.project.tempo));
             } else if (720.0..780.0).contains(&mx) {
                 self.cycle_time_sig();
             } else if (780.0..870.0).contains(&mx) {
@@ -1583,6 +1583,24 @@ impl DawState {
         self.status_message = Some(format!("{:.0} BPM", self.project.tempo));
     }
 
+    /// Enter toolbar editing mode for the given field.
+    fn start_toolbar_edit(&mut self, field: ToolbarEdit, initial: String) {
+        self.toolbar_edit = Some(field);
+        self.edit_buffer = initial;
+        if !self.sdl_window.is_null() {
+            unsafe { sdl3_sys::keyboard::SDL_StartTextInput(self.sdl_window); }
+        }
+    }
+
+    /// Exit toolbar editing mode without applying changes.
+    fn finish_toolbar_edit(&mut self) {
+        self.toolbar_edit = None;
+        self.edit_buffer.clear();
+        if !self.sdl_window.is_null() {
+            unsafe { sdl3_sys::keyboard::SDL_StopTextInput(self.sdl_window); }
+        }
+    }
+
     /// Apply the current toolbar edit buffer to the relevant project field.
     fn apply_toolbar_edit(&mut self) {
         match self.toolbar_edit {
@@ -1602,8 +1620,7 @@ impl DawState {
             }
             None => {}
         }
-        self.toolbar_edit = None;
-        self.edit_buffer.clear();
+        self.finish_toolbar_edit();
     }
 
     /// Append a character to the toolbar edit buffer with field-specific validation.
@@ -4428,6 +4445,7 @@ fn main() {
     // Create DAW state, optionally loading a project.
     let mut state = DawState::new(engine_arc);
     state.project_root = PathBuf::from(&project_root);
+    state.sdl_window = renderer.window();
 
     if let Some(name) = load_name {
         match save_load::load_project(&state.project_root, &name) {

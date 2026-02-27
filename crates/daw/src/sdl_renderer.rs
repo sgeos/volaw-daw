@@ -20,7 +20,6 @@ type TextCacheKey = (String, usize);
 
 /// SDL3 renderer for the DAW.
 pub struct SdlRenderer {
-    #[allow(dead_code)]
     window: *mut SDL_Window,
     renderer: *mut SDL_Renderer,
     text_engine: *mut TTF_TextEngine,
@@ -97,6 +96,11 @@ impl SdlRenderer {
                 text_cache: HashMap::new(),
             })
         }
+    }
+
+    /// Return the raw SDL window pointer (for SDL_StartTextInput / SDL_StopTextInput).
+    pub fn window(&self) -> *mut SDL_Window {
+        self.window
     }
 
     fn font_size_index(size: FontSize) -> usize {

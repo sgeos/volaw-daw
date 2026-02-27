@@ -282,7 +282,7 @@ fn pluck() -> PatchConfig {
     }
 }
 
-/// Bell: FM-like with ring modulator, quick decay.
+/// Bell: ring modulation between sine and triangle, quick decay.
 fn bell() -> PatchConfig {
     PatchConfig {
         name: String::from("Bell"),
@@ -290,10 +290,11 @@ fn bell() -> PatchConfig {
         vco1_waveform: String::from("sine"),
         vco1_scale: String::from("4'"),
         vco1_level: 0.8,
-        vco2_waveform: String::from("ring"),
+        vco2_waveform: String::from("triangle"),
         vco2_scale: String::from("2'"),
         vco2_level: 0.5,
         vco_mix: 0.4,
+        ring_mod_depth: 1.0,
         eg2_attack: 0.001,
         eg2_decay: 1.5,
         eg2_sustain: 0.0,
@@ -579,10 +580,11 @@ fn cowbell() -> PatchConfig {
         vco1_scale: String::from("4'"),
         vco1_level: 0.8,
         vco1_pulse_width: 0.5,
-        vco2_waveform: String::from("ring"),
+        vco2_waveform: String::from("square"),
         vco2_scale: String::from("2'"),
         vco2_level: 0.6,
         vco_mix: 0.4,
+        ring_mod_depth: 0.8,
         eg2_attack: 0.001,
         eg2_decay: 0.3,
         eg2_sustain: 0.0,
@@ -593,16 +595,17 @@ fn cowbell() -> PatchConfig {
     }
 }
 
-/// Cymbal: filtered noise with long decay and highpass.
+/// Cymbal: filtered noise with ring modulation, long decay and highpass.
 fn cymbal() -> PatchConfig {
     PatchConfig {
         name: String::from("Cymbal"),
         vco1_waveform: String::from("noise"),
         vco1_level: 0.9,
-        vco2_waveform: String::from("ring"),
+        vco2_waveform: String::from("triangle"),
         vco2_scale: String::from("2'"),
         vco2_level: 0.3,
         vco_mix: 0.7,
+        ring_mod_depth: 0.6,
         eg2_attack: 0.001,
         eg2_decay: 1.5,
         eg2_sustain: 0.0,

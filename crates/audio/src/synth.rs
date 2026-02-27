@@ -317,6 +317,10 @@ pub struct Ms20Voice {
     pub voice_mode: VoiceMode,
     /// VCO mix balance. 0.0 = all VCO1, 1.0 = all VCO2, 0.5 = equal mix.
     pub vco_mix: f64,
+    /// Ring modulation depth. 0.0 = pure additive VCO mix, 1.0 = pure ring
+    /// modulation (VCO1 * VCO2). Intermediate values crossfade between the
+    /// two signals.
+    pub ring_mod_depth: f64,
     /// Whether external audio input is patched into the signal chain.
     pub external_input_enabled: bool,
     /// External input mix level (0.0 to 1.0).
@@ -354,6 +358,7 @@ impl Ms20Voice {
             voices,
             voice_mode: mode,
             vco_mix: 0.5,
+            ring_mod_depth: 0.0,
             external_input_enabled: false,
             external_input_level: 0.5,
             lfo: Lfo::new(LfoWaveform::Sine),
@@ -441,6 +446,7 @@ impl Ms20Voice {
     pub fn process(&mut self, buffer: &mut [f64], sample_rate: u32) {
         let sr = sample_rate as f64;
         let vco_mix = self.vco_mix.clamp(0.0, 1.0);
+        let ring_mod = self.ring_mod_depth.clamp(0.0, 1.0);
 
         for sample in buffer.iter_mut() {
             // Capture external input before overwriting.
@@ -506,15 +512,16 @@ impl Ms20Voice {
                         (voice.vco2.pulse_width + mods.pwm_width).clamp(0.01, 0.99);
                 }
 
-                // Generate VCO outputs with ring mod cross-reference.
-                let vco1_prev = voice.vco1.last_output();
-                let vco2_prev = voice.vco2.last_output();
-                let vco1_out = voice.vco1.tick(vco1_freq, vco2_prev, sr);
-                let vco2_out = voice.vco2.tick(vco2_freq, vco1_prev, sr);
+                // Generate VCO outputs independently.
+                let vco1_out = voice.vco1.tick(vco1_freq, sr);
+                let vco2_out = voice.vco2.tick(vco2_freq, sr);
 
-                // Mix VCOs. External input only on voice 0.
+                // Mix VCOs with optional ring modulation crossfade.
+                // dry = additive blend, wet = VCO1 * VCO2.
+                let dry = vco1_out * (1.0 - vco_mix) + vco2_out * vco_mix;
+                let wet = vco1_out * vco2_out;
                 let ext = if vi == 0 { external } else { 0.0 };
-                let mixed = vco1_out * (1.0 - vco_mix) + vco2_out * vco_mix + ext;
+                let mixed = dry * (1.0 - ring_mod) + wet * ring_mod + ext;
 
                 // Apply HPF with EG1 modulation.
                 let hpf_base_cutoff = voice.hpf.cutoff;
@@ -1219,4 +1226,128 @@ mod tests {
         assert!(synth.velocity_envelope_depth.abs() < f64::EPSILON);
         assert!(synth.velocity_pitch_depth.abs() < f64::EPSILON);
     }
+
+    // -----------------------------------------------------------------------
+    // Ring modulation depth tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ring_mod_depth_zero_matches_additive() {
+        // At ring_mod_depth = 0.0, output should be pure additive mix.
+        let mut synth = Ms20Voice::new();
+        synth.ring_mod_depth = 0.0;
+        synth.note_on(440.0);
+        let mut buf = [0.0f64; 4800];
+        synth.process(&mut buf, 48000);
+        let energy: f64 = buf.iter().map(|s| s * s).sum();
+        assert!(energy > 0.001, "Additive mix should produce output: {energy}");
+    }
+
+    #[test]
+    fn ring_mod_depth_one_produces_output() {
+        // At ring_mod_depth = 1.0, output is VCO1 * VCO2.
+        let mut synth = Ms20Voice::new();
+        synth.ring_mod_depth = 1.0;
+        synth.voices[0].vco1.waveform = Waveform::Sine;
+        synth.voices[0].vco2.waveform = Waveform::Sine;
+        synth.note_on(440.0);
+        let mut buf = [0.0f64; 4800];
+        synth.process(&mut buf, 48000);
+        let energy: f64 = buf.iter().map(|s| s * s).sum();
+        assert!(energy > 0.001, "Ring mod should produce output: {energy}");
+    }
+
+    #[test]
+    fn ring_mod_depth_changes_timbre() {
+        // Ring mod at 1.0 should produce different output than at 0.0.
+        let mut dry = Ms20Voice::new();
+        dry.ring_mod_depth = 0.0;
+        dry.voices[0].vco1.waveform = Waveform::Sine;
+        dry.voices[0].vco2.waveform = Waveform::Sawtooth;
+        dry.note_on(440.0);
+        let mut dry_buf = [0.0f64; 4800];
+        dry.process(&mut dry_buf, 48000);
+
+        let mut wet = Ms20Voice::new();
+        wet.ring_mod_depth = 1.0;
+        wet.voices[0].vco1.waveform = Waveform::Sine;
+        wet.voices[0].vco2.waveform = Waveform::Sawtooth;
+        wet.note_on(440.0);
+        let mut wet_buf = [0.0f64; 4800];
+        wet.process(&mut wet_buf, 48000);
+
+        // Compute difference between the two signals.
+        let diff: f64 = dry_buf
+            .iter()
+            .zip(wet_buf.iter())
+            .map(|(d, w)| (d - w) * (d - w))
+            .sum();
+        assert!(
+            diff > 0.01,
+            "Ring mod should change timbre vs additive mix: diff={diff}"
+        );
+    }
+
+    #[test]
+    fn ring_mod_default_is_zero() {
+        let synth = Ms20Voice::new();
+        assert!(synth.ring_mod_depth.abs() < f64::EPSILON);
+    }
+
+    /// Regression test: simulates the DAW playback pattern with default patch
+    /// parameters and mod matrix. Trigger a note, hold through sustain, release,
+    /// trigger again. Verify output never becomes NaN/Inf and second note is
+    /// audible.
+    #[test]
+    fn multi_note_no_audio_death() {
+        let mut synth = Ms20Voice::new();
+
+        // Configure like the default patch (matches PatchConfig defaults).
+        for voice in &mut synth.voices {
+            voice.lpf.cutoff = 8000.0;
+            voice.lpf.resonance = 0.707;
+            voice.eg1.attack = 0.01;
+            voice.eg1.decay = 0.1;
+            voice.eg1.sustain = 0.8;
+            voice.eg1.release = 0.2;
+            voice.eg2.attack = 0.01;
+            voice.eg2.decay = 0.1;
+            voice.eg2.sustain = 0.8;
+            voice.eg2.release = 0.2;
+        }
+
+        let sr: u32 = 48000;
+
+        // First note: hold for 500ms (24000 samples).
+        synth.note_on_with_velocity(440.0, 0.8);
+        let mut buf1 = [0.0f64; 24000];
+        synth.process(&mut buf1, sr);
+        let energy1: f64 = buf1.iter().map(|s| s * s).sum();
+        assert!(
+            buf1.iter().all(|s: &f64| s.is_finite()),
+            "First note produced NaN/Inf"
+        );
+        assert!(energy1 > 0.1, "First note should produce audible output");
+
+        // Release and let decay for 500ms.
+        synth.note_off_freq(440.0);
+        let mut silence = [0.0f64; 24000];
+        synth.process(&mut silence, sr);
+        assert!(
+            silence.iter().all(|s: &f64| s.is_finite()),
+            "Release phase produced NaN/Inf"
+        );
+
+        // Second note: should also produce output.
+        synth.note_on_with_velocity(550.0, 0.8);
+        let mut buf2 = [0.0f64; 24000];
+        synth.process(&mut buf2, sr);
+        let energy2: f64 = buf2.iter().map(|s| s * s).sum();
+        assert!(
+            buf2.iter().all(|s: &f64| s.is_finite()),
+            "Second note produced NaN/Inf"
+        );
+        assert!(energy2 > 0.1, "Second note should produce audible output");
+    }
+
 }

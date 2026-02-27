@@ -4,10 +4,11 @@ mod sdl_input;
 #[allow(dead_code)]
 mod sdl_platform;
 mod sdl_renderer;
+mod wav;
 
 use std::sync::{Arc, Mutex};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use audio::modmatrix::{ModDest, ModRouting, ModSource};
 use audio::vco::{Scale, Waveform};
@@ -42,6 +43,7 @@ const PIANO_KEY_WIDTH: f32 = 60.0;
 const NOTE_HEIGHT: f32 = 12.0;
 const TOOLBAR_HEIGHT: f32 = 32.0;
 const CHANNEL_BAR_HEIGHT: f32 = 28.0;
+const RULER_HEIGHT: f32 = 22.0;
 const VELOCITY_LANE_HEIGHT: f32 = 60.0;
 
 /// Full MIDI note range: C-2 (note 0) to G8 (note 127) = 128 notes.
@@ -108,6 +110,7 @@ enum SynthParam {
     Vco2Level,
     Vco2PulseWidth,
     VcoMix,
+    RingModDepth,
     LfoRate,
     Eg1Attack,
     Eg1Decay,
@@ -121,6 +124,7 @@ enum SynthParam {
     HpfResonance,
     LpfCutoff,
     LpfResonance,
+    LpfSaturation,
     VelocityVca,
     VelocityFilter,
     VelocityEnv,
@@ -224,7 +228,7 @@ fn parse_waveform(s: &str) -> Waveform {
         "square" => Waveform::PwSquare,
         "sine" => Waveform::Sine,
         "noise" => Waveform::WhiteNoise,
-        "ring" => Waveform::RingModulator,
+        "pcm" => Waveform::Pcm,
         _ => Waveform::Sawtooth,
     }
 }
@@ -295,7 +299,12 @@ fn apply_chain_to_engine(
 }
 
 /// writes all synthesizer parameters to the Ms20Voice and its voice pool.
-fn apply_patch_to_engine(engine: &mut AudioEngine, channel: usize, patch: &PatchConfig) {
+fn apply_patch_to_engine(
+    engine: &mut AudioEngine,
+    channel: usize,
+    patch: &PatchConfig,
+    samples_dir: Option<&Path>,
+) {
     let synth = &mut engine.channels[channel].synth;
 
     // Voice mode.
@@ -342,14 +351,48 @@ fn apply_patch_to_engine(engine: &mut AudioEngine, channel: usize, patch: &Patch
         voice.hpf.resonance = patch.hpf_resonance;
         voice.lpf.cutoff = patch.lpf_cutoff;
         voice.lpf.resonance = patch.lpf_resonance;
+        voice.lpf.saturation = patch.lpf_saturation;
 
         // Pitch glide.
         voice.glide.enabled = patch.glide_enabled;
         voice.glide.time = patch.glide_time;
     }
 
+    // Load PCM wavetable samples for VCOs when waveform is set to Pcm.
+    // The sample buffer is shared across all voices via Arc to avoid
+    // duplicating audio data per voice.
+    if let Some(dir) = samples_dir {
+        if parse_waveform(&patch.vco1_waveform) == Waveform::Pcm && !patch.vco1_pcm_file.is_empty()
+        {
+            let path = dir.join(&patch.vco1_pcm_file);
+            match wav::load_wav(&path) {
+                Ok(samples) => {
+                    let arc = Arc::new(samples);
+                    for voice in &mut synth.voices {
+                        voice.vco1.set_pcm_samples(Arc::clone(&arc));
+                    }
+                }
+                Err(e) => eprintln!("[WARN] Failed to load VCO1 PCM {}: {e}", path.display()),
+            }
+        }
+        if parse_waveform(&patch.vco2_waveform) == Waveform::Pcm && !patch.vco2_pcm_file.is_empty()
+        {
+            let path = dir.join(&patch.vco2_pcm_file);
+            match wav::load_wav(&path) {
+                Ok(samples) => {
+                    let arc = Arc::new(samples);
+                    for voice in &mut synth.voices {
+                        voice.vco2.set_pcm_samples(Arc::clone(&arc));
+                    }
+                }
+                Err(e) => eprintln!("[WARN] Failed to load VCO2 PCM {}: {e}", path.display()),
+            }
+        }
+    }
+
     // Shared state.
     synth.vco_mix = patch.vco_mix;
+    synth.ring_mod_depth = patch.ring_mod_depth;
     synth.lfo_rate = patch.lfo_rate;
 
     // Modulation matrix: built entirely from the patch's mod_routings.
@@ -466,6 +509,16 @@ struct DawState {
     edit_buffer: String,
     /// SDL window pointer for text input control.
     sdl_window: *mut sdl3_sys::video::SDL_Window,
+    /// Screen-space origin of a rubber-band drag selection (x, y).
+    drag_select_start: Option<(f32, f32)>,
+    /// True once the mouse has moved far enough from the drag origin to
+    /// activate the marquee rectangle.
+    drag_select_active: bool,
+    /// When true, drag selection adds to the existing selection instead of
+    /// replacing it (Shift+drag behavior).
+    drag_select_additive: bool,
+    /// True while dragging on the ruler bar to define the loop region.
+    dragging_loop: bool,
 }
 
 /// Maximum undo history depth.
@@ -514,6 +567,10 @@ impl DawState {
             toolbar_edit: None,
             edit_buffer: String::new(),
             sdl_window: std::ptr::null_mut(),
+            drag_select_start: None,
+            drag_select_active: false,
+            drag_select_additive: false,
+            dragging_loop: false,
         }
     }
 
@@ -544,6 +601,81 @@ impl DawState {
             self.selected_notes.remove(pos);
         } else {
             self.selected_notes.push(idx);
+        }
+    }
+
+    /// Update the note selection based on a rubber-band rectangle defined by
+    /// the drag start (sx, sy) and the current mouse position (mx, my).
+    fn update_drag_selection(&mut self, sx: f32, sy: f32, mx: f32, my: f32) {
+        let roll_y = Self::roll_y();
+
+        // Convert screen-space rectangle to tick/pitch space.
+        let t0 = self.x_to_tick_raw(sx.min(mx));
+        let t1 = self.x_to_tick_raw(sx.max(mx));
+        let p_top = self.y_to_pitch(sy.min(my), roll_y);
+        let p_bot = self.y_to_pitch(sy.max(my), roll_y);
+        // y_to_pitch returns higher pitch for lower y, so p_top >= p_bot.
+        let pitch_lo = p_bot.min(p_top);
+        let pitch_hi = p_bot.max(p_top);
+
+        if !self.drag_select_additive {
+            self.selected_notes.clear();
+        }
+        let track = &self.tracks[self.selected_channel];
+        for (i, note) in track.notes.iter().enumerate() {
+            let note_end = note.tick + note.duration;
+            if note.tick <= t1
+                && note_end > t0
+                && note.pitch >= pitch_lo
+                && note.pitch <= pitch_hi
+                && !self.selected_notes.contains(&i)
+            {
+                self.selected_notes.push(i);
+            }
+        }
+    }
+
+    /// Place a new note at the given screen-space position.
+    /// Extracted from the original handle_click empty-space branch.
+    fn place_note_at(&mut self, mx: f32, my: f32) {
+        let roll_y = Self::roll_y();
+        if my < roll_y || mx < PIANO_KEY_WIDTH {
+            return;
+        }
+
+        let tick = self.x_to_tick(mx);
+        let pitch = self.y_to_pitch(my, roll_y);
+
+        if !(LOWEST_NOTE..LOWEST_NOTE + VISIBLE_NOTE_RANGE).contains(&pitch) {
+            return;
+        }
+
+        // Do not place a note in the velocity lane area.
+        if my >= roll_y + Self::roll_h() {
+            return;
+        }
+
+        self.push_undo();
+        let new_note = MidiNote {
+            tick,
+            duration: self.snap_ticks,
+            pitch,
+            velocity: DEFAULT_VELOCITY,
+        };
+        self.tracks[self.selected_channel].notes.push(new_note);
+        self.tracks[self.selected_channel].sort();
+
+        // Select the newly placed note.
+        let idx = self.tracks[self.selected_channel]
+            .notes
+            .iter()
+            .position(|n| n.tick == tick && n.pitch == pitch);
+        if let Some(i) = idx {
+            self.select_note(i);
+        }
+        // Preview the note (only when not playing back).
+        if !self.transport.playing {
+            self.preview_note(pitch, DEFAULT_VELOCITY);
         }
     }
 
@@ -927,10 +1059,19 @@ impl DawState {
         ppb / self.project.ticks_per_beat as f32
     }
 
+    /// Y-coordinate where the piano roll grid begins (below toolbar, channel bar, and ruler).
+    fn roll_y() -> f32 {
+        TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT + RULER_HEIGHT
+    }
+
+    /// Height of the piano roll grid area.
+    fn roll_h() -> f32 {
+        WINDOW_HEIGHT as f32 - Self::roll_y() - VELOCITY_LANE_HEIGHT
+    }
+
     /// Maximum scroll_y before the piano roll content runs out.
     fn max_scroll_y() -> f32 {
-        let roll_h = WINDOW_HEIGHT as f32 - TOOLBAR_HEIGHT - CHANNEL_BAR_HEIGHT - VELOCITY_LANE_HEIGHT;
-        (VISIBLE_NOTE_RANGE as f32 * NOTE_HEIGHT - roll_h).max(0.0)
+        (VISIBLE_NOTE_RANGE as f32 * NOTE_HEIGHT - Self::roll_h()).max(0.0)
     }
 
     /// Convert a pixel x-coordinate on the grid to a tick value, snapped to the grid.
@@ -938,6 +1079,12 @@ impl DawState {
         let raw_tick = ((x - PIANO_KEY_WIDTH + self.scroll_x) / self.tick_width()).max(0.0) as u64;
         // Snap to the nearest grid boundary.
         (raw_tick / self.snap_ticks) * self.snap_ticks
+    }
+
+    /// Convert a pixel x-coordinate to a tick value without snap quantization.
+    /// Used for rubber-band selection so the rectangle matches visual pixel boundaries.
+    fn x_to_tick_raw(&self, x: f32) -> u64 {
+        ((x - PIANO_KEY_WIDTH + self.scroll_x) / self.tick_width()).max(0.0) as u64
     }
 
     /// Convert a pixel y-coordinate on the grid to a MIDI pitch value.
@@ -1036,6 +1183,36 @@ impl DawState {
                 self.dragging_param = None;
                 self.dragging_note_edge = false;
                 self.dragging_velocity = false;
+
+                // Finalize ruler loop drag.
+                if self.dragging_loop {
+                    self.dragging_loop = false;
+                    let tpbar = self.transport.ticks_per_bar();
+                    if tpbar > 0 {
+                        self.transport.loop_start =
+                            (self.transport.loop_start / tpbar) * tpbar;
+                        self.transport.loop_end =
+                            (self.transport.loop_end.div_ceil(tpbar)) * tpbar;
+                    }
+                    if self.transport.loop_start >= self.transport.loop_end {
+                        self.transport.loop_enabled = false;
+                        self.status_message = Some(String::from("Loop OFF"));
+                    } else {
+                        self.status_message = Some(String::from("Loop ON"));
+                    }
+                }
+
+                // Finalize rubber-band selection or place a note on click-release.
+                if self.drag_select_active {
+                    // Drag completed: keep the selected notes, clear drag state.
+                    self.drag_select_start = None;
+                    self.drag_select_active = false;
+                } else if let Some((sx, sy)) = self.drag_select_start.take() {
+                    // No drag occurred (just a click on empty space). Place a note
+                    // at the original click position.
+                    self.drag_select_active = false;
+                    self.place_note_at(sx, sy);
+                }
             }
 
             // Piano roll inputs.
@@ -1218,13 +1395,27 @@ impl DawState {
             }
             DawInput::MouseMove(mx, my) => {
                 self.last_mouse = (mx, my);
-                if let Some(ref target) = self.dragging_param {
+                if self.dragging_loop {
+                    let tick = self.x_to_tick(mx);
+                    if tick > self.transport.loop_start {
+                        self.transport.loop_end = tick;
+                    }
+                } else if let Some(ref target) = self.dragging_param {
                     let value = drag_value(mx, target);
                     self.apply_drag_value(target.clone(), value);
                 } else if self.dragging_note_edge {
                     self.drag_note_duration(mx);
                 } else if self.dragging_velocity {
                     self.drag_velocity(my);
+                } else if let Some((sx, sy)) = self.drag_select_start {
+                    let dx = mx - sx;
+                    let dy = my - sy;
+                    if !self.drag_select_active && (dx * dx + dy * dy) > 16.0 {
+                        self.drag_select_active = true;
+                    }
+                    if self.drag_select_active {
+                        self.update_drag_selection(sx, sy, mx, my);
+                    }
                 }
             }
             _ => {}
@@ -1260,6 +1451,20 @@ impl DawState {
                 self.selected_channel = ch;
                 self.clear_note_selection();
             }
+            return;
+        }
+
+        // Ruler bar click (piano roll only): start loop region drag.
+        if self.current_page == DawPage::PianoRoll
+            && my >= content_y
+            && my < content_y + RULER_HEIGHT
+            && mx >= PIANO_KEY_WIDTH
+        {
+            let tick = self.x_to_tick(mx);
+            self.transport.loop_start = tick;
+            self.transport.loop_end = tick;
+            self.transport.loop_enabled = true;
+            self.dragging_loop = true;
             return;
         }
 
@@ -1304,9 +1509,9 @@ impl DawState {
         }
 
         // Determine the velocity lane boundary.
-        let screen_h = WINDOW_HEIGHT as f32;
-        let roll_h = screen_h - content_y - VELOCITY_LANE_HEIGHT;
-        let vel_lane_y = content_y + roll_h;
+        let roll_y = Self::roll_y();
+        let roll_h = Self::roll_h();
+        let vel_lane_y = roll_y + roll_h;
 
         // Velocity lane click.
         if my >= vel_lane_y && mx >= PIANO_KEY_WIDTH {
@@ -1315,7 +1520,6 @@ impl DawState {
         }
 
         // Piano key click (audition note).
-        let roll_y = content_y;
         if my >= roll_y && my < vel_lane_y && mx < PIANO_KEY_WIDTH {
             let pitch = self.y_to_pitch(my, roll_y);
             if (LOWEST_NOTE..LOWEST_NOTE + VISIBLE_NOTE_RANGE).contains(&pitch) {
@@ -1326,9 +1530,6 @@ impl DawState {
 
         // Piano roll grid click (to the right of the piano keys).
         if my >= roll_y && mx >= PIANO_KEY_WIDTH {
-            let tick = self.x_to_tick(mx);
-            let pitch = self.y_to_pitch(my, roll_y);
-
             // Check if clicking on an existing note.
             let tw = self.tick_width();
             let edge_zone = 8.0_f32; // Pixels from right edge that triggers duration drag.
@@ -1353,31 +1554,11 @@ impl DawState {
                 }
             }
 
-            // No existing note hit. Place a new note.
-            if (LOWEST_NOTE..LOWEST_NOTE + VISIBLE_NOTE_RANGE).contains(&pitch) {
-                self.push_undo();
-                let new_note = MidiNote {
-                    tick,
-                    duration: self.snap_ticks,
-                    pitch,
-                    velocity: DEFAULT_VELOCITY,
-                };
-                self.tracks[self.selected_channel].notes.push(new_note);
-                self.tracks[self.selected_channel].sort();
-
-                // Select the newly placed note.
-                let idx = self.tracks[self.selected_channel]
-                    .notes
-                    .iter()
-                    .position(|n| n.tick == tick && n.pitch == pitch);
-                if let Some(i) = idx {
-                    self.select_note(i);
-                }
-                // Preview the note (only when not playing back).
-                if !self.transport.playing {
-                    self.preview_note(pitch, DEFAULT_VELOCITY);
-                }
-            }
+            // No existing note hit. Start a potential drag selection.
+            // Note placement is deferred to MouseUp if no drag occurs.
+            self.drag_select_start = Some((mx, my));
+            self.drag_select_active = false;
+            self.drag_select_additive = false;
         }
     }
 
@@ -1557,7 +1738,7 @@ impl DawState {
             // try_lock could silently fail, leaving the label updated but
             // the synth unchanged.
             if let Ok(mut engine) = self.engine.lock() {
-                apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+                apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
             }
             self.status_message = Some(format!("Ch{}: {}", ch + 1, name));
         }
@@ -1908,8 +2089,9 @@ impl DawState {
         let Ok(mut engine) = self.engine.try_lock() else {
             return;
         };
+        let samples_dir = self.project_root.join("samples");
         for ch in 0..8 {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&samples_dir));
         }
     }
 
@@ -2014,10 +2196,7 @@ impl DawState {
 
     /// Handle continuous velocity drag in the velocity lane.
     fn drag_velocity(&mut self, my: f32) {
-        let content_y = TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT;
-        let screen_h = WINDOW_HEIGHT as f32;
-        let roll_h = screen_h - content_y - VELOCITY_LANE_HEIGHT;
-        let vel_lane_y = content_y + roll_h;
+        let vel_lane_y = Self::roll_y() + Self::roll_h();
         self.set_velocity_from_y(my, vel_lane_y);
     }
 
@@ -2087,9 +2266,10 @@ impl DawState {
 
         // Mix / LFO bars.
         let mix_y = y0 + SECTION_HEADER_H;
-        let mix_bars: [(f32, SynthParam, f64, f64); 2] = [
+        let mix_bars: [(f32, SynthParam, f64, f64); 3] = [
             (mix_y, SynthParam::VcoMix, 0.0, 1.0),
-            (mix_y + PARAM_ROW_H, SynthParam::LfoRate, 0.1, 20.0),
+            (mix_y + PARAM_ROW_H, SynthParam::RingModDepth, 0.0, 1.0),
+            (mix_y + 2.0 * PARAM_ROW_H, SynthParam::LfoRate, 0.1, 20.0),
         ];
         for (py, param, min, max) in mix_bars {
             if hit_row(mx, my, x3, py, col_w) {
@@ -2147,9 +2327,10 @@ impl DawState {
 
         // LPF bars (column 3, below HPF).
         let lpf_y = row2_y + filter_h + SETUP_ROW_GAP + SECTION_HEADER_H;
-        let lpf_bars: [(f32, SynthParam, f64, f64); 2] = [
+        let lpf_bars: [(f32, SynthParam, f64, f64); 3] = [
             (lpf_y, SynthParam::LpfCutoff, 20.0, 20000.0),
-            (lpf_y + PARAM_ROW_H, SynthParam::LpfResonance, 0.0, 4.0),
+            (lpf_y + PARAM_ROW_H, SynthParam::LpfResonance, 0.0, 2.0),
+            (lpf_y + 2.0 * PARAM_ROW_H, SynthParam::LpfSaturation, 0.0, 1.0),
         ];
         for (py, param, min, max) in lpf_bars {
             if hit_row(mx, my, x3, py, col_w) {
@@ -2234,7 +2415,7 @@ impl DawState {
         let ch = self.selected_channel;
         self.patches[ch].vco1_waveform = next_waveform(&self.patches[ch].vco1_waveform);
         if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
         }
     }
 
@@ -2243,7 +2424,7 @@ impl DawState {
         let ch = self.selected_channel;
         self.patches[ch].vco2_waveform = next_waveform(&self.patches[ch].vco2_waveform);
         if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
         }
     }
 
@@ -2252,7 +2433,7 @@ impl DawState {
         let ch = self.selected_channel;
         self.patches[ch].vco1_scale = next_scale(&self.patches[ch].vco1_scale);
         if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
         }
     }
 
@@ -2261,7 +2442,7 @@ impl DawState {
         let ch = self.selected_channel;
         self.patches[ch].vco2_scale = next_scale(&self.patches[ch].vco2_scale);
         if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
         }
     }
 
@@ -2270,7 +2451,7 @@ impl DawState {
         let ch = self.selected_channel;
         self.patches[ch].voice_mode = next_voice_mode(&self.patches[ch].voice_mode);
         if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
         }
     }
 
@@ -2279,7 +2460,7 @@ impl DawState {
         let ch = self.selected_channel;
         self.patches[ch].glide_enabled = !self.patches[ch].glide_enabled;
         if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
         }
     }
 
@@ -2465,7 +2646,7 @@ impl DawState {
             self.handle_click(mx, my);
             return;
         }
-        let roll_y = TOOLBAR_HEIGHT + CHANNEL_BAR_HEIGHT;
+        let roll_y = Self::roll_y();
         if my < roll_y || mx < PIANO_KEY_WIDTH {
             return;
         }
@@ -2481,6 +2662,10 @@ impl DawState {
                 return;
             }
         }
+        // No note hit. Start an additive drag selection (preserves existing selection).
+        self.drag_select_start = Some((mx, my));
+        self.drag_select_active = false;
+        self.drag_select_additive = true;
     }
 
     /// Copy selected notes to the clipboard.
@@ -2693,9 +2878,10 @@ impl DawState {
 
         // Mix / LFO bars.
         let mix_y = y0 + SECTION_HEADER_H;
-        let mix_bars: [(f32, SynthParam, f64, f64); 2] = [
+        let mix_bars: [(f32, SynthParam, f64, f64); 3] = [
             (mix_y, SynthParam::VcoMix, 0.0, 1.0),
-            (mix_y + PARAM_ROW_H, SynthParam::LfoRate, 0.1, 20.0),
+            (mix_y + PARAM_ROW_H, SynthParam::RingModDepth, 0.0, 1.0),
+            (mix_y + 2.0 * PARAM_ROW_H, SynthParam::LfoRate, 0.1, 20.0),
         ];
         for (py, param, min, max) in mix_bars {
             if hit_row(mx, my, x3, py, col_w) {
@@ -2749,9 +2935,10 @@ impl DawState {
 
         // LPF bars.
         let lpf_y = row2_y + filter_h + SETUP_ROW_GAP + SECTION_HEADER_H;
-        let lpf_bars: [(f32, SynthParam, f64, f64); 2] = [
+        let lpf_bars: [(f32, SynthParam, f64, f64); 3] = [
             (lpf_y, SynthParam::LpfCutoff, 20.0, 20000.0),
-            (lpf_y + PARAM_ROW_H, SynthParam::LpfResonance, 0.0, 4.0),
+            (lpf_y + PARAM_ROW_H, SynthParam::LpfResonance, 0.0, 2.0),
+            (lpf_y + 2.0 * PARAM_ROW_H, SynthParam::LpfSaturation, 0.0, 1.0),
         ];
         for (py, param, min, max) in lpf_bars {
             if hit_row(mx, my, x3, py, col_w) {
@@ -2843,6 +3030,7 @@ impl DawState {
             SynthParam::Vco2Level => patch.vco2_level,
             SynthParam::Vco2PulseWidth => patch.vco2_pulse_width,
             SynthParam::VcoMix => patch.vco_mix,
+            SynthParam::RingModDepth => patch.ring_mod_depth,
             SynthParam::LfoRate => patch.lfo_rate,
             SynthParam::Eg1Attack => patch.eg1_attack,
             SynthParam::Eg1Decay => patch.eg1_decay,
@@ -2856,6 +3044,7 @@ impl DawState {
             SynthParam::HpfResonance => patch.hpf_resonance,
             SynthParam::LpfCutoff => patch.lpf_cutoff,
             SynthParam::LpfResonance => patch.lpf_resonance,
+            SynthParam::LpfSaturation => patch.lpf_saturation,
             SynthParam::VelocityVca => patch.velocity_vca_depth,
             SynthParam::VelocityFilter => patch.velocity_filter_depth,
             SynthParam::VelocityEnv => patch.velocity_envelope_depth,
@@ -3048,6 +3237,7 @@ impl DawState {
             SynthParam::Vco2Level => patch.vco2_level = value,
             SynthParam::Vco2PulseWidth => patch.vco2_pulse_width = value,
             SynthParam::VcoMix => patch.vco_mix = value,
+            SynthParam::RingModDepth => patch.ring_mod_depth = value,
             SynthParam::LfoRate => patch.lfo_rate = value,
             SynthParam::Eg1Attack => patch.eg1_attack = value,
             SynthParam::Eg1Decay => patch.eg1_decay = value,
@@ -3061,6 +3251,7 @@ impl DawState {
             SynthParam::HpfResonance => patch.hpf_resonance = value,
             SynthParam::LpfCutoff => patch.lpf_cutoff = value,
             SynthParam::LpfResonance => patch.lpf_resonance = value,
+            SynthParam::LpfSaturation => patch.lpf_saturation = value,
             SynthParam::VelocityVca => patch.velocity_vca_depth = value,
             SynthParam::VelocityFilter => patch.velocity_filter_depth = value,
             SynthParam::VelocityEnv => patch.velocity_envelope_depth = value,
@@ -3070,7 +3261,7 @@ impl DawState {
         // Sync the full patch to the engine. This is slightly wasteful (writes all
         // parameters) but ensures consistency and avoids per-parameter engine access.
         if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch]);
+            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
         }
     }
 
@@ -3132,9 +3323,12 @@ impl DawState {
         let content_h = screen_h - content_y;
         match self.current_page {
             DawPage::PianoRoll => {
-                let roll_h = content_h - VELOCITY_LANE_HEIGHT;
-                self.render_piano_roll(renderer, screen_w, content_y, roll_h);
-                self.render_velocity_lane(renderer, screen_w, content_y + roll_h, VELOCITY_LANE_HEIGHT);
+                let ruler_y = content_y;
+                let roll_y = content_y + RULER_HEIGHT;
+                let roll_h = content_h - VELOCITY_LANE_HEIGHT - RULER_HEIGHT;
+                self.render_ruler(renderer, screen_w, ruler_y);
+                self.render_piano_roll(renderer, screen_w, roll_y, roll_h);
+                self.render_velocity_lane(renderer, screen_w, roll_y + roll_h, VELOCITY_LANE_HEIGHT);
             }
             DawPage::Overview => {
                 self.render_overview(renderer, screen_w, content_y, content_h);
@@ -3359,6 +3553,76 @@ impl DawState {
         }
     }
 
+    /// Render the ruler bar above the piano roll showing measure numbers and
+    /// the loop region.
+    fn render_ruler<R: Renderer>(&self, renderer: &mut R, screen_w: f32, ruler_y: f32) {
+        // Background.
+        renderer.fill_rect(
+            PIANO_KEY_WIDTH,
+            ruler_y,
+            screen_w - PIANO_KEY_WIDTH,
+            RULER_HEIGHT,
+            BG_PANEL,
+        );
+
+        let tick_width = self.tick_width();
+        let ticks_per_bar = self.transport.ticks_per_bar();
+        if ticks_per_bar == 0 {
+            return;
+        }
+
+        // Loop region overlay in the ruler.
+        if self.transport.loop_enabled && self.transport.loop_end > self.transport.loop_start {
+            let start_x = (PIANO_KEY_WIDTH
+                + self.transport.loop_start as f32 * tick_width
+                - self.scroll_x)
+                .max(PIANO_KEY_WIDTH);
+            let end_x = (PIANO_KEY_WIDTH
+                + self.transport.loop_end as f32 * tick_width
+                - self.scroll_x)
+                .min(screen_w);
+            if end_x > start_x {
+                renderer.fill_rect(
+                    start_x,
+                    ruler_y,
+                    end_x - start_x,
+                    RULER_HEIGHT,
+                    Color::rgba(80, 200, 120, 50),
+                );
+            }
+        }
+
+        // Measure numbers.
+        let first_tick = (self.scroll_x / tick_width) as u64;
+        let visible_ticks = ((screen_w - PIANO_KEY_WIDTH) / tick_width) as u64 + 1;
+        let first_bar_tick = (first_tick / ticks_per_bar) * ticks_per_bar;
+
+        let mut tick = first_bar_tick;
+        while tick <= first_tick + visible_ticks + ticks_per_bar {
+            let x = PIANO_KEY_WIDTH + tick as f32 * tick_width - self.scroll_x;
+            if x >= PIANO_KEY_WIDTH && x <= screen_w && tick.is_multiple_of(ticks_per_bar) {
+                let bar = tick / ticks_per_bar + 1;
+                renderer.draw_text(
+                    &format!("{bar}"),
+                    x + 3.0,
+                    ruler_y + 4.0,
+                    FontSize::Small,
+                    TEXT_SECONDARY,
+                );
+                renderer.draw_vline(x, ruler_y, ruler_y + RULER_HEIGHT, GRID_BAR);
+            }
+            tick += ticks_per_bar;
+        }
+
+        // Bottom border.
+        renderer.draw_hline(
+            PIANO_KEY_WIDTH,
+            screen_w,
+            ruler_y + RULER_HEIGHT - 1.0,
+            GRID_BAR,
+        );
+    }
+
     fn render_piano_roll<R: Renderer>(
         &self,
         renderer: &mut R,
@@ -3427,13 +3691,6 @@ impl DawState {
                 GRID_LINE
             };
             renderer.draw_vline(x, roll_y, roll_y + roll_h, color);
-
-            // Bar number label.
-            if tick.is_multiple_of(ticks_per_bar) {
-                let bar = tick / ticks_per_bar + 1;
-                let bar_label = format!("{bar}");
-                renderer.draw_text(&bar_label, x + 2.0, roll_y + 2.0, FontSize::Small, TEXT_SECONDARY);
-            }
             tick += grid_step;
         }
 
@@ -3472,6 +3729,19 @@ impl DawState {
                 Color::rgba(255, 255, 255, 40)
             };
             renderer.draw_rect(note_x, note_y, note_w, NOTE_HEIGHT - 1.0, border);
+        }
+
+        // Rubber-band selection rectangle overlay.
+        if self.drag_select_active
+            && let Some((sx, sy)) = self.drag_select_start
+        {
+            let (mx, my) = self.last_mouse;
+            let rx = sx.min(mx).max(PIANO_KEY_WIDTH);
+            let ry = sy.min(my).max(roll_y);
+            let rw = (sx.max(mx) - rx).max(0.0);
+            let rh = (sy.max(my) - ry).max(0.0);
+            renderer.fill_rect(rx, ry, rw, rh, Color::rgba(100, 150, 255, 40));
+            renderer.draw_rect(rx, ry, rw, rh, Color::rgba(100, 150, 255, 120));
         }
 
         // Loop region markers.
@@ -3703,25 +3973,64 @@ impl DawState {
     fn render_piano_keys<R: Renderer>(&self, renderer: &mut R, roll_y: f32, roll_h: f32) {
         renderer.fill_rect(0.0, roll_y, PIANO_KEY_WIDTH, roll_h, Color::rgb(45, 45, 52));
 
+        let half = NOTE_HEIGHT / 2.0;
+        let white_border = Color::rgb(180, 180, 185);
+
+        // Pass 1: white keys. Each white key extends into adjacent black key rows.
         for i in 0..VISIBLE_NOTE_RANGE {
             let note = LOWEST_NOTE + VISIBLE_NOTE_RANGE - 1 - i;
+            if MidiTrack::is_black_key(note) {
+                continue;
+            }
+            let y = roll_y + i as f32 * NOTE_HEIGHT - self.scroll_y;
+            if y < roll_y - NOTE_HEIGHT * 2.0 || y > roll_y + roll_h + NOTE_HEIGHT {
+                continue;
+            }
+
+            // Extend upward into the row above if that note is a black key.
+            let top = if note < 127 && MidiTrack::is_black_key(note + 1) {
+                y - half
+            } else {
+                y
+            };
+            // Extend downward into the row below if that note is a black key.
+            let bottom = if note > 0 && MidiTrack::is_black_key(note - 1) {
+                y + NOTE_HEIGHT + half
+            } else {
+                y + NOTE_HEIGHT
+            };
+            renderer.fill_rect(0.0, top, PIANO_KEY_WIDTH, bottom - top - 1.0, KEY_WHITE);
+            // Separator line at the bottom edge of the white key.
+            renderer.draw_hline(0.0, PIANO_KEY_WIDTH, bottom - 1.0, white_border);
+        }
+
+        // Pass 2: black keys drawn on top at half width.
+        let black_w = PIANO_KEY_WIDTH * 0.5;
+        for i in 0..VISIBLE_NOTE_RANGE {
+            let note = LOWEST_NOTE + VISIBLE_NOTE_RANGE - 1 - i;
+            if !MidiTrack::is_black_key(note) {
+                continue;
+            }
             let y = roll_y + i as f32 * NOTE_HEIGHT - self.scroll_y;
             if y < roll_y - NOTE_HEIGHT || y > roll_y + roll_h {
                 continue;
             }
+            renderer.fill_rect(0.0, y, black_w, NOTE_HEIGHT - 1.0, KEY_BLACK);
+        }
 
-            let is_black = MidiTrack::is_black_key(note);
-            let key_color = if is_black { KEY_BLACK } else { KEY_WHITE };
-            let key_w = if is_black { PIANO_KEY_WIDTH * 0.65 } else { PIANO_KEY_WIDTH };
-
-            renderer.fill_rect(0.0, y, key_w, NOTE_HEIGHT - 1.0, key_color);
-
-            // Label C notes (every octave).
-            if note.is_multiple_of(12) {
-                let (name, octave) = MidiTrack::note_name(note);
-                let label = format!("{name}{octave}");
-                renderer.draw_text(&label, 4.0, y + 1.0, FontSize::Small, KEY_LABEL);
+        // Pass 3: C labels on top of everything.
+        for i in 0..VISIBLE_NOTE_RANGE {
+            let note = LOWEST_NOTE + VISIBLE_NOTE_RANGE - 1 - i;
+            if !note.is_multiple_of(12) {
+                continue;
             }
+            let y = roll_y + i as f32 * NOTE_HEIGHT - self.scroll_y;
+            if y < roll_y - NOTE_HEIGHT || y > roll_y + roll_h {
+                continue;
+            }
+            let (name, octave) = MidiTrack::note_name(note);
+            let label = format!("{name}{octave}");
+            renderer.draw_text(&label, black_w + 4.0, y + 1.0, FontSize::Small, KEY_LABEL);
         }
     }
 
@@ -3821,10 +4130,12 @@ impl DawState {
         draw_param_bar(renderer, x2, py, col_w, "Pulse Width", patch.vco2_pulse_width, 0.0, 1.0, accent);
 
         // Mix / LFO.
-        let mix_h = SECTION_HEADER_H + 2.0 * PARAM_ROW_H + 8.0;
+        let mix_h = SECTION_HEADER_H + 3.0 * PARAM_ROW_H + 8.0;
         draw_section_panel(renderer, x3, y0, col_w, mix_h, "MIX / LFO", accent);
         py = y0 + SECTION_HEADER_H;
         draw_param_bar(renderer, x3, py, col_w, "VCO Mix", patch.vco_mix, 0.0, 1.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x3, py, col_w, "Ring Mod", patch.ring_mod_depth, 0.0, 1.0, accent);
         py += PARAM_ROW_H;
         draw_param_bar(renderer, x3, py, col_w, "LFO Rate", patch.lfo_rate, 0.1, 20.0, accent);
 
@@ -3863,11 +4174,14 @@ impl DawState {
         draw_param_bar(renderer, x3, py, col_w, "Resonance", patch.hpf_resonance, 0.0, 4.0, accent);
 
         let lpf_y = row2_y + filter_h + SETUP_ROW_GAP;
-        draw_section_panel(renderer, x3, lpf_y, col_w, filter_h, "LPF", accent);
+        let lpf_h = SECTION_HEADER_H + 3.0 * PARAM_ROW_H + 8.0;
+        draw_section_panel(renderer, x3, lpf_y, col_w, lpf_h, "LPF", accent);
         py = lpf_y + SECTION_HEADER_H;
         draw_param_bar(renderer, x3, py, col_w, "Cutoff", patch.lpf_cutoff, 20.0, 20000.0, accent);
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x3, py, col_w, "Resonance", patch.lpf_resonance, 0.0, 4.0, accent);
+        draw_param_bar(renderer, x3, py, col_w, "Resonance", patch.lpf_resonance, 0.0, 2.0, accent);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x3, py, col_w, "Saturation", patch.lpf_saturation, 0.0, 1.0, accent);
 
         // --- Row 3: Voice, Velocity, Glide ---
         let row3_y = row2_y + row2_h + SETUP_ROW_GAP;
@@ -4327,7 +4641,7 @@ fn hit_row(mx: f32, my: f32, col_x: f32, row_y: f32, col_w: f32) -> bool {
 
 /// Cycle to the next waveform name in a fixed list.
 fn next_waveform(current: &str) -> String {
-    const WAVEFORMS: &[&str] = &["sawtooth", "triangle", "square", "sine", "noise", "ring"];
+    const WAVEFORMS: &[&str] = &["sawtooth", "triangle", "square", "sine", "noise", "pcm"];
     let idx = WAVEFORMS.iter().position(|w| *w == current).unwrap_or(0);
     String::from(WAVEFORMS[(idx + 1) % WAVEFORMS.len()])
 }

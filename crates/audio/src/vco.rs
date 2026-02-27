@@ -13,7 +13,11 @@
 //! | PwSquare | Variable duty cycle pulse wave |
 //! | Sine | Pure sine wave, optionally quantized |
 //! | WhiteNoise | Pseudorandom noise (xorshift64 PRNG) |
-//! | RingModulator | Current waveform multiplied by the other VCO's previous output |
+//! | Pcm | Single-cycle wavetable from a PCM sample buffer |
+//!
+//! Ring modulation is applied at the synth mixing stage as a continuous
+//! crossfade between the dry additive VCO mix and the product of both
+//! VCO outputs. See `Ms20Voice::ring_mod_depth` in `synth.rs`.
 //!
 //! ## Amplitude Quantization
 //!
@@ -24,6 +28,9 @@
 //! - `Some(3)`: 8-level extreme lo-fi
 //! - `Some(4)`: 16-level NES-style stepping
 //! - `Some(8)`: 256-level subtle grit
+
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 /// Waveform type selection for a VCO.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,9 +45,9 @@ pub enum Waveform {
     Sine,
     /// Pseudorandom white noise.
     WhiteNoise,
-    /// Ring modulator. Multiplies the selected base waveform (triangle)
-    /// by the other VCO's output from the previous sample tick.
-    RingModulator,
+    /// PCM wavetable. Reads from a sample buffer using the phase accumulator
+    /// with linear interpolation. The buffer represents one cycle of a waveform.
+    Pcm,
 }
 
 /// Octave register (footage), inspired by organ pipe length conventions.
@@ -75,7 +82,7 @@ impl Scale {
 
 /// Virtual Controlled Oscillator.
 ///
-/// Generates audio waveforms using a phase accumulator. Supports six
+/// Generates audio waveforms using a phase accumulator. Supports multiple
 /// waveform types, amplitude quantization, octave scaling, and fine
 /// pitch adjustment.
 #[derive(Debug, Clone)]
@@ -96,11 +103,13 @@ pub struct Vco {
     pub level: f64,
     /// Current oscillator phase (0.0 to 1.0).
     phase: f64,
-    /// Output from the most recent sample tick. Used by the other VCO
-    /// when it is in RingModulator mode.
+    /// Output from the most recent sample tick.
     last_output: f64,
     /// PRNG state for white noise generation.
     noise_state: u64,
+    /// PCM wavetable sample buffer. Contains one cycle of a waveform as
+    /// normalized f64 samples in [-1.0, 1.0]. Shared across voices via Arc.
+    pcm_samples: Option<Arc<Vec<f64>>>,
 }
 
 impl Vco {
@@ -119,18 +128,21 @@ impl Vco {
             phase: 0.0,
             last_output: 0.0,
             noise_state: 0x5EED_1234_ABCD_EF01,
+            pcm_samples: None,
         }
+    }
+
+    /// Set the PCM wavetable sample buffer. The buffer should contain one
+    /// cycle of a waveform, normalized to [-1.0, 1.0].
+    pub fn set_pcm_samples(&mut self, samples: Arc<Vec<f64>>) {
+        self.pcm_samples = Some(samples);
     }
 
     /// Compute a single sample at the given frequency.
     ///
-    /// The `other_vco_output` parameter provides the previous tick's
-    /// output from the other VCO, used only when the waveform is
-    /// `RingModulator`.
-    ///
     /// Returns the generated sample in the range [-1.0, 1.0] scaled
     /// by `self.level`.
-    pub fn tick(&mut self, base_freq: f64, other_vco_output: f64, sample_rate: f64) -> f64 {
+    pub fn tick(&mut self, base_freq: f64, sample_rate: f64) -> f64 {
         // Apply scale and fine tuning to the base frequency.
         let freq = base_freq * self.scale.multiplier() * fine_pitch_multiplier(self.pitch_fine);
 
@@ -148,11 +160,7 @@ impl Vco {
             Waveform::PwSquare => pw_square(self.phase, self.pulse_width),
             Waveform::Sine => sine(self.phase),
             Waveform::WhiteNoise => white_noise(&mut self.noise_state),
-            Waveform::RingModulator => {
-                // Ring mod: multiply a triangle carrier by the other VCO's
-                // previous output.
-                triangle(self.phase) * other_vco_output
-            }
+            Waveform::Pcm => pcm_lookup(&self.pcm_samples, self.phase),
         };
 
         // Apply amplitude quantization (exempt for PW-Square).
@@ -241,6 +249,23 @@ fn white_noise(state: &mut u64) -> f64 {
     (x as f64 / (u64::MAX as f64)) * 2.0 - 1.0
 }
 
+/// Look up a sample from a PCM wavetable buffer using linear interpolation.
+///
+/// The phase (0.0 to 1.0) maps across the entire buffer length. Returns 0.0
+/// if no buffer is loaded or the buffer is empty.
+fn pcm_lookup(samples: &Option<Arc<Vec<f64>>>, phase: f64) -> f64 {
+    let Some(buf) = samples else { return 0.0 };
+    if buf.is_empty() {
+        return 0.0;
+    }
+    let len = buf.len() as f64;
+    let pos = phase * len;
+    let idx0 = pos as usize % buf.len();
+    let idx1 = (idx0 + 1) % buf.len();
+    let frac = pos - libm::floor(pos);
+    buf[idx0] * (1.0 - frac) + buf[idx1] * frac
+}
+
 /// Quantize a bipolar sample to a fixed number of amplitude levels.
 ///
 /// Maps the [-1, 1] signal to `2^bits` evenly spaced discrete values.
@@ -256,6 +281,7 @@ fn quantize_amplitude(sample: f64, bits: u32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn triangle_wave_shape() {
@@ -346,7 +372,7 @@ mod tests {
         vco.waveform = Waveform::PwSquare;
         vco.quantization = Some(3);
         // PW-Square should still produce exact +1/-1 regardless of quantization.
-        let sample = vco.tick(440.0, 0.0, 48000.0);
+        let sample = vco.tick(440.0, 48000.0);
         assert!(
             (sample - 1.0).abs() < 1e-10 || (sample - (-1.0)).abs() < 1e-10,
             "PW-Square should produce +1 or -1: {sample}"
@@ -385,7 +411,7 @@ mod tests {
         let mut vco = Vco::new();
         let mut has_nonzero = false;
         for _ in 0..48 {
-            let s = vco.tick(440.0, 0.0, 48000.0);
+            let s = vco.tick(440.0, 48000.0);
             if s.abs() > 1e-10 {
                 has_nonzero = true;
             }
@@ -397,7 +423,7 @@ mod tests {
     fn vco_bounded_output() {
         let mut vco = Vco::new();
         for _ in 0..4800 {
-            let s = vco.tick(440.0, 0.0, 48000.0);
+            let s = vco.tick(440.0, 48000.0);
             assert!(
                 (-1.0 - 1e-10..=1.0 + 1e-10).contains(&s),
                 "VCO output should be in [-1, 1]: {s}"
@@ -410,34 +436,12 @@ mod tests {
         let mut vco = Vco::new();
         vco.level = 0.5;
         for _ in 0..4800 {
-            let s = vco.tick(440.0, 0.0, 48000.0);
+            let s = vco.tick(440.0, 48000.0);
             assert!(
                 (-0.5 - 1e-10..=0.5 + 1e-10).contains(&s),
                 "VCO at 0.5 level should be in [-0.5, 0.5]: {s}"
             );
         }
-    }
-
-    #[test]
-    fn vco_ring_modulator() {
-        let mut vco = Vco::new();
-        vco.waveform = Waveform::RingModulator;
-        // With other_vco_output = 0.0, ring mod output should be zero.
-        let s = vco.tick(440.0, 0.0, 48000.0);
-        assert!(s.abs() < 1e-10, "Ring mod with zero input should be zero: {s}");
-
-        // With other_vco_output = 1.0, ring mod output should equal the carrier.
-        vco.reset();
-        let carrier = {
-            let mut carrier_vco = Vco::new();
-            carrier_vco.waveform = Waveform::Triangle;
-            carrier_vco.tick(440.0, 0.0, 48000.0)
-        };
-        let s = vco.tick(440.0, 1.0, 48000.0);
-        assert!(
-            (s - carrier).abs() < 1e-10,
-            "Ring mod with 1.0 input should equal carrier: {s} vs {carrier}"
-        );
     }
 
     #[test]
@@ -464,7 +468,7 @@ mod tests {
     fn vco_reset_clears_state() {
         let mut vco = Vco::new();
         for _ in 0..100 {
-            vco.tick(440.0, 0.0, 48000.0);
+            vco.tick(440.0, 48000.0);
         }
         assert!(vco.phase > 0.0);
         vco.reset();
@@ -487,7 +491,7 @@ mod tests {
             vco.waveform = *wf;
             let mut has_nonzero = false;
             for _ in 0..480 {
-                let s = vco.tick(440.0, 0.0, 48000.0);
+                let s = vco.tick(440.0, 48000.0);
                 if s.abs() > 1e-10 {
                     has_nonzero = true;
                     break;
@@ -502,12 +506,84 @@ mod tests {
         let mut prev = 0.0f64;
         let mut crossings = 0;
         for _ in 0..samples {
-            let s = vco.tick(freq, 0.0, sr);
+            let s = vco.tick(freq, sr);
             if prev <= 0.0 && s > 0.0 {
                 crossings += 1;
             }
             prev = s;
         }
         crossings
+    }
+
+    #[test]
+    fn pcm_single_sample() {
+        // A single-sample buffer always returns that value regardless of phase.
+        let buf = Arc::new(vec![0.75]);
+        let samples = Some(buf);
+        let val = pcm_lookup(&samples, 0.0);
+        assert!((val - 0.75).abs() < 1e-10, "Single sample lookup: {val}");
+        let val2 = pcm_lookup(&samples, 0.5);
+        assert!((val2 - 0.75).abs() < 1e-10, "Single sample at 0.5: {val2}");
+    }
+
+    #[test]
+    fn pcm_interpolation() {
+        // Two-sample buffer [0.0, 1.0]. Phase 0.25 should interpolate to 0.5.
+        let buf = Arc::new(vec![0.0, 1.0]);
+        let samples = Some(buf);
+        let val = pcm_lookup(&samples, 0.25);
+        assert!((val - 0.5).abs() < 1e-10, "Interpolation at 0.25: {val}");
+        // Phase 0.0 should return exactly 0.0.
+        let val0 = pcm_lookup(&samples, 0.0);
+        assert!(val0.abs() < 1e-10, "Phase 0.0 lookup: {val0}");
+        // Phase 0.5 should return exactly 1.0.
+        let val5 = pcm_lookup(&samples, 0.5);
+        assert!((val5 - 1.0).abs() < 1e-10, "Phase 0.5 lookup: {val5}");
+    }
+
+    #[test]
+    fn pcm_none_is_silent() {
+        // Without a sample buffer, PCM waveform should produce silence.
+        let mut vco = Vco::new();
+        vco.waveform = Waveform::Pcm;
+        for _ in 0..48 {
+            let s = vco.tick(440.0, 48000.0);
+            assert!(s.abs() < 1e-10, "PCM with no buffer should be silent: {s}");
+        }
+    }
+
+    #[test]
+    fn pcm_produces_output() {
+        // With a loaded wavetable, PCM should produce non-zero output.
+        let mut vco = Vco::new();
+        vco.waveform = Waveform::Pcm;
+        // Create a simple sawtooth-like wavetable with 256 samples.
+        let table: Vec<f64> = (0..256).map(|i| i as f64 / 128.0 - 1.0).collect();
+        vco.set_pcm_samples(Arc::new(table));
+        let mut has_nonzero = false;
+        for _ in 0..480 {
+            let s = vco.tick(440.0, 48000.0);
+            if s.abs() > 1e-10 {
+                has_nonzero = true;
+                break;
+            }
+        }
+        assert!(has_nonzero, "PCM with loaded wavetable should produce output");
+    }
+
+    #[test]
+    fn pcm_output_bounded() {
+        // PCM output should stay within [-1.0, 1.0] for a properly normalized table.
+        let mut vco = Vco::new();
+        vco.waveform = Waveform::Pcm;
+        let table: Vec<f64> = (0..256).map(|i| i as f64 / 128.0 - 1.0).collect();
+        vco.set_pcm_samples(Arc::new(table));
+        for _ in 0..4800 {
+            let s = vco.tick(440.0, 48000.0);
+            assert!(
+                (-1.0 - 1e-10..=1.0 + 1e-10).contains(&s),
+                "PCM output should be in [-1, 1]: {s}"
+            );
+        }
     }
 }

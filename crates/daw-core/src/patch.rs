@@ -23,6 +23,9 @@ pub struct PatchConfig {
     pub vco1_pulse_width: f64,
     #[serde(default)]
     pub vco1_quantization: Option<u32>,
+    /// PCM wavetable file for VCO1 (relative to samples/ directory).
+    #[serde(default)]
+    pub vco1_pcm_file: String,
 
     // VCO2
     #[serde(default = "default_triangle")]
@@ -37,10 +40,15 @@ pub struct PatchConfig {
     pub vco2_pulse_width: f64,
     #[serde(default)]
     pub vco2_quantization: Option<u32>,
+    /// PCM wavetable file for VCO2 (relative to samples/ directory).
+    #[serde(default)]
+    pub vco2_pcm_file: String,
 
     // VCO mix
     #[serde(default)]
     pub vco_mix: f64,
+    #[serde(default)]
+    pub ring_mod_depth: f64,
 
     // EG1 (HPF envelope)
     #[serde(default = "default_attack")]
@@ -71,6 +79,8 @@ pub struct PatchConfig {
     pub lpf_cutoff: f64,
     #[serde(default = "default_lpf_resonance")]
     pub lpf_resonance: f64,
+    #[serde(default)]
+    pub lpf_saturation: f64,
 
     // LFO
     #[serde(default = "default_lfo_rate")]
@@ -124,13 +134,16 @@ impl Default for PatchConfig {
             vco1_level: 1.0,
             vco1_pulse_width: 0.5,
             vco1_quantization: None,
+            vco1_pcm_file: String::new(),
             vco2_waveform: default_triangle(),
             vco2_scale: default_scale(),
             vco2_pitch_fine: 0.0,
             vco2_level: 0.0,
             vco2_pulse_width: 0.5,
             vco2_quantization: None,
+            vco2_pcm_file: String::new(),
             vco_mix: 0.0,
+            ring_mod_depth: 0.0,
             eg1_attack: default_attack(),
             eg1_decay: default_decay(),
             eg1_sustain: default_sustain(),
@@ -143,6 +156,7 @@ impl Default for PatchConfig {
             hpf_resonance: default_hpf_resonance(),
             lpf_cutoff: default_lpf_cutoff(),
             lpf_resonance: default_lpf_resonance(),
+            lpf_saturation: 0.0,
             lfo_rate: default_lfo_rate(),
             glide_enabled: false,
             glide_time: default_glide_time(),

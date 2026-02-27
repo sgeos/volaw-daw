@@ -22,6 +22,9 @@ pub fn preset(name: &str) -> Option<PatchConfig> {
         "cowbell" => Some(cowbell()),
         "cymbal" => Some(cymbal()),
         "flute" => Some(flute()),
+        "gb_noise" => Some(gb_noise()),
+        "gb_pulse" => Some(gb_pulse()),
+        "gb_wave" => Some(gb_wave()),
         "harp" => Some(harp()),
         "harpsichord" => Some(harpsichord()),
         "harmonica" => Some(harmonica()),
@@ -29,6 +32,11 @@ pub fn preset(name: &str) -> Option<PatchConfig> {
         "kick" => Some(kick()),
         "lead" => Some(lead()),
         "marimba" => Some(marimba()),
+        "nes_noise" => Some(nes_noise()),
+        "nes_pulse_12" => Some(nes_pulse_12()),
+        "nes_pulse_25" => Some(nes_pulse_25()),
+        "nes_pulse_50" => Some(nes_pulse_50()),
+        "nes_triangle" => Some(nes_triangle()),
         "oboe" => Some(oboe()),
         "organ" => Some(organ()),
         "pad" => Some(pad()),
@@ -61,6 +69,9 @@ pub fn preset_names() -> &'static [&'static str] {
         "cowbell",
         "cymbal",
         "flute",
+        "gb_noise",
+        "gb_pulse",
+        "gb_wave",
         "harmonica",
         "harp",
         "harpsichord",
@@ -68,6 +79,11 @@ pub fn preset_names() -> &'static [&'static str] {
         "kick",
         "lead",
         "marimba",
+        "nes_noise",
+        "nes_pulse_12",
+        "nes_pulse_25",
+        "nes_pulse_50",
+        "nes_triangle",
         "oboe",
         "organ",
         "pad",
@@ -902,6 +918,163 @@ fn choir() -> PatchConfig {
             dest: String::from("vco2_pitch"),
             depth: 0.015,
         }],
+        ..PatchConfig::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NES / Game Boy chiptune presets
+// ---------------------------------------------------------------------------
+//
+// All chiptune presets are monophonic (high_1) to match real hardware.
+// Envelopes use instant attack and fast release for tight gate behavior.
+// LPF is wide open (no analog filtering on chip hardware).
+// Single oscillator per channel (VCO2 disabled).
+
+/// NES 2A03 triangle channel: 4-bit quantized triangle, no volume control.
+fn nes_triangle() -> PatchConfig {
+    PatchConfig {
+        name: String::from("NES Triangle"),
+        vco1_waveform: String::from("triangle"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 1.0,
+        vco1_quantization: Some(4),
+        vco2_level: 0.0,
+        eg2_attack: 0.001,
+        eg2_decay: 0.01,
+        eg2_sustain: 1.0,
+        eg2_release: 0.01,
+        lpf_cutoff: 16000.0,
+        lpf_resonance: 0.0,
+        ..PatchConfig::default()
+    }
+}
+
+/// NES 2A03 pulse channel at 50% duty (square wave).
+fn nes_pulse_50() -> PatchConfig {
+    PatchConfig {
+        name: String::from("NES Pulse 50%"),
+        vco1_waveform: String::from("square"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 1.0,
+        vco1_pulse_width: 0.5,
+        vco2_level: 0.0,
+        eg2_attack: 0.001,
+        eg2_decay: 0.01,
+        eg2_sustain: 1.0,
+        eg2_release: 0.01,
+        lpf_cutoff: 16000.0,
+        lpf_resonance: 0.0,
+        ..PatchConfig::default()
+    }
+}
+
+/// NES 2A03 pulse channel at 25% duty.
+fn nes_pulse_25() -> PatchConfig {
+    PatchConfig {
+        name: String::from("NES Pulse 25%"),
+        vco1_waveform: String::from("square"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 1.0,
+        vco1_pulse_width: 0.25,
+        vco2_level: 0.0,
+        eg2_attack: 0.001,
+        eg2_decay: 0.01,
+        eg2_sustain: 1.0,
+        eg2_release: 0.01,
+        lpf_cutoff: 16000.0,
+        lpf_resonance: 0.0,
+        ..PatchConfig::default()
+    }
+}
+
+/// NES 2A03 pulse channel at 12.5% duty (narrow pulse).
+fn nes_pulse_12() -> PatchConfig {
+    PatchConfig {
+        name: String::from("NES Pulse 12.5%"),
+        vco1_waveform: String::from("square"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 1.0,
+        vco1_pulse_width: 0.125,
+        vco2_level: 0.0,
+        eg2_attack: 0.001,
+        eg2_decay: 0.01,
+        eg2_sustain: 1.0,
+        eg2_release: 0.01,
+        lpf_cutoff: 16000.0,
+        lpf_resonance: 0.0,
+        ..PatchConfig::default()
+    }
+}
+
+/// NES 2A03 noise channel (LFSR-based white noise).
+fn nes_noise() -> PatchConfig {
+    PatchConfig {
+        name: String::from("NES Noise"),
+        vco1_waveform: String::from("noise"),
+        vco1_level: 1.0,
+        vco2_level: 0.0,
+        eg2_attack: 0.001,
+        eg2_decay: 0.01,
+        eg2_sustain: 1.0,
+        eg2_release: 0.01,
+        lpf_cutoff: 16000.0,
+        lpf_resonance: 0.0,
+        ..PatchConfig::default()
+    }
+}
+
+/// Game Boy DMG pulse channel (25% duty, classic GB lead).
+fn gb_pulse() -> PatchConfig {
+    PatchConfig {
+        name: String::from("GB Pulse"),
+        vco1_waveform: String::from("square"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 1.0,
+        vco1_pulse_width: 0.25,
+        vco2_level: 0.0,
+        eg2_attack: 0.001,
+        eg2_decay: 0.01,
+        eg2_sustain: 1.0,
+        eg2_release: 0.01,
+        lpf_cutoff: 12000.0,
+        lpf_resonance: 0.0,
+        ..PatchConfig::default()
+    }
+}
+
+/// Game Boy DMG wave channel (4-bit programmable wavetable approximation).
+fn gb_wave() -> PatchConfig {
+    PatchConfig {
+        name: String::from("GB Wave"),
+        vco1_waveform: String::from("triangle"),
+        vco1_scale: String::from("8'"),
+        vco1_level: 1.0,
+        vco1_quantization: Some(4),
+        vco2_level: 0.0,
+        eg2_attack: 0.001,
+        eg2_decay: 0.01,
+        eg2_sustain: 1.0,
+        eg2_release: 0.01,
+        lpf_cutoff: 12000.0,
+        lpf_resonance: 0.0,
+        ..PatchConfig::default()
+    }
+}
+
+/// Game Boy DMG noise channel (LFSR-based).
+fn gb_noise() -> PatchConfig {
+    PatchConfig {
+        name: String::from("GB Noise"),
+        vco1_waveform: String::from("noise"),
+        vco1_level: 1.0,
+        vco2_level: 0.0,
+        eg2_attack: 0.001,
+        eg2_decay: 0.01,
+        eg2_sustain: 1.0,
+        eg2_release: 0.01,
+        lpf_cutoff: 12000.0,
+        lpf_resonance: 0.0,
         ..PatchConfig::default()
     }
 }

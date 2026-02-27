@@ -438,6 +438,10 @@ struct DawState {
     pedal_picker_scroll: f32,
     /// Preview note: (channel, frequency, timestamp in ms) for auto-off after 200ms.
     preview_note: Option<(usize, f64, std::time::Instant)>,
+    /// Last known modification times of script files for hot-reload.
+    script_mtimes: [Option<std::time::SystemTime>; 8],
+    /// Last time script files were checked for changes.
+    last_script_check: std::time::Instant,
 }
 
 /// Maximum undo history depth.
@@ -480,6 +484,8 @@ impl DawState {
             pedal_picker_chain: 0,
             pedal_picker_scroll: 0.0,
             preview_note: None,
+            script_mtimes: [None; 8],
+            last_script_check: std::time::Instant::now(),
         }
     }
 
@@ -586,9 +592,13 @@ impl DawState {
             let filename = &self.project.channels[ch].script_file;
             if filename.is_empty() {
                 self.scripts[ch] = None;
+                self.script_mtimes[ch] = None;
                 continue;
             }
             let path = scripts_dir.join(filename);
+            self.script_mtimes[ch] = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok();
             match std::fs::read_to_string(&path) {
                 Ok(source) => {
                     match ScriptRunner::from_source(&source) {
@@ -615,6 +625,57 @@ impl DawState {
                         e
                     );
                     self.scripts[ch] = None;
+                }
+            }
+        }
+    }
+
+    /// Check for modified script files and reload them (hot-reload).
+    /// Checks at most once per second to avoid excessive filesystem access.
+    fn check_script_reload(&mut self) {
+        if self.last_script_check.elapsed() < std::time::Duration::from_secs(1) {
+            return;
+        }
+        self.last_script_check = std::time::Instant::now();
+
+        let scripts_dir = self.project_root.join("scripts");
+        for ch in 0..8 {
+            let filename = &self.project.channels[ch].script_file;
+            if filename.is_empty() {
+                continue;
+            }
+            let path = scripts_dir.join(filename);
+            let current_mtime = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok();
+
+            if current_mtime != self.script_mtimes[ch] && current_mtime.is_some() {
+                self.script_mtimes[ch] = current_mtime;
+                match std::fs::read_to_string(&path) {
+                    Ok(source) => {
+                        match ScriptRunner::from_source(&source) {
+                            Ok(runner) => {
+                                eprintln!("[INFO] Ch{}: hot-reloaded script {}", ch + 1, filename);
+                                self.scripts[ch] = Some(runner);
+                                self.status_message =
+                                    Some(format!("Reloaded: {filename}"));
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[ERROR] Ch{}: script compile error in {}: {}",
+                                    ch + 1, filename, e.0
+                                );
+                                self.status_message =
+                                    Some(format!("Script error: {}", e.0));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[ERROR] Ch{}: could not read script {}: {}",
+                            ch + 1, filename, e
+                        );
+                    }
                 }
             }
         }
@@ -4110,6 +4171,9 @@ fn main() {
 
         // Auto-off preview notes after timeout.
         state.check_preview_timeout();
+
+        // Check for script file changes (hot-reload).
+        state.check_script_reload();
 
         // Render.
         state.render(&mut renderer);

@@ -137,6 +137,11 @@ impl Channel {
         // Mono signal chain: sample input, MS-20 synth, pre-positional pedals.
         self.sample_in.process(&mut mono_buf[..len]);
         self.synth.process(&mut mono_buf[..len], sample_rate);
+        debug_assert!(
+            len == 0 || mono_buf[0].is_finite(),
+            "Channel post-synth non-finite: {}",
+            if len > 0 { mono_buf[0] } else { 0.0 }
+        );
         self.pre_pedals.process(&mut mono_buf[..len], sample_rate);
 
         // Mono-to-stereo split via positional stage.
@@ -160,6 +165,12 @@ impl Channel {
         for s in right_out[..len].iter_mut() {
             *s *= vol_r;
         }
+        debug_assert!(
+            len == 0 || (left_out[0].is_finite() && right_out[0].is_finite()),
+            "Channel post-trim non-finite: L={} R={}",
+            if len > 0 { left_out[0] } else { 0.0 },
+            if len > 0 { right_out[0] } else { 0.0 }
+        );
     }
 
     /// Set the left volume trim. Clamped to 0.0 to 1.0.

@@ -96,6 +96,9 @@ pub struct PatchConfig {
     /// Voice mode string: "high_1", "low_1", "high_10", "low_10".
     #[serde(default = "default_voice_mode")]
     pub voice_mode: String,
+    /// Number of simultaneous voices (1 to 10).
+    #[serde(default = "default_voice_count")]
+    pub voice_count: u8,
 
     // Velocity depth controls
     /// Velocity depth for VCA level (0.0 = no effect, 1.0 = full velocity control).
@@ -161,6 +164,7 @@ impl Default for PatchConfig {
             glide_enabled: false,
             glide_time: default_glide_time(),
             voice_mode: default_voice_mode(),
+            voice_count: default_voice_count(),
             velocity_vca_depth: 0.0,
             velocity_filter_depth: 0.0,
             velocity_envelope_depth: 0.0,
@@ -492,6 +496,10 @@ fn default_glide_time() -> f64 {
 }
 fn default_voice_mode() -> String {
     String::from("high_1")
+}
+
+fn default_voice_count() -> u8 {
+    1
 }
 
 /// Return the three standard MS-20 modulation routings.

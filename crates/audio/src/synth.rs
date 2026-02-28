@@ -550,6 +550,10 @@ impl Ms20Voice {
                 output += after_lpf * vca_level;
             }
 
+            debug_assert!(
+                output.is_finite(),
+                "Ms20Voice::process produced non-finite output: {output}"
+            );
             *sample = output;
         }
     }

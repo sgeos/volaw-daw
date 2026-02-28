@@ -141,6 +141,7 @@ enum SynthParam {
     OrbitalAscendingNode,
     OrbitalPeriapsis,
     OrbitalPeriod,
+    VoiceCount,
 }
 
 /// Identifies a parameter being dragged on a setup page.
@@ -319,7 +320,7 @@ fn apply_patch_to_engine(
     let synth = &mut engine.channels[channel].synth;
 
     // Voice mode.
-    synth.set_voice_mode(parse_voice_mode(&patch.voice_mode));
+    synth.set_voice_mode(parse_voice_mode(&patch.voice_mode, patch.voice_count));
 
     // Velocity depth controls.
     synth.velocity_vca_depth = patch.velocity_vca_depth;
@@ -445,13 +446,16 @@ fn apply_position_to_engine(
     pos.distance = effects.position_distance;
 }
 
-/// Parse a voice mode string into a VoiceMode enum.
-fn parse_voice_mode(s: &str) -> VoiceMode {
-    match s {
-        "low_1" => VoiceMode::Low(1),
-        "high_10" => VoiceMode::High(10),
-        "low_10" => VoiceMode::Low(10),
-        _ => VoiceMode::High(1),
+/// Parse a voice mode priority string and voice count into a VoiceMode enum.
+///
+/// The priority string determines high or low note priority. The count
+/// (1 to 10) determines polyphony. Count is clamped to the valid range.
+fn parse_voice_mode(s: &str, count: u8) -> VoiceMode {
+    let n = count.clamp(1, 10);
+    if s.starts_with("low") {
+        VoiceMode::Low(n)
+    } else {
+        VoiceMode::High(n)
     }
 }
 
@@ -2407,10 +2411,16 @@ impl DawState {
         let row2_h = SECTION_HEADER_H + 4.0 * PARAM_ROW_H + 8.0;
         let row3_y = row2_y + row2_h + SETUP_ROW_GAP;
 
-        // Voice mode label (click to cycle).
+        // Voice priority label (click to cycle high/low).
         let voice_y = row3_y + SECTION_HEADER_H;
         if hit_row(mx, my, x1, voice_y, col_w) {
             self.cycle_voice_mode();
+            return;
+        }
+        // Voice count bar.
+        let voice_count_y = voice_y + PARAM_ROW_H;
+        if hit_row(mx, my, x1, voice_count_y, col_w) {
+            self.start_bar_drag(mx, x1 + bar_inset, bar_w, SynthParam::VoiceCount, 1.0, 10.0);
             return;
         }
 
@@ -3206,6 +3216,7 @@ impl DawState {
             SynthParam::OrbitalAscendingNode => self.effects[ch].orbital_ascending_node,
             SynthParam::OrbitalPeriapsis => self.effects[ch].orbital_periapsis,
             SynthParam::OrbitalPeriod => self.effects[ch].orbital_period,
+            SynthParam::VoiceCount => self.patches[ch].voice_count as f64,
         }
     }
 
@@ -3413,6 +3424,13 @@ impl DawState {
             SynthParam::VelocityEnv => patch.velocity_envelope_depth = value,
             SynthParam::VelocityPitch => patch.velocity_pitch_depth = value,
             SynthParam::GlideTime => patch.glide_time = value,
+            SynthParam::VoiceCount => {
+                self.patches[ch].voice_count = (value.round() as u8).clamp(1, 10);
+                if let Ok(mut engine) = self.engine.try_lock() {
+                    apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
+                }
+                return;
+            }
             SynthParam::Pan | SynthParam::Azimuth | SynthParam::Elevation
             | SynthParam::PositionDistance
             | SynthParam::OrbitalSemiMajor | SynthParam::OrbitalEccentricity
@@ -4366,10 +4384,13 @@ impl DawState {
         let row3_y = row2_y + row2_h + SETUP_ROW_GAP;
 
         // Voice mode.
-        let voice_h = SECTION_HEADER_H + PARAM_ROW_H + 8.0;
+        let voice_h = SECTION_HEADER_H + 2.0 * PARAM_ROW_H + 8.0;
         draw_section_panel(renderer, x1, row3_y, col_w, voice_h, "VOICE", accent);
         py = row3_y + SECTION_HEADER_H;
-        draw_param_label(renderer, x1, py, col_w, "Mode", &patch.voice_mode);
+        let priority_label = if patch.voice_mode.starts_with("low") { "Low" } else { "High" };
+        draw_param_label(renderer, x1, py, col_w, "Priority", priority_label);
+        py += PARAM_ROW_H;
+        draw_param_bar(renderer, x1, py, col_w, "Voices", patch.voice_count as f64, 1.0, 10.0, accent);
 
         // Velocity.
         let vel_h = SECTION_HEADER_H + 4.0 * PARAM_ROW_H + 8.0;
@@ -4854,10 +4875,13 @@ fn next_scale(current: &str) -> String {
 }
 
 /// Cycle to the next voice mode in a fixed list.
+/// Toggle voice mode priority between High and Low.
 fn next_voice_mode(current: &str) -> String {
-    const MODES: &[&str] = &["high_1", "low_1", "high_10", "low_10"];
-    let idx = MODES.iter().position(|m| *m == current).unwrap_or(0);
-    String::from(MODES[(idx + 1) % MODES.len()])
+    if current.starts_with("low") {
+        String::from("high_1")
+    } else {
+        String::from("low_1")
+    }
 }
 
 /// Check whether a synth parameter should use logarithmic display mapping.

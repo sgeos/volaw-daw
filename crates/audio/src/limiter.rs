@@ -105,6 +105,11 @@ impl LookaheadLimiter {
             let left = buffer[i * 2];
             let right = buffer[i * 2 + 1];
 
+            debug_assert!(
+                left.is_finite() && right.is_finite(),
+                "Limiter input non-finite at frame {i}: L={left} R={right}"
+            );
+
             // Write current samples into delay lines.
             self.delay_left.write(left);
             self.delay_right.write(right);

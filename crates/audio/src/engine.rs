@@ -179,6 +179,13 @@ impl AudioEngine {
             }
         }
 
+        debug_assert!(
+            num_frames == 0 || (buffer[0].is_finite() && buffer[1].is_finite()),
+            "Engine post-mix non-finite: L={} R={}",
+            if num_frames > 0 { buffer[0] } else { 0.0 },
+            if num_frames > 0 { buffer[1] } else { 0.0 }
+        );
+
         // Mix metronome click (center-panned, added to both channels).
         if self.metronome.enabled && self.metronome.is_active() {
             // Render metronome mono into the mono scratch buffer.
@@ -198,6 +205,13 @@ impl AudioEngine {
         for s in buffer.iter_mut() {
             *s *= mv;
         }
+
+        debug_assert!(
+            num_frames == 0 || (buffer[0].is_finite() && buffer[1].is_finite()),
+            "Engine post-master-volume non-finite: L={} R={}",
+            if num_frames > 0 { buffer[0] } else { 0.0 },
+            if num_frames > 0 { buffer[1] } else { 0.0 }
+        );
 
         // Brickwall limiter: prevent output from exceeding 0 dBFS.
         self.limiter.process_interleaved(buffer);

@@ -3493,6 +3493,25 @@ impl DawState {
             SynthParam::VoiceCount => {
                 self.patches[ch].voice_count = (value.round() as u8).clamp(1, 10);
                 self.send_patch(ch);
+                // Re-trigger any currently active notes on this channel,
+                // because set_voice_mode releases all voices when resizing
+                // the voice pool.
+                let retrigger: Vec<_> = self.active_notes[ch]
+                    .iter()
+                    .filter_map(|&idx| self.tracks[ch].notes.get(idx))
+                    .map(|note| {
+                        let freq = MidiTrack::note_to_freq(note.pitch);
+                        let vel = note.velocity as f64 / 127.0;
+                        EngineCommand::NoteOn {
+                            channel: ch as u8,
+                            freq,
+                            velocity: vel,
+                        }
+                    })
+                    .collect();
+                for cmd in retrigger {
+                    self.send_command(cmd);
+                }
                 return;
             }
             SynthParam::Pan | SynthParam::Azimuth | SynthParam::Elevation

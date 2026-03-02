@@ -1,3 +1,5 @@
+mod engine_command;
+mod ring_buffer;
 mod save_load;
 mod sdl_audio;
 mod sdl_input;
@@ -6,7 +8,7 @@ mod sdl_platform;
 mod sdl_renderer;
 mod wav;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +17,8 @@ use audio::vco::{Scale, Waveform};
 use audio::effects::Pedal;
 use audio::position::compute_orbital_position;
 use audio::{AudioEngine, VoiceMode};
+use engine_command::{audio_command_to_engine_command, EngineCommand};
+use ring_buffer::Producer;
 use daw_core::input::DawInput;
 use daw_core::midi::{MidiNote, MidiTrack};
 use daw_core::patch::{
@@ -22,7 +26,7 @@ use daw_core::patch::{
 };
 use daw_core::presets;
 use daw_core::project::DawProject;
-use daw_core::script::{self, ScriptRunner};
+use daw_core::script::ScriptRunner;
 use daw_core::render::{
     self as colors, BG_DARK, BG_PANEL, BG_TRACK, CHANNEL_COLORS, GRID_BAR, GRID_BEAT, GRID_LINE,
     KEY_BLACK, KEY_LABEL, KEY_WHITE, LOOP_MARKER, NOTE_SELECTED, PLAYHEAD, TEXT_ACCENT,
@@ -310,12 +314,63 @@ fn apply_chain_to_engine(
     chain.active = !chain.is_empty();
 }
 
-/// writes all synthesizer parameters to the Ms20Voice and its voice pool.
+/// Shared PCM sample buffer for a single VCO.
+type PcmSamples = Option<Arc<Vec<f64>>>;
+
+/// Load PCM wavetable samples from disk for a patch configuration.
+///
+/// Returns (vco1_samples, vco2_samples) as Arc-wrapped vectors suitable
+/// for sharing across voices. This function performs file I/O and must
+/// run on the UI thread, never on the audio thread.
+fn load_pcm_samples(
+    patch: &PatchConfig,
+    samples_dir: &Path,
+) -> (PcmSamples, PcmSamples) {
+    let vco1 = if parse_waveform(&patch.vco1_waveform) == Waveform::Pcm
+        && !patch.vco1_pcm_file.is_empty()
+    {
+        let path = samples_dir.join(&patch.vco1_pcm_file);
+        match wav::load_wav(&path) {
+            Ok(samples) => Some(Arc::new(samples)),
+            Err(e) => {
+                eprintln!("[WARN] Failed to load VCO1 PCM {}: {e}", path.display());
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let vco2 = if parse_waveform(&patch.vco2_waveform) == Waveform::Pcm
+        && !patch.vco2_pcm_file.is_empty()
+    {
+        let path = samples_dir.join(&patch.vco2_pcm_file);
+        match wav::load_wav(&path) {
+            Ok(samples) => Some(Arc::new(samples)),
+            Err(e) => {
+                eprintln!("[WARN] Failed to load VCO2 PCM {}: {e}", path.display());
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    (vco1, vco2)
+}
+
+/// Apply all synthesizer parameters from a patch to the audio engine.
+///
+/// This is a pure mutation function with no file I/O. PCM samples must
+/// be pre-loaded via `load_pcm_samples` and passed in. Safe to call
+/// from either the UI thread (during initialization) or from a Bulk
+/// closure on the audio thread.
 fn apply_patch_to_engine(
     engine: &mut AudioEngine,
     channel: usize,
     patch: &PatchConfig,
-    samples_dir: Option<&Path>,
+    vco1_samples: Option<Arc<Vec<f64>>>,
+    vco2_samples: Option<Arc<Vec<f64>>>,
 ) {
     let synth = &mut engine.channels[channel].synth;
 
@@ -370,35 +425,15 @@ fn apply_patch_to_engine(
         voice.glide.time = patch.glide_time;
     }
 
-    // Load PCM wavetable samples for VCOs when waveform is set to Pcm.
-    // The sample buffer is shared across all voices via Arc to avoid
-    // duplicating audio data per voice.
-    if let Some(dir) = samples_dir {
-        if parse_waveform(&patch.vco1_waveform) == Waveform::Pcm && !patch.vco1_pcm_file.is_empty()
-        {
-            let path = dir.join(&patch.vco1_pcm_file);
-            match wav::load_wav(&path) {
-                Ok(samples) => {
-                    let arc = Arc::new(samples);
-                    for voice in &mut synth.voices {
-                        voice.vco1.set_pcm_samples(Arc::clone(&arc));
-                    }
-                }
-                Err(e) => eprintln!("[WARN] Failed to load VCO1 PCM {}: {e}", path.display()),
-            }
+    // Apply pre-loaded PCM wavetable samples.
+    if let Some(arc) = vco1_samples {
+        for voice in &mut synth.voices {
+            voice.vco1.set_pcm_samples(Arc::clone(&arc));
         }
-        if parse_waveform(&patch.vco2_waveform) == Waveform::Pcm && !patch.vco2_pcm_file.is_empty()
-        {
-            let path = dir.join(&patch.vco2_pcm_file);
-            match wav::load_wav(&path) {
-                Ok(samples) => {
-                    let arc = Arc::new(samples);
-                    for voice in &mut synth.voices {
-                        voice.vco2.set_pcm_samples(Arc::clone(&arc));
-                    }
-                }
-                Err(e) => eprintln!("[WARN] Failed to load VCO2 PCM {}: {e}", path.display()),
-            }
+    }
+    if let Some(arc) = vco2_samples {
+        for voice in &mut synth.voices {
+            voice.vco2.set_pcm_samples(Arc::clone(&arc));
         }
     }
 
@@ -472,8 +507,9 @@ enum ToolbarEdit {
 struct DawState {
     project: DawProject,
     transport: Transport,
-    #[allow(dead_code)]
-    engine: Arc<Mutex<AudioEngine>>,
+    /// Producer half of the SPSC ring buffer for sending commands to the
+    /// audio thread. Replaces the previous `Arc<Mutex<AudioEngine>>`.
+    producer: Producer<EngineCommand>,
     selected_channel: usize,
     /// Solo channel index, if any. When set, only this channel plays.
     solo_channel: Option<usize>,
@@ -560,11 +596,11 @@ struct DawState {
 const MAX_UNDO_DEPTH: usize = 64;
 
 impl DawState {
-    fn new(engine: Arc<Mutex<AudioEngine>>) -> Self {
+    fn new(producer: Producer<EngineCommand>) -> Self {
         Self {
             project: DawProject::default(),
             transport: Transport::new(SAMPLE_RATE, 480),
-            engine,
+            producer,
             selected_channel: 0,
             solo_channel: None,
             metronome_enabled: false,
@@ -607,6 +643,26 @@ impl DawState {
             drag_select_additive: false,
             dragging_loop: false,
         }
+    }
+
+    /// Push a command to the audio thread via the lock-free ring buffer.
+    /// Logs a warning if the ring buffer is full (should not happen under
+    /// normal operation with 1024-slot capacity).
+    fn send_command(&mut self, cmd: EngineCommand) {
+        if let Err(_cmd) = self.producer.push(cmd) {
+            eprintln!("[WARN] Audio command ring buffer full, command dropped");
+        }
+    }
+
+    /// Load PCM samples on the UI thread, then send a Bulk closure to
+    /// apply the full patch to the engine on the audio thread.
+    fn send_patch(&mut self, ch: usize) {
+        let samples_dir = self.project_root.join("samples");
+        let (s1, s2) = load_pcm_samples(&self.patches[ch], &samples_dir);
+        let patch = self.patches[ch].clone();
+        self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
+            apply_patch_to_engine(engine, ch, &patch, s1, s2);
+        })));
     }
 
     /// Get the primary (last) selected note index, if any.
@@ -884,8 +940,8 @@ impl DawState {
 
     /// Advance playback by one frame. Scans all channels for note start/end
     /// events in the tick range since the last frame. Sends note_on/note_off
-    /// to the audio engine via the shared Arc<Mutex>. Also ticks per-channel
-    /// Keleos scripts and applies their audio commands.
+    /// commands to the audio thread via the lock-free ring buffer. Also ticks
+    /// per-channel Keleos scripts and converts their audio commands.
     fn advance_playback(&mut self) {
         if !self.transport.playing {
             return;
@@ -904,27 +960,21 @@ impl DawState {
         // Compute beat position for scripts.
         let beat = current_ticks as f64 / self.transport.ticks_per_beat as f64;
 
-        // Lock the engine to send note events and apply script commands.
-        // prev_ticks is updated only after a successful lock so that if
-        // try_lock fails, the tick range is retried on the next frame
-        // rather than silently dropping notes in the skipped range.
-        let Ok(mut engine) = self.engine.try_lock() else {
-            return;
-        };
+        // No lock needed: commands are pushed to the ring buffer.
         self.prev_ticks = current_ticks;
 
         // On loop wrap, release all active notes so nothing gets stuck.
         if looped {
-            for ch in 0..8 {
-                if !self.active_notes[ch].is_empty() {
-                    engine.channels[ch].synth.note_off();
-                    self.active_notes[ch].clear();
+            for ch in 0..8u8 {
+                if !self.active_notes[ch as usize].is_empty() {
+                    self.send_command(EngineCommand::NoteOff { channel: ch });
+                    self.active_notes[ch as usize].clear();
                 }
             }
         }
 
         // Trigger metronome clicks on beat-unit boundaries.
-        if engine.metronome.enabled && !looped && prev_ticks < current_ticks {
+        if self.metronome_enabled && !looped && prev_ticks < current_ticks {
             let tpbu = self.transport.ticks_per_beat_unit();
             let prev_beat = prev_ticks / tpbu;
             let current_beat = current_ticks / tpbu;
@@ -932,18 +982,19 @@ impl DawState {
                 let is_downbeat = (current_ticks / tpbu).is_multiple_of(self.transport.beats_per_bar as u64);
                 let sr = self.transport.sample_rate;
                 if is_downbeat {
-                    engine.metronome.click_downbeat(sr);
+                    self.send_command(EngineCommand::ClickDownbeat { sample_rate: sr });
                 } else {
-                    engine.metronome.click_beat(sr);
+                    self.send_command(EngineCommand::ClickBeat { sample_rate: sr });
                 }
             }
         }
 
         // Update orbital positions for channels with orbital mode enabled.
         let tpbar = self.transport.ticks_per_bar() as f64;
-        for ch in 0..8 {
-            if self.effects[ch].orbital_enabled {
-                let period_ticks = self.effects[ch].orbital_period * tpbar;
+        for ch in 0..8u8 {
+            if self.effects[ch as usize].orbital_enabled {
+                let eff = &self.effects[ch as usize];
+                let period_ticks = eff.orbital_period * tpbar;
                 let phase = if period_ticks > 0.0 {
                     (current_ticks as f64 % period_ticks) / period_ticks
                 } else {
@@ -951,79 +1002,110 @@ impl DawState {
                 };
                 let (az, el, dist) = compute_orbital_position(
                     phase,
-                    self.effects[ch].orbital_semi_major,
-                    self.effects[ch].orbital_eccentricity,
-                    self.effects[ch].orbital_inclination,
-                    self.effects[ch].orbital_ascending_node,
-                    self.effects[ch].orbital_periapsis,
+                    eff.orbital_semi_major,
+                    eff.orbital_eccentricity,
+                    eff.orbital_inclination,
+                    eff.orbital_ascending_node,
+                    eff.orbital_periapsis,
                 );
-                let pos = &mut engine.channels[ch].position;
-                pos.active = true;
-                pos.position_3d_enabled = true;
-                pos.azimuth_deg = az;
-                pos.elevation_deg = el;
-                pos.distance = dist;
+                self.send_command(EngineCommand::SetPosition {
+                    channel: ch,
+                    azimuth_deg: az,
+                    elevation_deg: el,
+                    distance: dist,
+                });
             }
         }
 
-        for ch in 0..8 {
+        for ch in 0..8u8 {
+            let ch_idx = ch as usize;
+
             // Release active notes on muted channels instead of skipping.
-            if self.project.channels[ch].muted {
-                if !self.active_notes[ch].is_empty() {
-                    engine.channels[ch].synth.note_off();
-                    self.active_notes[ch].clear();
+            if self.project.channels[ch_idx].muted {
+                if !self.active_notes[ch_idx].is_empty() {
+                    self.send_command(EngineCommand::NoteOff { channel: ch });
+                    self.active_notes[ch_idx].clear();
                 }
                 continue;
             }
 
-            // Tick the channel script if present.
-            if let Some(runner) = &mut self.scripts[ch] {
+            // Tick the channel script if present. Collect commands into a
+            // local vec to avoid borrowing self.scripts and self.producer
+            // simultaneously.
+            let mut script_cmds = Vec::new();
+            let mut script_err: Option<String> = None;
+            if let Some(runner) = &mut self.scripts[ch_idx] {
                 let cmds = runner.tick(
                     current_ticks,
                     self.transport.tempo,
                     beat,
                 );
-                if !cmds.is_empty() {
-                    script::apply_commands(&mut engine, ch, &cmds);
+                for cmd in &cmds {
+                    script_cmds.push(audio_command_to_engine_command(ch, cmd));
                 }
                 if let Some(err) = &runner.last_error {
-                    self.status_message = Some(format!("Script Ch{}: {err}", ch + 1));
+                    script_err = Some(format!("Script Ch{}: {err}", ch_idx + 1));
+                }
+            }
+            for cmd in script_cmds {
+                self.send_command(cmd);
+            }
+            if let Some(msg) = script_err {
+                self.status_message = Some(msg);
+            }
+
+            // Collect all note commands into local vecs to avoid
+            // simultaneous borrows of self.tracks and self.producer.
+            let mut pending_cmds: Vec<EngineCommand> = Vec::new();
+            let mut new_active: Vec<usize> = Vec::new();
+
+            {
+                let track = &self.tracks[ch_idx];
+
+                // Check if any active notes should end.
+                self.active_notes[ch_idx].retain(|&note_idx| {
+                    if note_idx >= track.notes.len() {
+                        pending_cmds.push(EngineCommand::NoteOff { channel: ch });
+                        return false;
+                    }
+                    let note = &track.notes[note_idx];
+                    let note_end = note.tick + note.duration;
+                    if current_ticks >= note_end {
+                        let freq = MidiTrack::note_to_freq(note.pitch);
+                        pending_cmds.push(EngineCommand::NoteOffFreq { channel: ch, freq });
+                        false
+                    } else {
+                        true
+                    }
+                });
+
+                // After a loop wrap, scan from the loop start up to the
+                // current position for new note-ons.
+                let scan_start = if looped { self.transport.loop_start } else { prev_ticks };
+
+                for (i, note) in track.notes.iter().enumerate() {
+                    if note.tick >= scan_start && note.tick < current_ticks {
+                        let freq = MidiTrack::note_to_freq(note.pitch);
+                        let vel = note.velocity as f64 / 127.0;
+                        pending_cmds.push(EngineCommand::NoteOn {
+                            channel: ch,
+                            freq,
+                            velocity: vel,
+                        });
+                        pending_cmds.push(EngineCommand::SetChannelEnabled {
+                            channel: ch,
+                            enabled: true,
+                        });
+                        new_active.push(i);
+                    }
                 }
             }
 
-            let track = &self.tracks[ch];
-
-            // Check if any active notes should end (per-note release for polyphony).
-            self.active_notes[ch].retain(|&note_idx| {
-                if note_idx >= track.notes.len() {
-                    engine.channels[ch].synth.note_off();
-                    return false;
-                }
-                let note = &track.notes[note_idx];
-                let note_end = note.tick + note.duration;
-                if current_ticks >= note_end {
-                    let freq = MidiTrack::note_to_freq(note.pitch);
-                    engine.channels[ch].synth.note_off_freq(freq);
-                    false
-                } else {
-                    true
-                }
-            });
-
-            // After a loop wrap, scan from the loop start (0 if no explicit
-            // loop_start) up to the current position for new note-ons.
-            let scan_start = if looped { self.transport.loop_start } else { prev_ticks };
-
-            // Check if new notes should start in the tick range [scan_start, current_ticks).
-            for (i, note) in track.notes.iter().enumerate() {
-                if note.tick >= scan_start && note.tick < current_ticks {
-                    let freq = MidiTrack::note_to_freq(note.pitch);
-                    let vel = note.velocity as f64 / 127.0;
-                    engine.channels[ch].synth.note_on_with_velocity(freq, vel);
-                    engine.channels[ch].enabled = true;
-                    self.active_notes[ch].push(i);
-                }
+            // Send collected commands and update active notes.
+            for cmd in pending_cmds {
+                self.send_command(cmd);
             }
+            self.active_notes[ch_idx].extend(new_active);
         }
 
         // Auto-scroll to follow the playhead on scrollable pages.
@@ -1040,17 +1122,13 @@ impl DawState {
 
     /// Stop all active notes across all channels.
     ///
-    /// Uses a blocking lock instead of try_lock to guarantee that note-off
-    /// events are delivered. This is called during user-initiated stop/reset
-    /// where a brief block is acceptable to prevent stuck notes.
+    /// Pushes NoteOff commands for every channel with active notes. With the
+    /// lock-free architecture, commands are always delivered (no contention).
     fn stop_all_notes(&mut self) {
-        let Ok(mut engine) = self.engine.lock() else {
-            return;
-        };
-        for ch in 0..8 {
-            if !self.active_notes[ch].is_empty() {
-                engine.channels[ch].synth.note_off();
-                self.active_notes[ch].clear();
+        for ch in 0..8u8 {
+            if !self.active_notes[ch as usize].is_empty() {
+                self.send_command(EngineCommand::NoteOff { channel: ch });
+                self.active_notes[ch as usize].clear();
             }
         }
     }
@@ -1062,10 +1140,15 @@ impl DawState {
         let ch = self.selected_channel;
         let freq = MidiTrack::note_to_freq(pitch);
         let vel = velocity as f64 / 127.0;
-        if let Ok(mut engine) = self.engine.try_lock() {
-            engine.channels[ch].synth.note_on_with_velocity(freq, vel);
-            engine.channels[ch].enabled = true;
-        }
+        self.send_command(EngineCommand::NoteOn {
+            channel: ch as u8,
+            freq,
+            velocity: vel,
+        });
+        self.send_command(EngineCommand::SetChannelEnabled {
+            channel: ch as u8,
+            enabled: true,
+        });
         self.preview_note = Some((ch, freq, std::time::Instant::now()));
     }
 
@@ -1074,44 +1157,51 @@ impl DawState {
         if let Some((ch, freq, start)) = self.preview_note
             && start.elapsed() >= std::time::Duration::from_millis(200)
         {
-            // Only clear the preview state after a successful note-off.
-            // If the lock fails, retry next frame to avoid stuck notes.
-            if let Ok(mut engine) = self.engine.try_lock() {
-                engine.channels[ch].synth.note_off_freq(freq);
-                self.preview_note = None;
-            }
+            self.send_command(EngineCommand::NoteOffFreq {
+                channel: ch as u8,
+                freq,
+            });
+            self.preview_note = None;
         }
     }
 
     /// Immediately stop any playing preview note.
     fn stop_preview(&mut self) {
         if let Some((ch, freq, _)) = self.preview_note.take() {
-            // Use blocking lock to guarantee the note-off is delivered.
-            if let Ok(mut engine) = self.engine.lock() {
-                engine.channels[ch].synth.note_off_freq(freq);
-            }
+            self.send_command(EngineCommand::NoteOffFreq {
+                channel: ch as u8,
+                freq,
+            });
         }
     }
 
     /// Synchronize project channel settings (volume, pan, mute) to the audio engine.
-    fn sync_engine_channels(&self) {
-        let Ok(mut engine) = self.engine.try_lock() else {
-            return;
-        };
-        for ch in 0..8 {
-            let conf = &self.project.channels[ch];
+    fn sync_engine_channels(&mut self) {
+        // Collect all commands first to avoid borrow conflicts between
+        // self.project.channels (immutable) and self.producer (mutable).
+        let mut cmds = Vec::with_capacity(16);
+        for ch in 0..8u8 {
+            let conf = &self.project.channels[ch as usize];
             let vol = conf.volume;
-            // Simple stereo pan: pan = -1.0 (left) to 1.0 (right), 0.0 center.
             let left = vol * (1.0 - conf.pan.max(0.0));
             let right = vol * (1.0 + conf.pan.min(0.0));
-            engine.channels[ch].set_volume(left, right);
-            // Solo overrides mute: when a channel is soloed, all others are disabled.
+            cmds.push(EngineCommand::SetChannelVolume {
+                channel: ch,
+                left,
+                right,
+            });
             let enabled = if let Some(solo) = self.solo_channel {
-                ch == solo && !conf.muted
+                ch as usize == solo && !conf.muted
             } else {
                 !conf.muted
             };
-            engine.channels[ch].enabled = enabled;
+            cmds.push(EngineCommand::SetChannelEnabled {
+                channel: ch,
+                enabled,
+            });
+        }
+        for cmd in cmds {
+            self.send_command(cmd);
         }
     }
 
@@ -1801,12 +1891,7 @@ impl DawState {
             self.patches[ch] = patch;
             self.preset_indices[ch] = Some(next);
             self.project.channels[ch].name = String::from(name);
-            // Use blocking lock to guarantee the engine receives the patch.
-            // try_lock could silently fail, leaving the label updated but
-            // the synth unchanged.
-            if let Ok(mut engine) = self.engine.lock() {
-                apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
-            }
+            self.send_patch(ch);
             self.status_message = Some(format!("Ch{}: {}", ch + 1, name));
         }
     }
@@ -2083,16 +2168,15 @@ impl DawState {
 
     /// Toggle metronome click on or off.
     fn toggle_metronome(&mut self) {
-        if let Ok(mut engine) = self.engine.try_lock() {
-            let enabled = !engine.metronome.enabled;
-            engine.metronome.enabled = enabled;
-            self.metronome_enabled = enabled;
-            self.status_message = Some(if enabled {
-                String::from("Metronome ON")
-            } else {
-                String::from("Metronome OFF")
-            });
-        }
+        self.metronome_enabled = !self.metronome_enabled;
+        self.send_command(EngineCommand::SetMetronomeEnabled {
+            enabled: self.metronome_enabled,
+        });
+        self.status_message = Some(if self.metronome_enabled {
+            String::from("Metronome ON")
+        } else {
+            String::from("Metronome OFF")
+        });
     }
 
     /// Adjust the time signature numerator by a delta, clamped to 1-32.
@@ -2150,39 +2234,36 @@ impl DawState {
         }
     }
 
-    /// Apply all channel patches to the audio engine. Called after loading
-    /// a project to synchronize saved patch data with the engine state.
-    fn apply_all_patches(&self) {
-        let Ok(mut engine) = self.engine.try_lock() else {
-            return;
-        };
-        let samples_dir = self.project_root.join("samples");
+    /// Apply all channel patches to the audio engine. Sends Bulk closures
+    /// for each channel with pre-loaded PCM samples.
+    #[allow(dead_code)]
+    fn apply_all_patches(&mut self) {
         for ch in 0..8 {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&samples_dir));
+            self.send_patch(ch);
         }
     }
 
-    /// Apply all channel effect chains to the audio engine. Called after loading
-    /// a project to instantiate saved pedal configs into live audio pedal chains.
-    fn apply_all_effects(&self) {
-        let Ok(mut engine) = self.engine.try_lock() else {
-            return;
-        };
+    /// Apply all channel effect chains to the audio engine. Sends Bulk
+    /// closures for each channel to rebuild pedal chains and positions.
+    #[allow(dead_code)]
+    fn apply_all_effects(&mut self) {
         let sr = SAMPLE_RATE as f64;
         for ch in 0..8 {
-            let config = &self.effects[ch];
-            apply_chain_to_engine(&mut engine.channels[ch].pre_pedals, &config.pre_pedals, sr);
-            apply_chain_to_engine(
-                &mut engine.channels[ch].post_pedals_left,
-                &config.post_pedals_left,
-                sr,
-            );
-            apply_chain_to_engine(
-                &mut engine.channels[ch].post_pedals_right,
-                &config.post_pedals_right,
-                sr,
-            );
-            apply_position_to_engine(&mut engine, ch, config);
+            let config = self.effects[ch].clone();
+            self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
+                apply_chain_to_engine(&mut engine.channels[ch].pre_pedals, &config.pre_pedals, sr);
+                apply_chain_to_engine(
+                    &mut engine.channels[ch].post_pedals_left,
+                    &config.post_pedals_left,
+                    sr,
+                );
+                apply_chain_to_engine(
+                    &mut engine.channels[ch].post_pedals_right,
+                    &config.post_pedals_right,
+                    sr,
+                );
+                apply_position_to_engine(engine, ch, &config);
+            })));
         }
     }
 
@@ -2488,54 +2569,42 @@ impl DawState {
     fn cycle_vco1_waveform(&mut self) {
         let ch = self.selected_channel;
         self.patches[ch].vco1_waveform = next_waveform(&self.patches[ch].vco1_waveform);
-        if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
-        }
+        self.send_patch(ch);
     }
 
     /// Cycle VCO2 waveform to the next value.
     fn cycle_vco2_waveform(&mut self) {
         let ch = self.selected_channel;
         self.patches[ch].vco2_waveform = next_waveform(&self.patches[ch].vco2_waveform);
-        if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
-        }
+        self.send_patch(ch);
     }
 
     /// Cycle VCO1 scale to the next value.
     fn cycle_vco1_scale(&mut self) {
         let ch = self.selected_channel;
         self.patches[ch].vco1_scale = next_scale(&self.patches[ch].vco1_scale);
-        if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
-        }
+        self.send_patch(ch);
     }
 
     /// Cycle VCO2 scale to the next value.
     fn cycle_vco2_scale(&mut self) {
         let ch = self.selected_channel;
         self.patches[ch].vco2_scale = next_scale(&self.patches[ch].vco2_scale);
-        if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
-        }
+        self.send_patch(ch);
     }
 
     /// Cycle voice mode to the next value.
     fn cycle_voice_mode(&mut self) {
         let ch = self.selected_channel;
         self.patches[ch].voice_mode = next_voice_mode(&self.patches[ch].voice_mode);
-        if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
-        }
+        self.send_patch(ch);
     }
 
     /// Toggle glide enabled on the selected channel.
     fn toggle_glide(&mut self) {
         let ch = self.selected_channel;
         self.patches[ch].glide_enabled = !self.patches[ch].glide_enabled;
-        if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
-        }
+        self.send_patch(ch);
     }
 
     /// Handle a click on the mono chain page (pedal parameter editing).
@@ -2585,9 +2654,10 @@ impl DawState {
                     self.effects[ch].position_3d_enabled = false;
                     self.effects[ch].orbital_enabled = false;
                 }
-                if let Ok(mut engine) = self.engine.try_lock() {
-                    apply_position_to_engine(&mut engine, ch, &self.effects[ch]);
-                }
+                let config = self.effects[ch].clone();
+                self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
+                    apply_position_to_engine(engine, ch, &config);
+                })));
                 return;
             }
             py += PARAM_ROW_H;
@@ -3311,27 +3381,23 @@ impl DawState {
     }
 
     /// Rebuild one engine pedal chain from its config.
-    fn rebuild_engine_chain(&self, ch: usize, chain_id: u8) {
-        let Ok(mut engine) = self.engine.try_lock() else {
-            return;
-        };
+    fn rebuild_engine_chain(&mut self, ch: usize, chain_id: u8) {
         let sr = SAMPLE_RATE as f64;
-        let (engine_chain, configs) = match chain_id {
-            0 => (
-                &mut engine.channels[ch].pre_pedals,
-                &self.effects[ch].pre_pedals,
-            ),
-            1 => (
-                &mut engine.channels[ch].post_pedals_left,
-                &self.effects[ch].post_pedals_left,
-            ),
-            2 => (
-                &mut engine.channels[ch].post_pedals_right,
-                &self.effects[ch].post_pedals_right,
-            ),
+        let configs = match chain_id {
+            0 => self.effects[ch].pre_pedals.clone(),
+            1 => self.effects[ch].post_pedals_left.clone(),
+            2 => self.effects[ch].post_pedals_right.clone(),
             _ => return,
         };
-        apply_chain_to_engine(engine_chain, configs, sr);
+        self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
+            let engine_chain = match chain_id {
+                0 => &mut engine.channels[ch].pre_pedals,
+                1 => &mut engine.channels[ch].post_pedals_left,
+                2 => &mut engine.channels[ch].post_pedals_right,
+                _ => return,
+            };
+            apply_chain_to_engine(engine_chain, &configs, sr);
+        })));
     }
 
     /// Handle a click on the pedal type picker overlay.
@@ -3426,9 +3492,7 @@ impl DawState {
             SynthParam::GlideTime => patch.glide_time = value,
             SynthParam::VoiceCount => {
                 self.patches[ch].voice_count = (value.round() as u8).clamp(1, 10);
-                if let Ok(mut engine) = self.engine.try_lock() {
-                    apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
-                }
+                self.send_patch(ch);
                 return;
             }
             SynthParam::Pan | SynthParam::Azimuth | SynthParam::Elevation
@@ -3449,17 +3513,15 @@ impl DawState {
                     SynthParam::OrbitalPeriod => self.effects[ch].orbital_period = value,
                     _ => unreachable!(),
                 }
-                if let Ok(mut engine) = self.engine.try_lock() {
-                    apply_position_to_engine(&mut engine, ch, &self.effects[ch]);
-                }
+                let config = self.effects[ch].clone();
+                self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
+                    apply_position_to_engine(engine, ch, &config);
+                })));
                 return;
             }
         }
-        // Sync the full patch to the engine. This is slightly wasteful (writes all
-        // parameters) but ensures consistency and avoids per-parameter engine access.
-        if let Ok(mut engine) = self.engine.try_lock() {
-            apply_patch_to_engine(&mut engine, ch, &self.patches[ch], Some(&self.project_root.join("samples")));
-        }
+        // Sync the full patch to the engine via Bulk closure.
+        self.send_patch(ch);
     }
 
     /// Write a pedal parameter value to EffectChainConfig and sync to the engine.
@@ -3489,8 +3551,8 @@ impl DawState {
         } else {
             return;
         };
-        // Sync the specific parameter to the engine's live pedal.
-        if let Ok(mut engine) = self.engine.try_lock() {
+        // Sync the specific parameter to the engine's live pedal via Bulk closure.
+        self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
             let engine_chain = match chain {
                 0 => &mut engine.channels[ch].pre_pedals,
                 1 => &mut engine.channels[ch].post_pedals_left,
@@ -3500,7 +3562,7 @@ impl DawState {
             if let Some(pedal) = engine_chain.pedals.get_mut(pedal_idx) {
                 pedal.set_param(&param_name, value);
             }
-        }
+        })));
     }
 
     fn render<R: Renderer>(&self, renderer: &mut R) {
@@ -5033,19 +5095,12 @@ fn main() {
         }
     };
 
-    // Initialize audio engine.
-    let audio_engine = AudioEngine::new(SAMPLE_RATE);
-    let engine_arc = Arc::new(Mutex::new(audio_engine));
-    let mut audio_bridge = sdl_audio::AudioBridge::new(Arc::clone(&engine_arc));
+    // Initialize audio engine and lock-free command channel.
+    let mut audio_engine = AudioEngine::new(SAMPLE_RATE);
+    let (producer, consumer) = ring_buffer::ring_buffer::<EngineCommand>(1024);
 
-    if let Err(e) = audio_bridge.open_device(SAMPLE_RATE) {
-        eprintln!("[WARN] Audio initialization failed: {e}");
-    } else {
-        audio_bridge.resume();
-    }
-
-    // Create DAW state, optionally loading a project.
-    let mut state = DawState::new(engine_arc);
+    // Create DAW state with the producer half of the ring buffer.
+    let mut state = DawState::new(producer);
     state.project_root = PathBuf::from(&project_root);
     state.sdl_window = renderer.window();
 
@@ -5122,13 +5177,46 @@ fn main() {
     // Load Keleos scripts for channels that have them.
     state.load_scripts();
 
-    // Sync channel configuration, patches, and effect chains to the audio engine.
-    state.sync_engine_channels();
-    state.apply_all_patches();
-    state.apply_all_effects();
+    // Apply initial state directly to the engine (single-threaded, before
+    // transferring ownership to the audio thread).
+    {
+        let samples_dir = state.project_root.join("samples");
+        let sr = SAMPLE_RATE as f64;
+        for ch in 0..8 {
+            // Channel volume and enabled state.
+            let conf = &state.project.channels[ch];
+            let vol = conf.volume;
+            let left = vol * (1.0 - conf.pan.max(0.0));
+            let right = vol * (1.0 + conf.pan.min(0.0));
+            audio_engine.channels[ch].set_volume(left, right);
+            audio_engine.channels[ch].enabled = !conf.muted;
+
+            // Synth patch.
+            let (s1, s2) = load_pcm_samples(&state.patches[ch], &samples_dir);
+            apply_patch_to_engine(&mut audio_engine, ch, &state.patches[ch], s1, s2);
+
+            // Effect chains.
+            let config = &state.effects[ch];
+            apply_chain_to_engine(&mut audio_engine.channels[ch].pre_pedals, &config.pre_pedals, sr);
+            apply_chain_to_engine(&mut audio_engine.channels[ch].post_pedals_left, &config.post_pedals_left, sr);
+            apply_chain_to_engine(&mut audio_engine.channels[ch].post_pedals_right, &config.post_pedals_right, sr);
+            apply_position_to_engine(&mut audio_engine, ch, config);
+        }
+    }
     state.transport.tempo = state.project.tempo;
     state.transport.beats_per_bar = state.project.beats_per_bar;
     state.transport.beat_denominator = state.project.beat_denominator;
+
+    // Transfer engine ownership to the audio thread.
+    let audio_thread = Box::new(sdl_audio::AudioThread::new(audio_engine, consumer, 8192));
+    let audio_thread_ptr = Box::into_raw(audio_thread);
+    let mut audio_bridge = sdl_audio::AudioBridge::new(audio_thread_ptr);
+
+    if let Err(e) = audio_bridge.open_device(SAMPLE_RATE) {
+        eprintln!("[WARN] Audio initialization failed: {e}");
+    } else {
+        audio_bridge.resume();
+    }
 
     println!("[INFO] DAW started: {WINDOW_WIDTH}x{WINDOW_HEIGHT} @ {SAMPLE_RATE}Hz");
     println!("[INFO] Controls: Space=Play/Pause, S=Stop, 1-8=Ch, P=Preset, Shift+P=Prev, M=Mute, Ctrl+S=Save, Q=Quit");
@@ -5161,5 +5249,13 @@ fn main() {
         }
     }
 
+    // Drop the audio bridge first to stop the SDL stream and callback.
+    drop(audio_bridge);
+    // Reclaim the AudioThread to free engine and ring buffer consumer.
+    // Safety: the SDL stream has been destroyed, so no callback can
+    // access the AudioThread.
+    unsafe {
+        let _ = Box::from_raw(audio_thread_ptr);
+    }
     println!("[INFO] DAW shutdown");
 }

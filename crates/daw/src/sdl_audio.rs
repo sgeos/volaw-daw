@@ -1,26 +1,65 @@
-use std::sync::{Arc, Mutex};
-
 use audio::AudioEngine;
 use sdl3_sys::audio::*;
 
-/// Bridge between the SDL3 audio subsystem and the no_std AudioEngine.
+use crate::engine_command::{apply_engine_command, EngineCommand};
+use crate::ring_buffer::Consumer;
+
+/// Audio thread state: owns the engine, command consumer, and pre-allocated
+/// staging buffer. This struct lives on the heap and is passed to the SDL3
+/// audio callback as a raw pointer.
 ///
-/// The AudioEngine is wrapped in Arc<Mutex> so the SDL audio callback thread
-/// can safely access it. The main thread also holds a reference for updating
-/// channel configuration.
+/// ## Ownership Model
+///
+/// The `AudioEngine` is exclusively owned by the audio thread after
+/// initialization. The UI thread communicates with the audio thread
+/// via `EngineCommand` messages pushed through the SPSC ring buffer.
+/// No mutex, no shared ownership.
+pub struct AudioThread {
+    pub engine: AudioEngine,
+    consumer: Consumer<EngineCommand>,
+    /// Pre-allocated f64 staging buffer for f32 conversion.
+    /// Sized once at construction and never reallocated.
+    staging: Vec<f64>,
+}
+
+impl AudioThread {
+    /// Create a new audio thread state with the given engine, command
+    /// consumer, and staging buffer capacity (in f64 samples).
+    pub fn new(engine: AudioEngine, consumer: Consumer<EngineCommand>, staging_capacity: usize) -> Self {
+        Self {
+            engine,
+            consumer,
+            staging: vec![0.0f64; staging_capacity],
+        }
+    }
+}
+
+/// Bridge between the SDL3 audio subsystem and the lock-free audio thread.
+///
+/// Holds a raw pointer to the `AudioThread` struct on the heap. The pointer
+/// is passed to SDL3 as callback userdata. The `AudioBridge` does not own
+/// the `AudioThread`; the caller is responsible for managing its lifetime
+/// (the `AudioThread` must outlive the SDL stream).
 pub struct AudioBridge {
-    engine: Arc<Mutex<AudioEngine>>,
+    audio_thread: *mut AudioThread,
     stream: *mut SDL_AudioStream,
 }
 
-// SDL_AudioStream is thread-safe in SDL3 and AudioEngine is Mutex-protected.
+// Safety: The AudioBridge holds a raw pointer to AudioThread, but the
+// pointer is only dereferenced inside the SDL audio callback (single
+// consumer thread) and during drop (main thread, after stream is destroyed).
 unsafe impl Send for AudioBridge {}
 
 impl AudioBridge {
-    /// Create a new audio bridge wrapping the given engine (shared via Arc).
-    pub fn new(engine: Arc<Mutex<AudioEngine>>) -> Self {
+    /// Create a new audio bridge from a raw pointer to an `AudioThread`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the `AudioThread` pointer remains valid for
+    /// the lifetime of this `AudioBridge` and the SDL audio stream.
+    pub fn new(audio_thread: *mut AudioThread) -> Self {
         Self {
-            engine,
+            audio_thread,
             stream: std::ptr::null_mut(),
         }
     }
@@ -33,7 +72,7 @@ impl AudioBridge {
             freq: sample_rate as i32,
         };
 
-        let userdata = Arc::into_raw(Arc::clone(&self.engine)) as *mut std::ffi::c_void;
+        let userdata = self.audio_thread as *mut std::ffi::c_void;
 
         let stream = unsafe {
             SDL_OpenAudioDeviceStream(
@@ -45,9 +84,6 @@ impl AudioBridge {
         };
 
         if stream.is_null() {
-            unsafe {
-                let _ = Arc::from_raw(userdata as *const Mutex<AudioEngine>);
-            }
             return Err("Failed to open audio device stream".to_string());
         }
 
@@ -75,7 +111,13 @@ impl Drop for AudioBridge {
     }
 }
 
-/// SDL3 audio stream callback.
+/// SDL3 audio stream callback (lock-free).
+///
+/// Called by the SDL audio thread. Drains all pending commands from the
+/// ring buffer, renders audio into the pre-allocated staging buffer,
+/// converts f64 to f32, and pushes the result to the SDL stream.
+///
+/// No mutex acquisition. No heap allocation. Bounded work per invocation.
 unsafe extern "C" fn audio_callback(
     userdata: *mut std::ffi::c_void,
     stream: *mut SDL_AudioStream,
@@ -86,30 +128,49 @@ unsafe extern "C" fn audio_callback(
         return;
     }
 
-    let engine_mutex = unsafe { &*(userdata as *const Mutex<AudioEngine>) };
+    let audio_thread = unsafe { &mut *(userdata as *mut AudioThread) };
     let num_samples = additional_amount as usize / std::mem::size_of::<f32>();
     if num_samples == 0 {
         return;
     }
 
-    let mut stack_buf = [0.0f32; 4096];
-    let mut heap_buf;
-    let buffer: &mut [f32] = if num_samples <= stack_buf.len() {
-        &mut stack_buf[..num_samples]
-    } else {
-        heap_buf = vec![0.0f32; num_samples];
-        &mut heap_buf
-    };
-
-    if let Ok(mut engine) = engine_mutex.try_lock() {
-        engine.render_samples_f32(buffer);
+    // Drain all pending commands from the ring buffer.
+    while let Some(cmd) = audio_thread.consumer.pop() {
+        apply_engine_command(&mut audio_thread.engine, cmd);
     }
 
-    unsafe {
-        SDL_PutAudioStreamData(
-            stream,
-            buffer.as_ptr() as *const std::ffi::c_void,
-            additional_amount,
-        );
+    // Ensure staging buffer is large enough. This should not reallocate
+    // in practice because the staging buffer is sized at construction,
+    // but we handle the edge case defensively.
+    if audio_thread.staging.len() < num_samples {
+        audio_thread.staging.resize(num_samples, 0.0);
+    }
+
+    // Render f64 audio into the staging buffer.
+    audio_thread
+        .engine
+        .render_samples(&mut audio_thread.staging[..num_samples]);
+
+    // Convert f64 to f32 and push to the SDL stream using a stack buffer
+    // to avoid heap allocation. Process in chunks of 4096 f32 samples.
+    let mut offset = 0;
+    while offset < num_samples {
+        let mut f32_chunk = [0.0f32; 4096];
+        let chunk_len = (num_samples - offset).min(4096);
+        for (out, &src) in f32_chunk[..chunk_len]
+            .iter_mut()
+            .zip(&audio_thread.staging[offset..offset + chunk_len])
+        {
+            *out = src as f32;
+        }
+        let byte_len = (chunk_len * std::mem::size_of::<f32>()) as std::ffi::c_int;
+        unsafe {
+            SDL_PutAudioStreamData(
+                stream,
+                f32_chunk.as_ptr() as *const std::ffi::c_void,
+                byte_len,
+            );
+        }
+        offset += chunk_len;
     }
 }

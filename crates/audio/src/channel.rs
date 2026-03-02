@@ -156,14 +156,14 @@ impl Channel {
         self.post_pedals_left.process(&mut left_out[..len], sample_rate);
         self.post_pedals_right.process(&mut right_out[..len], sample_rate);
 
-        // Apply per-channel volume trim, then hard clip to [-1, 1].
+        // Apply per-channel volume trim.
         let vol_l = self.volume_left;
         let vol_r = self.volume_right;
         for s in left_out[..len].iter_mut() {
-            *s = (*s * vol_l).clamp(-1.0, 1.0);
+            *s *= vol_l;
         }
         for s in right_out[..len].iter_mut() {
-            *s = (*s * vol_r).clamp(-1.0, 1.0);
+            *s *= vol_r;
         }
         debug_assert!(
             len == 0 || (left_out[0].is_finite() && right_out[0].is_finite()),

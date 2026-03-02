@@ -538,8 +538,7 @@ impl Ms20Voice {
                     lpf_base_cutoff * libm::pow(2.0, mods.lpf_cutoff + vel_filter_octaves);
                 voice.lpf.cutoff = lpf_mod_cutoff.clamp(20.0, 20000.0);
                 voice.lpf.resonance = (lpf_base_res + mods.lpf_resonance).clamp(0.0, 2.0);
-                // Hard clip after LPF (Korg-35 style).
-                let after_lpf = voice.lpf.tick(after_hpf, sr).clamp(-1.0, 1.0);
+                let after_lpf = voice.lpf.tick(after_hpf, sr);
                 voice.lpf.cutoff = lpf_base_cutoff;
                 voice.lpf.resonance = lpf_base_res;
 
@@ -550,10 +549,6 @@ impl Ms20Voice {
                 let vca_level = (vca_base * vca_vel_scale).clamp(0.0, 1.0);
                 output += after_lpf * vca_level;
             }
-
-            // Normalize by configured voice count so polyphony stays bounded.
-            let voice_count = self.voices.len().max(1) as f64;
-            output /= voice_count;
 
             debug_assert!(
                 output.is_finite(),
@@ -1151,28 +1146,6 @@ mod tests {
 
         let has_nonzero = buffer.iter().any(|s| s.abs() > 1e-6);
         assert!(has_nonzero, "Polyphonic output should be non-zero");
-    }
-
-    #[test]
-    fn poly_normalized_bounded() {
-        // With voice normalization, 3 voices should stay bounded.
-        // Peak per sample should not exceed 1.0.
-        let mut poly = Ms20Voice::with_voice_mode(VoiceMode::High(3));
-        poly.note_on(440.0);
-        poly.note_on(550.0);
-        poly.note_on(660.0);
-        let mut poly_buf = [0.0f64; 4800];
-        poly.process(&mut poly_buf, 48000);
-        let peak = poly_buf.iter().map(|s| libm::fabs(*s)).fold(0.0f64, f64::max);
-
-        assert!(
-            peak <= 1.0,
-            "Poly 3-voice peak should not exceed 1.0: {peak}"
-        );
-        assert!(
-            peak > 0.0,
-            "Poly 3-voice should produce non-zero output"
-        );
     }
 
     // -----------------------------------------------------------------------

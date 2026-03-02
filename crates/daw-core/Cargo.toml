@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 audio = { workspace = true }
-keleusma = { workspace = true }
+keleusma = { path = "../../../keleusma" }
 serde = { workspace = true }
 libm = "0.2"
 

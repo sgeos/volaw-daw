@@ -2,7 +2,7 @@
 
 > [Top-level README](../../README.md) | [Server README](../server/README.md) | [Client README](../client/README.md)
 
-SDL3-based Digital Audio Workstation (DAW) for composing music using the game audio engine. An 8-channel MIDI sequencer with piano roll editing, velocity lane, patch preset selection, effect chains, Keleos scripting, and real-time audio playback through the MS-20 synthesizer architecture.
+SDL3-based Digital Audio Workstation (DAW) for composing music using the game audio engine. An 8-channel MIDI sequencer with piano roll editing, velocity lane, patch preset selection, effect chains, Keleusma scripting, and real-time audio playback through the MS-20 synthesizer architecture.
 
 ## Prerequisites
 
@@ -135,7 +135,7 @@ cargo run -p daw -- --root my_music --import-midi track.mid --import-channel 3
 - **Standard MIDI File import** with monophonic autofix strategies
 - **Standard MIDI File export** (Ctrl+E) to exports/ directory
 - **TOML project save/load** with per-channel patch, effects, and MIDI files
-- **Keleos scripting** with per-channel script assignment and hot-reload
+- **Keleusma scripting** with per-channel script assignment and hot-reload
 - **Script hot-reload** checking file modifications once per second
 - **Script error display** in the status bar
 - **Undo/redo system** with 64-level stack and inverse capture pattern
@@ -162,7 +162,7 @@ daw_projects/
       ch2.toml
       ...
     scripts/
-      ch1.kel             # Keleos script per channel (optional)
+      ch1.kma             # Keleusma script per channel (optional)
       ...
     exports/
       my_song.mid         # Exported Standard MIDI File
@@ -181,9 +181,9 @@ daw_projects/
 
 ### Library Crates
 
-- **daw-core** (no_std+alloc): Shared DAW logic including MIDI track representation, transport state, patch configuration, preset definitions, rendering trait, Standard MIDI File parser/builder, and Keleos script runner
+- **daw-core** (no_std+alloc): Shared DAW logic including MIDI track representation, transport state, patch configuration, preset definitions, rendering trait, Standard MIDI File parser/builder, and Keleusma script runner
 - **audio** (no_std+alloc): 8-channel synthesizer engine with dual VCO, dual envelope generator, HPF/LPF filters, LFO, modulation matrix, 25-pedal DSP effect chain, and metronome click generator
-- **keleos** (no_std+alloc): Keleos scripting language with lexer, parser, compiler, and virtual machine
+- **keleusma** (no_std+alloc): Keleusma scripting language with lexer, parser, compiler, and virtual machine
 
 ## Testing
 
@@ -192,4 +192,4 @@ cargo test -p daw
 cargo test -p daw-core
 ```
 
-The DAW binary has 3 unit tests. The daw-core library has 60 tests covering MIDI track operations, transport logic, project serialization, preset loading, rendering calculations, Standard MIDI File parsing, and Keleos script integration.
+The DAW binary has 3 unit tests. The daw-core library has 60 tests covering MIDI track operations, transport logic, project serialization, preset loading, rendering calculations, Standard MIDI File parsing, and Keleusma script integration.

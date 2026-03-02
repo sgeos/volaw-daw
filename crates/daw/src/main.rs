@@ -549,7 +549,7 @@ struct DawState {
     /// Pending parameter undo: captures the pre-drag value for continuous edits.
     /// Flushed to the undo stack on mouse-up or when the drag target changes.
     pending_param_undo: Option<UndoAction>,
-    /// Per-channel Keleos script runners. None if no script assigned.
+    /// Per-channel Keleusma script runners. None if no script assigned.
     scripts: [Option<ScriptRunner>; 8],
     /// Currently active drag target on a setup page parameter.
     dragging_param: Option<DragTarget>,
@@ -838,7 +838,7 @@ impl DawState {
         }
     }
 
-    /// Load Keleos scripts for all channels that have a script_file set.
+    /// Load Keleusma scripts for all channels that have a script_file set.
     ///
     /// Reads each script file from the scripts/ folder under the project root
     /// and compiles it into a ScriptRunner. Errors are logged but do not
@@ -941,7 +941,7 @@ impl DawState {
     /// Advance playback by one frame. Scans all channels for note start/end
     /// events in the tick range since the last frame. Sends note_on/note_off
     /// commands to the audio thread via the lock-free ring buffer. Also ticks
-    /// per-channel Keleos scripts and converts their audio commands.
+    /// per-channel Keleusma scripts and converts their audio commands.
     fn advance_playback(&mut self) {
         if !self.transport.playing {
             return;
@@ -5080,7 +5080,7 @@ fn main() {
                 i += 2;
             }
             "--script" if i + 2 < args.len() => {
-                // --script <channel> <file.kel>
+                // --script <channel> <file.kma>
                 let ch = args[i + 1].parse::<usize>().unwrap_or(0);
                 let file = args[i + 2].clone();
                 script_args.push((ch, file));
@@ -5193,7 +5193,7 @@ fn main() {
         }
     }
 
-    // Load Keleos scripts for channels that have them.
+    // Load Keleusma scripts for channels that have them.
     state.load_scripts();
 
     // Apply initial state directly to the engine (single-threaded, before

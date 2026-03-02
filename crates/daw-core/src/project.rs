@@ -50,7 +50,7 @@ pub struct ChannelConfig {
     /// Filename of the MIDI file in the midi/ folder.
     #[serde(default)]
     pub midi_file: String,
-    /// Filename of the Keleos script in the scripts/ folder.
+    /// Filename of the Keleusma script in the scripts/ folder.
     /// Empty string means no script is assigned to this channel.
     #[serde(default)]
     pub script_file: String,

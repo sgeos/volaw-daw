@@ -6,13 +6,13 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 
 use audio::AudioEngine;
-use keleos::bytecode::Value;
-use keleos::compiler::compile;
-use keleos::lexer::tokenize;
-use keleos::parser::parse;
-use keleos::vm::{Vm, VmError, VmState};
+use keleusma::bytecode::Value;
+use keleusma::compiler::compile;
+use keleusma::lexer::tokenize;
+use keleusma::parser::parse;
+use keleusma::vm::{Vm, VmError, VmState};
 
-/// An audio command produced by a Keleos script during execution.
+/// An audio command produced by a Keleusma script during execution.
 ///
 /// Scripts call native functions like `audio::note_on(freq, vel)` which
 /// push commands to a shared buffer. After script evaluation, the host
@@ -55,7 +55,7 @@ pub enum AudioCommand {
     SetVco2PulseWidth(f64),
 }
 
-/// Extract an f64 from a Keleos Value, accepting both Float and Int.
+/// Extract an f64 from a Keleusma Value, accepting both Float and Int.
 fn extract_f64(val: &Value) -> Result<f64, VmError> {
     match val {
         Value::Float(f) => Ok(*f),
@@ -344,9 +344,9 @@ fn register_audio_command_natives(
 #[derive(Debug, Clone)]
 pub struct ScriptError(pub String);
 
-/// A compiled Keleos script runner bound to a single audio channel.
+/// A compiled Keleusma script runner bound to a single audio channel.
 ///
-/// The runner manages a Keleos VM instance with registered audio native
+/// The runner manages a Keleusma VM instance with registered audio native
 /// functions. Each frame tick, the host resumes the VM coroutine with
 /// transport state. Native function calls during execution accumulate
 /// audio commands in a shared buffer. After execution, the host reads
@@ -360,7 +360,7 @@ pub struct ScriptRunner {
 }
 
 impl ScriptRunner {
-    /// Compile a Keleos script source and create a runner.
+    /// Compile a Keleusma script source and create a runner.
     ///
     /// Registers both pure audio utility functions (midi_to_freq, etc.)
     /// and audio command functions (note_on, set_lpf_cutoff, etc.).
@@ -377,7 +377,7 @@ impl ScriptRunner {
             Rc::new(RefCell::new(Vec::new()));
 
         // Register pure utility natives.
-        keleos::audio_natives::register_audio_natives(&mut vm);
+        keleusma::audio_natives::register_audio_natives(&mut vm);
         // Register command-producing natives.
         register_audio_command_natives(&mut vm, &commands);
 
@@ -683,7 +683,7 @@ mod tests {
 
     #[test]
     fn compile_error_reported() {
-        let result = ScriptRunner::from_source("this is not valid keleos");
+        let result = ScriptRunner::from_source("this is not valid keleusma");
         assert!(result.is_err());
     }
 }

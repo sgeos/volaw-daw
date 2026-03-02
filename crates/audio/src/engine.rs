@@ -144,6 +144,7 @@ impl AudioEngine {
         }
 
         let sample_rate = self.sample_rate;
+        let active_channels = self.channels.iter().filter(|ch| ch.enabled).count().max(1);
 
         // Process each channel through the full stereo signal chain.
         for ch in &mut self.channels {
@@ -177,6 +178,12 @@ impl AudioEngine {
                 buffer[i * 2] += self.left_buffer[i];
                 buffer[i * 2 + 1] += self.right_buffer[i];
             }
+        }
+
+        // Normalize by active channel count so the mix stays bounded.
+        let inv_active = 1.0 / active_channels as f64;
+        for s in buffer[..num_frames * 2].iter_mut() {
+            *s *= inv_active;
         }
 
         debug_assert!(

@@ -1,3 +1,9 @@
+// DAW input/edit dispatch tables use explicit if guards inside match
+// arms rather than collapsing into match guards. Loop boundary
+// snapping uses a guarded division rather than checked_div.
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::manual_checked_ops)]
+
 mod engine_command;
 mod ring_buffer;
 mod save_load;
@@ -12,28 +18,28 @@ use std::sync::Arc;
 
 use std::path::{Path, PathBuf};
 
-use audio::modmatrix::{ModDest, ModRouting, ModSource};
-use audio::vco::{Scale, Waveform};
 use audio::effects::Pedal;
+use audio::modmatrix::{ModDest, ModRouting, ModSource};
 use audio::position::compute_orbital_position;
+use audio::vco::{Scale, Waveform};
 use audio::{AudioEngine, VoiceMode};
-use engine_command::{audio_command_to_engine_command, EngineCommand};
-use ring_buffer::Producer;
 use daw_core::input::DawInput;
 use daw_core::midi::{MidiNote, MidiTrack};
 use daw_core::patch::{
-    default_pedal_config, EffectChainConfig, PatchConfig, PedalConfig, PEDAL_TYPES,
+    EffectChainConfig, PEDAL_TYPES, PatchConfig, PedalConfig, default_pedal_config,
 };
 use daw_core::presets;
 use daw_core::project::DawProject;
-use daw_core::script::ScriptRunner;
 use daw_core::render::{
     self as colors, BG_DARK, BG_PANEL, BG_TRACK, CHANNEL_COLORS, GRID_BAR, GRID_BEAT, GRID_LINE,
     KEY_BLACK, KEY_LABEL, KEY_WHITE, LOOP_MARKER, NOTE_SELECTED, PLAYHEAD, TEXT_ACCENT,
     TEXT_PRIMARY, TEXT_SECONDARY,
 };
 use daw_core::render::{Color, FontSize, Renderer};
+use daw_core::script::ScriptRunner;
 use daw_core::transport::Transport;
+use engine_command::{EngineCommand, audio_command_to_engine_command};
+use ring_buffer::Producer;
 
 const WINDOW_WIDTH: u32 = 1440;
 const WINDOW_HEIGHT: u32 = 900;
@@ -79,10 +85,7 @@ const PARAM_ROW_H: f32 = 24.0;
 #[derive(Debug, Clone)]
 enum UndoAction {
     /// MIDI track snapshot (for note edits).
-    Track {
-        channel: usize,
-        snapshot: MidiTrack,
-    },
+    Track { channel: usize, snapshot: MidiTrack },
     /// Single synth parameter change.
     SynthParam {
         channel: usize,
@@ -294,11 +297,7 @@ fn parse_mod_dest(s: &str) -> Option<ModDest> {
 ///
 /// Creates each pedal from its type name, applies saved parameter values,
 /// and activates the chain if it contains any pedals.
-fn apply_chain_to_engine(
-    chain: &mut audio::PedalChain,
-    configs: &[PedalConfig],
-    sample_rate: f64,
-) {
+fn apply_chain_to_engine(chain: &mut audio::PedalChain, configs: &[PedalConfig], sample_rate: f64) {
     chain.clear();
     for config in configs {
         if config.bypassed {
@@ -322,10 +321,7 @@ type PcmSamples = Option<Arc<Vec<f64>>>;
 /// Returns (vco1_samples, vco2_samples) as Arc-wrapped vectors suitable
 /// for sharing across voices. This function performs file I/O and must
 /// run on the UI thread, never on the audio thread.
-fn load_pcm_samples(
-    patch: &PatchConfig,
-    samples_dir: &Path,
-) -> (PcmSamples, PcmSamples) {
+fn load_pcm_samples(patch: &PatchConfig, samples_dir: &Path) -> (PcmSamples, PcmSamples) {
     let vco1 = if parse_waveform(&patch.vco1_waveform) == Waveform::Pcm
         && !patch.vco1_pcm_file.is_empty()
     {
@@ -466,13 +462,10 @@ fn apply_patch_to_engine(
 /// When orbital mode is enabled, `position_3d_enabled` and `active` are forced
 /// true. The actual azimuth, elevation, and distance values are updated
 /// per-frame in `advance_playback()` from the orbital computation.
-fn apply_position_to_engine(
-    engine: &mut AudioEngine,
-    ch: usize,
-    effects: &EffectChainConfig,
-) {
+fn apply_position_to_engine(engine: &mut AudioEngine, ch: usize, effects: &EffectChainConfig) {
     let pos = &mut engine.channels[ch].position;
-    let has_position = effects.position_3d_enabled || effects.orbital_enabled || effects.pan.abs() > 1e-10;
+    let has_position =
+        effects.position_3d_enabled || effects.orbital_enabled || effects.pan.abs() > 1e-10;
     pos.active = has_position;
     pos.pan = effects.pan;
     pos.position_3d_enabled = effects.position_3d_enabled || effects.orbital_enabled;
@@ -829,7 +822,11 @@ impl DawState {
         match std::fs::write(&path, &midi_data) {
             Ok(()) => {
                 self.status_message = Some(format!("Exported: {}", path.display()));
-                eprintln!("[INFO] MIDI exported to {} ({} bytes)", path.display(), midi_data.len());
+                eprintln!(
+                    "[INFO] MIDI exported to {} ({} bytes)",
+                    path.display(),
+                    midi_data.len()
+                );
             }
             Err(e) => {
                 self.status_message = Some(format!("Export failed: {e}"));
@@ -853,27 +850,23 @@ impl DawState {
                 continue;
             }
             let path = scripts_dir.join(filename);
-            self.script_mtimes[ch] = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .ok();
+            self.script_mtimes[ch] = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
             match std::fs::read_to_string(&path) {
-                Ok(source) => {
-                    match ScriptRunner::from_source(&source) {
-                        Ok(runner) => {
-                            eprintln!("[INFO] Ch{}: loaded script {}", ch + 1, filename);
-                            self.scripts[ch] = Some(runner);
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "[ERROR] Ch{}: script compile error in {}: {}",
-                                ch + 1,
-                                filename,
-                                e.0
-                            );
-                            self.scripts[ch] = None;
-                        }
+                Ok(source) => match ScriptRunner::from_source(&source) {
+                    Ok(runner) => {
+                        eprintln!("[INFO] Ch{}: loaded script {}", ch + 1, filename);
+                        self.scripts[ch] = Some(runner);
                     }
-                }
+                    Err(e) => {
+                        eprintln!(
+                            "[ERROR] Ch{}: script compile error in {}: {}",
+                            ch + 1,
+                            filename,
+                            e.0
+                        );
+                        self.scripts[ch] = None;
+                    }
+                },
                 Err(e) => {
                     eprintln!(
                         "[ERROR] Ch{}: could not read script {}: {}",
@@ -902,35 +895,33 @@ impl DawState {
                 continue;
             }
             let path = scripts_dir.join(filename);
-            let current_mtime = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .ok();
+            let current_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
 
             if current_mtime != self.script_mtimes[ch] && current_mtime.is_some() {
                 self.script_mtimes[ch] = current_mtime;
                 match std::fs::read_to_string(&path) {
-                    Ok(source) => {
-                        match ScriptRunner::from_source(&source) {
-                            Ok(runner) => {
-                                eprintln!("[INFO] Ch{}: hot-reloaded script {}", ch + 1, filename);
-                                self.scripts[ch] = Some(runner);
-                                self.status_message =
-                                    Some(format!("Reloaded: {filename}"));
-                            }
-                            Err(e) => {
-                                eprintln!(
-                                    "[ERROR] Ch{}: script compile error in {}: {}",
-                                    ch + 1, filename, e.0
-                                );
-                                self.status_message =
-                                    Some(format!("Script error: {}", e.0));
-                            }
+                    Ok(source) => match ScriptRunner::from_source(&source) {
+                        Ok(runner) => {
+                            eprintln!("[INFO] Ch{}: hot-reloaded script {}", ch + 1, filename);
+                            self.scripts[ch] = Some(runner);
+                            self.status_message = Some(format!("Reloaded: {filename}"));
                         }
-                    }
+                        Err(e) => {
+                            eprintln!(
+                                "[ERROR] Ch{}: script compile error in {}: {}",
+                                ch + 1,
+                                filename,
+                                e.0
+                            );
+                            self.status_message = Some(format!("Script error: {}", e.0));
+                        }
+                    },
                     Err(e) => {
                         eprintln!(
                             "[ERROR] Ch{}: could not read script {}: {}",
-                            ch + 1, filename, e
+                            ch + 1,
+                            filename,
+                            e
                         );
                     }
                 }
@@ -979,7 +970,8 @@ impl DawState {
             let prev_beat = prev_ticks / tpbu;
             let current_beat = current_ticks / tpbu;
             if current_beat > prev_beat {
-                let is_downbeat = (current_ticks / tpbu).is_multiple_of(self.transport.beats_per_bar as u64);
+                let is_downbeat =
+                    (current_ticks / tpbu).is_multiple_of(self.transport.beats_per_bar as u64);
                 let sr = self.transport.sample_rate;
                 if is_downbeat {
                     self.send_command(EngineCommand::ClickDownbeat { sample_rate: sr });
@@ -1035,11 +1027,7 @@ impl DawState {
             let mut script_cmds = Vec::new();
             let mut script_err: Option<String> = None;
             if let Some(runner) = &mut self.scripts[ch_idx] {
-                let cmds = runner.tick(
-                    current_ticks,
-                    self.transport.tempo,
-                    beat,
-                );
+                let cmds = runner.tick(current_ticks, self.transport.tempo, beat);
                 for cmd in &cmds {
                     script_cmds.push(audio_command_to_engine_command(ch, cmd));
                 }
@@ -1081,7 +1069,11 @@ impl DawState {
 
                 // After a loop wrap, scan from the loop start up to the
                 // current position for new note-ons.
-                let scan_start = if looped { self.transport.loop_start } else { prev_ticks };
+                let scan_start = if looped {
+                    self.transport.loop_start
+                } else {
+                    prev_ticks
+                };
 
                 for (i, note) in track.notes.iter().enumerate() {
                     if note.tick >= scan_start && note.tick < current_ticks {
@@ -1111,7 +1103,11 @@ impl DawState {
         // Auto-scroll to follow the playhead on scrollable pages.
         if self.current_page == DawPage::PianoRoll || self.current_page == DawPage::Overview {
             let tw = self.tick_width();
-            let label_w = if self.current_page == DawPage::Overview { 100.0 } else { PIANO_KEY_WIDTH };
+            let label_w = if self.current_page == DawPage::Overview {
+                100.0
+            } else {
+                PIANO_KEY_WIDTH
+            };
             let playhead_x = current_ticks as f32 * tw - self.scroll_x;
             let roll_w = WINDOW_WIDTH as f32 - label_w;
             if playhead_x > roll_w * 0.85 {
@@ -1341,10 +1337,8 @@ impl DawState {
                     self.dragging_loop = false;
                     let tpbar = self.transport.ticks_per_bar();
                     if tpbar > 0 {
-                        self.transport.loop_start =
-                            (self.transport.loop_start / tpbar) * tpbar;
-                        self.transport.loop_end =
-                            (self.transport.loop_end.div_ceil(tpbar)) * tpbar;
+                        self.transport.loop_start = (self.transport.loop_start / tpbar) * tpbar;
+                        self.transport.loop_end = (self.transport.loop_end.div_ceil(tpbar)) * tpbar;
                     }
                     if self.transport.loop_start >= self.transport.loop_end {
                         self.transport.loop_enabled = false;
@@ -1453,11 +1447,11 @@ impl DawState {
                         if count == 1 {
                             self.status_message = Some(format!("Vel: {last_vel}"));
                         } else {
-                            self.status_message =
-                                Some(format!("Vel: {last_vel} ({count} notes)"));
+                            self.status_message = Some(format!("Vel: {last_vel} ({count} notes)"));
                         }
                     } else {
-                        self.scroll_y = (self.scroll_y - delta as f32 * 20.0).clamp(0.0, Self::max_scroll_y());
+                        self.scroll_y =
+                            (self.scroll_y - delta as f32 * 20.0).clamp(0.0, Self::max_scroll_y());
                     }
                 } else if self.current_page == DawPage::SynthSetup
                     || self.current_page == DawPage::MonoChain
@@ -1591,9 +1585,15 @@ impl DawState {
             } else if (620.0..720.0).contains(&mx) {
                 self.start_toolbar_edit(ToolbarEdit::Bpm, format!("{:.0}", self.project.tempo));
             } else if (720.0..748.0).contains(&mx) {
-                self.start_toolbar_edit(ToolbarEdit::TimeSigNum, format!("{}", self.project.beats_per_bar));
+                self.start_toolbar_edit(
+                    ToolbarEdit::TimeSigNum,
+                    format!("{}", self.project.beats_per_bar),
+                );
             } else if (748.0..780.0).contains(&mx) {
-                self.start_toolbar_edit(ToolbarEdit::TimeSigDen, format!("{}", self.project.beat_denominator));
+                self.start_toolbar_edit(
+                    ToolbarEdit::TimeSigDen,
+                    format!("{}", self.project.beat_denominator),
+                );
             } else if (780.0..870.0).contains(&mx) {
                 self.cycle_grid();
             }
@@ -1932,7 +1932,9 @@ impl DawState {
         self.toolbar_edit = Some(field);
         self.edit_buffer = initial;
         if !self.sdl_window.is_null() {
-            unsafe { sdl3_sys::keyboard::SDL_StartTextInput(self.sdl_window); }
+            unsafe {
+                sdl3_sys::keyboard::SDL_StartTextInput(self.sdl_window);
+            }
         }
     }
 
@@ -1941,7 +1943,9 @@ impl DawState {
         self.toolbar_edit = None;
         self.edit_buffer.clear();
         if !self.sdl_window.is_null() {
-            unsafe { sdl3_sys::keyboard::SDL_StopTextInput(self.sdl_window); }
+            unsafe {
+                sdl3_sys::keyboard::SDL_StopTextInput(self.sdl_window);
+            }
         }
     }
 
@@ -1975,7 +1979,8 @@ impl DawState {
                 if let Ok(den) = self.edit_buffer.trim().parse::<u8>() {
                     // Snap to nearest valid power of 2 (1, 2, 4, 8, 16, 32).
                     const DENOMS: [u8; 6] = [1, 2, 4, 8, 16, 32];
-                    let snapped = DENOMS.iter()
+                    let snapped = DENOMS
+                        .iter()
                         .min_by_key(|&&d| (d as i32 - den as i32).unsigned_abs())
                         .copied()
                         .unwrap_or(4);
@@ -2048,7 +2053,10 @@ impl DawState {
         // Re-find selected notes after sort using tick+pitch identity.
         self.selected_notes.clear();
         for (i, note) in self.tracks[ch].notes.iter().enumerate() {
-            if nudged.iter().any(|&(t, p)| t == note.tick && p == note.pitch) {
+            if nudged
+                .iter()
+                .any(|&(t, p)| t == note.tick && p == note.pitch)
+            {
                 self.selected_notes.push(i);
             }
         }
@@ -2071,7 +2079,11 @@ impl DawState {
         }
         let dir = if semitones > 0 { "up" } else { "down" };
         let amount = semitones.unsigned_abs();
-        let unit = if amount == 12 { "octave" } else { "semitone(s)" };
+        let unit = if amount == 12 {
+            "octave"
+        } else {
+            "semitone(s)"
+        };
         let display = if amount == 12 { 1 } else { amount };
         self.status_message = Some(format!("Transpose {dir} {display} {unit}"));
     }
@@ -2204,8 +2216,6 @@ impl DawState {
         self.status_message = Some(format!("{num}/{den} Time"));
     }
 
-
-
     /// Toggle loop mode. When enabling, auto-set the loop region to cover
     /// all notes in the current channel track.
     fn toggle_loop(&mut self) {
@@ -2330,7 +2340,8 @@ impl DawState {
         let bar_margin = 1.0_f32;
         let usable_h = VELOCITY_LANE_HEIGHT - 2.0 * bar_margin;
         // Bottom of lane = velocity 0, top of lane = velocity 127.
-        let frac = ((vel_lane_y + VELOCITY_LANE_HEIGHT - bar_margin - my) / usable_h).clamp(0.0, 1.0);
+        let frac =
+            ((vel_lane_y + VELOCITY_LANE_HEIGHT - bar_margin - my) / usable_h).clamp(0.0, 1.0);
         let velocity = (frac * 127.0).round() as u8;
         let velocity = velocity.max(1); // Minimum velocity is 1.
 
@@ -2379,9 +2390,19 @@ impl DawState {
         }
         // VCO1 param bars (rows 2, 3, 4).
         let vco1_bars: [(f32, SynthParam, f64, f64); 3] = [
-            (vco1_y + 2.0 * PARAM_ROW_H, SynthParam::Vco1PitchFine, -1.0, 1.0),
+            (
+                vco1_y + 2.0 * PARAM_ROW_H,
+                SynthParam::Vco1PitchFine,
+                -1.0,
+                1.0,
+            ),
             (vco1_y + 3.0 * PARAM_ROW_H, SynthParam::Vco1Level, 0.0, 1.0),
-            (vco1_y + 4.0 * PARAM_ROW_H, SynthParam::Vco1PulseWidth, 0.0, 1.0),
+            (
+                vco1_y + 4.0 * PARAM_ROW_H,
+                SynthParam::Vco1PulseWidth,
+                0.0,
+                1.0,
+            ),
         ];
         for (py, param, min, max) in vco1_bars {
             if hit_row(mx, my, x1, py, col_w) {
@@ -2402,9 +2423,19 @@ impl DawState {
         }
         // VCO2 param bars.
         let vco2_bars: [(f32, SynthParam, f64, f64); 3] = [
-            (vco2_y + 2.0 * PARAM_ROW_H, SynthParam::Vco2PitchFine, -1.0, 1.0),
+            (
+                vco2_y + 2.0 * PARAM_ROW_H,
+                SynthParam::Vco2PitchFine,
+                -1.0,
+                1.0,
+            ),
             (vco2_y + 3.0 * PARAM_ROW_H, SynthParam::Vco2Level, 0.0, 1.0),
-            (vco2_y + 4.0 * PARAM_ROW_H, SynthParam::Vco2PulseWidth, 0.0, 1.0),
+            (
+                vco2_y + 4.0 * PARAM_ROW_H,
+                SynthParam::Vco2PulseWidth,
+                0.0,
+                1.0,
+            ),
         ];
         for (py, param, min, max) in vco2_bars {
             if hit_row(mx, my, x2, py, col_w) {
@@ -2479,7 +2510,12 @@ impl DawState {
         let lpf_bars: [(f32, SynthParam, f64, f64); 3] = [
             (lpf_y, SynthParam::LpfCutoff, 20.0, 20000.0),
             (lpf_y + PARAM_ROW_H, SynthParam::LpfResonance, 0.0, 2.0),
-            (lpf_y + 2.0 * PARAM_ROW_H, SynthParam::LpfSaturation, 0.0, 1.0),
+            (
+                lpf_y + 2.0 * PARAM_ROW_H,
+                SynthParam::LpfSaturation,
+                0.0,
+                1.0,
+            ),
         ];
         for (py, param, min, max) in lpf_bars {
             if hit_row(mx, my, x3, py, col_w) {
@@ -2511,7 +2547,12 @@ impl DawState {
             (vel_y, SynthParam::VelocityVca, 0.0, 1.0),
             (vel_y + PARAM_ROW_H, SynthParam::VelocityFilter, 0.0, 4.0),
             (vel_y + 2.0 * PARAM_ROW_H, SynthParam::VelocityEnv, 0.0, 1.0),
-            (vel_y + 3.0 * PARAM_ROW_H, SynthParam::VelocityPitch, 0.0, 12.0),
+            (
+                vel_y + 3.0 * PARAM_ROW_H,
+                SynthParam::VelocityPitch,
+                0.0,
+                12.0,
+            ),
         ];
         for (py, param, min, max) in vel_bars {
             if hit_row(mx, my, x2, py, col_w) {
@@ -2628,7 +2669,13 @@ impl DawState {
         let ch = self.selected_channel;
         let is_3d = self.effects[ch].position_3d_enabled;
         let is_orbital = self.effects[ch].orbital_enabled;
-        let pos_rows = if is_orbital { 7 } else if is_3d { 4 } else { 2 };
+        let pos_rows = if is_orbital {
+            7
+        } else if is_3d {
+            4
+        } else {
+            2
+        };
         let pos_h = SECTION_HEADER_H + pos_rows as f32 * PARAM_ROW_H + 8.0;
 
         // Check clicks within the positional stage section.
@@ -2667,10 +2714,30 @@ impl DawState {
                 let bars: [(f32, SynthParam, f64, f64); 6] = [
                     (py, SynthParam::OrbitalSemiMajor, 0.0, 1.0),
                     (py + PARAM_ROW_H, SynthParam::OrbitalEccentricity, 0.0, 0.99),
-                    (py + 2.0 * PARAM_ROW_H, SynthParam::OrbitalInclination, 0.0, 180.0),
-                    (py + 3.0 * PARAM_ROW_H, SynthParam::OrbitalAscendingNode, 0.0, 360.0),
-                    (py + 4.0 * PARAM_ROW_H, SynthParam::OrbitalPeriapsis, 0.0, 360.0),
-                    (py + 5.0 * PARAM_ROW_H, SynthParam::OrbitalPeriod, 0.25, 64.0),
+                    (
+                        py + 2.0 * PARAM_ROW_H,
+                        SynthParam::OrbitalInclination,
+                        0.0,
+                        180.0,
+                    ),
+                    (
+                        py + 3.0 * PARAM_ROW_H,
+                        SynthParam::OrbitalAscendingNode,
+                        0.0,
+                        360.0,
+                    ),
+                    (
+                        py + 4.0 * PARAM_ROW_H,
+                        SynthParam::OrbitalPeriapsis,
+                        0.0,
+                        360.0,
+                    ),
+                    (
+                        py + 5.0 * PARAM_ROW_H,
+                        SynthParam::OrbitalPeriod,
+                        0.25,
+                        64.0,
+                    ),
                 ];
                 for (bar_y, param, min, max) in bars {
                     if hit_row(mx, my, SETUP_MARGIN, bar_y, full_w) {
@@ -2682,7 +2749,12 @@ impl DawState {
                 let bars: [(f32, SynthParam, f64, f64); 3] = [
                     (py, SynthParam::Azimuth, 0.0, 360.0),
                     (py + PARAM_ROW_H, SynthParam::Elevation, -90.0, 90.0),
-                    (py + 2.0 * PARAM_ROW_H, SynthParam::PositionDistance, 0.0, 1.0),
+                    (
+                        py + 2.0 * PARAM_ROW_H,
+                        SynthParam::PositionDistance,
+                        0.0,
+                        1.0,
+                    ),
                 ];
                 for (bar_y, param, min, max) in bars {
                     if hit_row(mx, my, SETUP_MARGIN, bar_y, full_w) {
@@ -2691,7 +2763,14 @@ impl DawState {
                     }
                 }
             } else if hit_row(mx, my, SETUP_MARGIN, py, full_w) {
-                self.start_bar_drag(mx, SETUP_MARGIN + bar_inset, bar_w, SynthParam::Pan, -1.0, 1.0);
+                self.start_bar_drag(
+                    mx,
+                    SETUP_MARGIN + bar_inset,
+                    bar_w,
+                    SynthParam::Pan,
+                    -1.0,
+                    1.0,
+                );
                 return;
             }
             return;
@@ -2880,8 +2959,7 @@ impl DawState {
             let note_x = PIANO_KEY_WIDTH + note.tick as f32 * tw - self.scroll_x;
             let note_w = note.duration as f32 * tw;
             let note_y = self.note_to_y(note.pitch, roll_y);
-            if mx >= note_x && mx <= note_x + note_w && my >= note_y && my <= note_y + NOTE_HEIGHT
-            {
+            if mx >= note_x && mx <= note_x + note_w && my >= note_y && my <= note_y + NOTE_HEIGHT {
                 self.toggle_note_selection(i);
                 return;
             }
@@ -2971,13 +3049,27 @@ impl DawState {
         // If actively dragging a synth or pedal param, fine-adjust it.
         if let Some(ref target) = self.dragging_param.clone() {
             match target {
-                DragTarget::Synth { param, min_val, max_val, log_scale, .. } => {
+                DragTarget::Synth {
+                    param,
+                    min_val,
+                    max_val,
+                    log_scale,
+                    ..
+                } => {
                     let ch = self.selected_channel;
                     let current = self.get_synth_param_value(ch, *param);
                     let new_val = scroll_step(current, *min_val, *max_val, delta, *log_scale);
                     self.set_synth_param(ch, *param, new_val);
                 }
-                DragTarget::Pedal { chain, pedal_idx, param_idx, min_val, max_val, log_scale, .. } => {
+                DragTarget::Pedal {
+                    chain,
+                    pedal_idx,
+                    param_idx,
+                    min_val,
+                    max_val,
+                    log_scale,
+                    ..
+                } => {
                     let ch = self.selected_channel;
                     let current = self.effects[ch]
                         .get_pedal_param(*chain, *pedal_idx, *param_idx)
@@ -3077,9 +3169,19 @@ impl DawState {
 
         // VCO1 param bars (rows 2, 3, 4 within VCO1 section).
         let vco1_bars: [(f32, SynthParam, f64, f64); 3] = [
-            (vco1_y + 2.0 * PARAM_ROW_H, SynthParam::Vco1PitchFine, -1.0, 1.0),
+            (
+                vco1_y + 2.0 * PARAM_ROW_H,
+                SynthParam::Vco1PitchFine,
+                -1.0,
+                1.0,
+            ),
             (vco1_y + 3.0 * PARAM_ROW_H, SynthParam::Vco1Level, 0.0, 1.0),
-            (vco1_y + 4.0 * PARAM_ROW_H, SynthParam::Vco1PulseWidth, 0.0, 1.0),
+            (
+                vco1_y + 4.0 * PARAM_ROW_H,
+                SynthParam::Vco1PulseWidth,
+                0.0,
+                1.0,
+            ),
         ];
         for (py, param, min, max) in vco1_bars {
             if hit_row(mx, my, x1, py, col_w) {
@@ -3090,9 +3192,19 @@ impl DawState {
         // VCO2 param bars.
         let vco2_y = y0 + SECTION_HEADER_H;
         let vco2_bars: [(f32, SynthParam, f64, f64); 3] = [
-            (vco2_y + 2.0 * PARAM_ROW_H, SynthParam::Vco2PitchFine, -1.0, 1.0),
+            (
+                vco2_y + 2.0 * PARAM_ROW_H,
+                SynthParam::Vco2PitchFine,
+                -1.0,
+                1.0,
+            ),
             (vco2_y + 3.0 * PARAM_ROW_H, SynthParam::Vco2Level, 0.0, 1.0),
-            (vco2_y + 4.0 * PARAM_ROW_H, SynthParam::Vco2PulseWidth, 0.0, 1.0),
+            (
+                vco2_y + 4.0 * PARAM_ROW_H,
+                SynthParam::Vco2PulseWidth,
+                0.0,
+                1.0,
+            ),
         ];
         for (py, param, min, max) in vco2_bars {
             if hit_row(mx, my, x2, py, col_w) {
@@ -3162,7 +3274,12 @@ impl DawState {
         let lpf_bars: [(f32, SynthParam, f64, f64); 3] = [
             (lpf_y, SynthParam::LpfCutoff, 20.0, 20000.0),
             (lpf_y + PARAM_ROW_H, SynthParam::LpfResonance, 0.0, 2.0),
-            (lpf_y + 2.0 * PARAM_ROW_H, SynthParam::LpfSaturation, 0.0, 1.0),
+            (
+                lpf_y + 2.0 * PARAM_ROW_H,
+                SynthParam::LpfSaturation,
+                0.0,
+                1.0,
+            ),
         ];
         for (py, param, min, max) in lpf_bars {
             if hit_row(mx, my, x3, py, col_w) {
@@ -3180,7 +3297,12 @@ impl DawState {
             (vel_y, SynthParam::VelocityVca, 0.0, 1.0),
             (vel_y + PARAM_ROW_H, SynthParam::VelocityFilter, 0.0, 4.0),
             (vel_y + 2.0 * PARAM_ROW_H, SynthParam::VelocityEnv, 0.0, 1.0),
-            (vel_y + 3.0 * PARAM_ROW_H, SynthParam::VelocityPitch, 0.0, 12.0),
+            (
+                vel_y + 3.0 * PARAM_ROW_H,
+                SynthParam::VelocityPitch,
+                0.0,
+                12.0,
+            ),
         ];
         for (py, param, min, max) in vel_bars {
             if hit_row(mx, my, x2, py, col_w) {
@@ -3213,14 +3335,26 @@ impl DawState {
             let pedals_y = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP + 48.0;
             let pedals = &self.effects[self.selected_channel].pre_pedals;
             return find_pedal_param_in_chain(
-                mx, my, pedals_y, SETUP_MARGIN, pedals, pedal_w, pedal_gap, header_h, 0,
+                mx,
+                my,
+                pedals_y,
+                SETUP_MARGIN,
+                pedals,
+                pedal_w,
+                pedal_gap,
+                header_h,
+                0,
             );
         }
 
         if self.current_page == DawPage::StereoChain {
             let y0 = content_y + NAV_BAR_HEIGHT + SETUP_ROW_GAP;
             let ch = self.selected_channel;
-            let pos_rows = if self.effects[ch].position_3d_enabled { 4 } else { 2 };
+            let pos_rows = if self.effects[ch].position_3d_enabled {
+                4
+            } else {
+                2
+            };
             let pos_h = SECTION_HEADER_H + pos_rows as f32 * PARAM_ROW_H + 8.0;
             let chains_y = y0 + pos_h + SETUP_ROW_GAP;
             let left_header_h = 28.0;
@@ -3231,13 +3365,27 @@ impl DawState {
 
             if mx < right_x {
                 return find_pedal_param_in_chain(
-                    mx, my, pedals_y, SETUP_MARGIN,
-                    &self.effects[ch].post_pedals_left, pedal_w, pedal_gap, header_h, 1,
+                    mx,
+                    my,
+                    pedals_y,
+                    SETUP_MARGIN,
+                    &self.effects[ch].post_pedals_left,
+                    pedal_w,
+                    pedal_gap,
+                    header_h,
+                    1,
                 );
             } else {
                 return find_pedal_param_in_chain(
-                    mx, my, pedals_y, right_x,
-                    &self.effects[ch].post_pedals_right, pedal_w, pedal_gap, header_h, 2,
+                    mx,
+                    my,
+                    pedals_y,
+                    right_x,
+                    &self.effects[ch].post_pedals_right,
+                    pedal_w,
+                    pedal_gap,
+                    header_h,
+                    2,
                 );
             }
         }
@@ -3514,20 +3662,29 @@ impl DawState {
                 }
                 return;
             }
-            SynthParam::Pan | SynthParam::Azimuth | SynthParam::Elevation
+            SynthParam::Pan
+            | SynthParam::Azimuth
+            | SynthParam::Elevation
             | SynthParam::PositionDistance
-            | SynthParam::OrbitalSemiMajor | SynthParam::OrbitalEccentricity
-            | SynthParam::OrbitalInclination | SynthParam::OrbitalAscendingNode
-            | SynthParam::OrbitalPeriapsis | SynthParam::OrbitalPeriod => {
+            | SynthParam::OrbitalSemiMajor
+            | SynthParam::OrbitalEccentricity
+            | SynthParam::OrbitalInclination
+            | SynthParam::OrbitalAscendingNode
+            | SynthParam::OrbitalPeriapsis
+            | SynthParam::OrbitalPeriod => {
                 match param {
                     SynthParam::Pan => self.effects[ch].pan = value,
                     SynthParam::Azimuth => self.effects[ch].azimuth = value,
                     SynthParam::Elevation => self.effects[ch].elevation = value,
                     SynthParam::PositionDistance => self.effects[ch].position_distance = value,
                     SynthParam::OrbitalSemiMajor => self.effects[ch].orbital_semi_major = value,
-                    SynthParam::OrbitalEccentricity => self.effects[ch].orbital_eccentricity = value,
+                    SynthParam::OrbitalEccentricity => {
+                        self.effects[ch].orbital_eccentricity = value
+                    }
                     SynthParam::OrbitalInclination => self.effects[ch].orbital_inclination = value,
-                    SynthParam::OrbitalAscendingNode => self.effects[ch].orbital_ascending_node = value,
+                    SynthParam::OrbitalAscendingNode => {
+                        self.effects[ch].orbital_ascending_node = value
+                    }
                     SynthParam::OrbitalPeriapsis => self.effects[ch].orbital_periapsis = value,
                     SynthParam::OrbitalPeriod => self.effects[ch].orbital_period = value,
                     _ => unreachable!(),
@@ -3606,7 +3763,12 @@ impl DawState {
                 let roll_h = content_h - VELOCITY_LANE_HEIGHT - RULER_HEIGHT;
                 self.render_ruler(renderer, screen_w, ruler_y);
                 self.render_piano_roll(renderer, screen_w, roll_y, roll_h);
-                self.render_velocity_lane(renderer, screen_w, roll_y + roll_h, VELOCITY_LANE_HEIGHT);
+                self.render_velocity_lane(
+                    renderer,
+                    screen_w,
+                    roll_y + roll_h,
+                    VELOCITY_LANE_HEIGHT,
+                );
             }
             DawPage::Overview => {
                 self.render_overview(renderer, screen_w, content_y, content_h);
@@ -3652,7 +3814,13 @@ impl DawState {
             _ => "Chain",
         };
         let title = format!("Add Pedal to {chain_name}  (Esc to cancel)");
-        renderer.draw_text(&title, picker_x + 12.0, picker_y + 8.0, FontSize::Medium, TEXT_ACCENT);
+        renderer.draw_text(
+            &title,
+            picker_x + 12.0,
+            picker_y + 8.0,
+            FontSize::Medium,
+            TEXT_ACCENT,
+        );
 
         let item_h = 22.0;
         let header_h = 28.0;
@@ -3671,7 +3839,13 @@ impl DawState {
 
             for pedal_type in *types {
                 if cy + item_h > content_top && cy < content_bottom {
-                    renderer.draw_text(pedal_type, picker_x + 24.0, cy + 3.0, FontSize::Small, TEXT_PRIMARY);
+                    renderer.draw_text(
+                        pedal_type,
+                        picker_x + 24.0,
+                        cy + 3.0,
+                        FontSize::Small,
+                        TEXT_PRIMARY,
+                    );
                 }
                 cy += item_h;
             }
@@ -3704,15 +3878,35 @@ impl DawState {
             let display = format!("{}|", self.edit_buffer);
             renderer.draw_text(&display, 10.0, 8.0, FontSize::Medium, TEXT_ACCENT);
         } else {
-            renderer.draw_text(&self.project.name, 10.0, 8.0, FontSize::Medium, TEXT_PRIMARY);
+            renderer.draw_text(
+                &self.project.name,
+                10.0,
+                8.0,
+                FontSize::Medium,
+                TEXT_PRIMARY,
+            );
         }
 
         // Page indicator.
-        renderer.draw_text(self.current_page.name(), 200.0, 8.0, FontSize::Medium, TEXT_ACCENT);
+        renderer.draw_text(
+            self.current_page.name(),
+            200.0,
+            8.0,
+            FontSize::Medium,
+            TEXT_ACCENT,
+        );
 
         // Transport controls.
-        let play_text = if self.transport.playing { "PLAYING" } else { "STOPPED" };
-        let play_color = if self.transport.playing { colors::NOTE_BLOCK } else { TEXT_SECONDARY };
+        let play_text = if self.transport.playing {
+            "PLAYING"
+        } else {
+            "STOPPED"
+        };
+        let play_color = if self.transport.playing {
+            colors::NOTE_BLOCK
+        } else {
+            TEXT_SECONDARY
+        };
         renderer.draw_text(play_text, 380.0, 8.0, FontSize::Medium, play_color);
 
         // Position display (bar:beat:tick).
@@ -3744,12 +3938,19 @@ impl DawState {
             let display = format!("{}|", self.edit_buffer);
             renderer.draw_text(&display, 750.0, 8.0, FontSize::Medium, TEXT_ACCENT);
         } else {
-            let ts_text = format!("{}/{}", self.project.beats_per_bar, self.project.beat_denominator);
+            let ts_text = format!(
+                "{}/{}",
+                self.project.beats_per_bar, self.project.beat_denominator
+            );
             renderer.draw_text(&ts_text, 720.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
         }
 
         // Grid subdivision display (clickable, cycles on click).
-        let grid_text = grid_label(self.snap_ticks, self.project.ticks_per_beat as u64, self.transport.ticks_per_bar());
+        let grid_text = grid_label(
+            self.snap_ticks,
+            self.project.ticks_per_beat as u64,
+            self.transport.ticks_per_bar(),
+        );
         renderer.draw_text(grid_text, 780.0, 8.0, FontSize::Medium, TEXT_SECONDARY);
 
         // Loop indicator.
@@ -3803,7 +4004,13 @@ impl DawState {
             let x = i as f32 * tab_w;
 
             if i == self.selected_channel {
-                renderer.fill_rect(x, y, tab_w, CHANNEL_BAR_HEIGHT, Color::rgba(color.r, color.g, color.b, 60));
+                renderer.fill_rect(
+                    x,
+                    y,
+                    tab_w,
+                    CHANNEL_BAR_HEIGHT,
+                    Color::rgba(color.r, color.g, color.b, 60),
+                );
                 renderer.draw_rect(x, y, tab_w, CHANNEL_BAR_HEIGHT, color);
             }
 
@@ -3819,14 +4026,32 @@ impl DawState {
             let note_count = self.tracks[i].notes.len();
             if note_count > 0 {
                 let count_text = format!("{note_count}");
-                renderer.draw_text(&count_text, x + tab_w - 60.0, y + 7.0, FontSize::Small, TEXT_SECONDARY);
+                renderer.draw_text(
+                    &count_text,
+                    x + tab_w - 60.0,
+                    y + 7.0,
+                    FontSize::Small,
+                    TEXT_SECONDARY,
+                );
             }
 
             if self.solo_channel == Some(i) {
-                renderer.draw_text("S", x + tab_w - 40.0, y + 7.0, FontSize::Small, Color::rgb(255, 200, 80));
+                renderer.draw_text(
+                    "S",
+                    x + tab_w - 40.0,
+                    y + 7.0,
+                    FontSize::Small,
+                    Color::rgb(255, 200, 80),
+                );
             }
             if self.project.channels[i].muted {
-                renderer.draw_text("M", x + tab_w - 24.0, y + 7.0, FontSize::Small, Color::rgb(255, 80, 80));
+                renderer.draw_text(
+                    "M",
+                    x + tab_w - 24.0,
+                    y + 7.0,
+                    FontSize::Small,
+                    Color::rgb(255, 80, 80),
+                );
             }
         }
     }
@@ -3851,12 +4076,10 @@ impl DawState {
 
         // Loop region overlay in the ruler.
         if self.transport.loop_enabled && self.transport.loop_end > self.transport.loop_start {
-            let start_x = (PIANO_KEY_WIDTH
-                + self.transport.loop_start as f32 * tick_width
+            let start_x = (PIANO_KEY_WIDTH + self.transport.loop_start as f32 * tick_width
                 - self.scroll_x)
                 .max(PIANO_KEY_WIDTH);
-            let end_x = (PIANO_KEY_WIDTH
-                + self.transport.loop_end as f32 * tick_width
+            let end_x = (PIANO_KEY_WIDTH + self.transport.loop_end as f32 * tick_width
                 - self.scroll_x)
                 .min(screen_w);
             if end_x > start_x {
@@ -4024,8 +4247,10 @@ impl DawState {
 
         // Loop region markers.
         if self.transport.loop_enabled && self.transport.loop_end > self.transport.loop_start {
-            let start_x = PIANO_KEY_WIDTH + self.transport.loop_start as f32 * tick_width - self.scroll_x;
-            let end_x = PIANO_KEY_WIDTH + self.transport.loop_end as f32 * tick_width - self.scroll_x;
+            let start_x =
+                PIANO_KEY_WIDTH + self.transport.loop_start as f32 * tick_width - self.scroll_x;
+            let end_x =
+                PIANO_KEY_WIDTH + self.transport.loop_end as f32 * tick_width - self.scroll_x;
             // Shade the loop region.
             let vis_start = start_x.max(PIANO_KEY_WIDTH);
             let vis_end = end_x.min(screen_w);
@@ -4049,7 +4274,8 @@ impl DawState {
 
         // Playhead.
         if self.transport.playing || self.transport.position_ticks > 0 {
-            let playhead_x = PIANO_KEY_WIDTH + self.transport.position_ticks as f32 * tick_width - self.scroll_x;
+            let playhead_x =
+                PIANO_KEY_WIDTH + self.transport.position_ticks as f32 * tick_width - self.scroll_x;
             if playhead_x >= PIANO_KEY_WIDTH && playhead_x <= screen_w {
                 renderer.draw_vline(playhead_x, roll_y, roll_y + roll_h, PLAYHEAD);
             }
@@ -4124,7 +4350,9 @@ impl DawState {
                 let pitch_min = LOWEST_NOTE as f32;
                 let pitch_range = VISIBLE_NOTE_RANGE as f32;
                 let note_h = (lane_h - 10.0) / pitch_range;
-                let ny = y + lane_h - 6.0 - (note.pitch as f32 - pitch_min).clamp(0.0, pitch_range) * note_h;
+                let ny = y + lane_h
+                    - 6.0
+                    - (note.pitch as f32 - pitch_min).clamp(0.0, pitch_range) * note_h;
 
                 let alpha = (note.velocity as f32 / 127.0 * 200.0 + 55.0) as u8;
                 let note_color = Color::rgba(color.r, color.g, color.b, alpha);
@@ -4191,7 +4419,13 @@ impl DawState {
 
         // Lane background.
         renderer.fill_rect(0.0, lane_y, PIANO_KEY_WIDTH, lane_h, Color::rgb(35, 35, 40));
-        renderer.fill_rect(PIANO_KEY_WIDTH, lane_y, roll_w, lane_h, Color::rgb(40, 40, 46));
+        renderer.fill_rect(
+            PIANO_KEY_WIDTH,
+            lane_y,
+            roll_w,
+            lane_h,
+            Color::rgb(40, 40, 46),
+        );
 
         // Separator line at top of velocity lane.
         renderer.draw_hline(0.0, screen_w, lane_y, GRID_BAR);
@@ -4320,12 +4554,7 @@ impl DawState {
     // --- Setup page rendering ---
 
     /// Render the navigation bar for setup pages.
-    fn render_setup_nav<R: Renderer>(
-        &self,
-        renderer: &mut R,
-        screen_w: f32,
-        content_y: f32,
-    ) {
+    fn render_setup_nav<R: Renderer>(&self, renderer: &mut R, screen_w: f32, content_y: f32) {
         let nav_y = content_y;
         renderer.fill_rect(0.0, nav_y, screen_w, NAV_BAR_HEIGHT, BG_PANEL);
 
@@ -4334,7 +4563,13 @@ impl DawState {
         let left_label = format!("<< {}", left_page.name());
         renderer.fill_rect(10.0, nav_y + 3.0, 180.0, 24.0, colors::NAV_BUTTON);
         renderer.draw_rect(10.0, nav_y + 3.0, 180.0, 24.0, colors::PANEL_BORDER);
-        renderer.draw_text(&left_label, 20.0, nav_y + 6.0, FontSize::Small, TEXT_PRIMARY);
+        renderer.draw_text(
+            &left_label,
+            20.0,
+            nav_y + 6.0,
+            FontSize::Small,
+            TEXT_PRIMARY,
+        );
 
         // Page title (centered).
         let title = self.current_page.name();
@@ -4352,7 +4587,13 @@ impl DawState {
         let rx = screen_w - 190.0;
         renderer.fill_rect(rx, nav_y + 3.0, 180.0, 24.0, colors::NAV_BUTTON);
         renderer.draw_rect(rx, nav_y + 3.0, 180.0, 24.0, colors::PANEL_BORDER);
-        renderer.draw_text(&right_label, rx + 10.0, nav_y + 6.0, FontSize::Small, TEXT_PRIMARY);
+        renderer.draw_text(
+            &right_label,
+            rx + 10.0,
+            nav_y + 6.0,
+            FontSize::Small,
+            TEXT_PRIMARY,
+        );
     }
 
     /// Render the synth setup page: skeuomorphic panel with parameter displays.
@@ -4388,11 +4629,41 @@ impl DawState {
         py += PARAM_ROW_H;
         draw_param_label(renderer, x1, py, col_w, "Scale", &patch.vco1_scale);
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x1, py, col_w, "Pitch Fine", patch.vco1_pitch_fine, -1.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x1,
+            py,
+            col_w,
+            "Pitch Fine",
+            patch.vco1_pitch_fine,
+            -1.0,
+            1.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x1, py, col_w, "Level", patch.vco1_level, 0.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x1,
+            py,
+            col_w,
+            "Level",
+            patch.vco1_level,
+            0.0,
+            1.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x1, py, col_w, "Pulse Width", patch.vco1_pulse_width, 0.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x1,
+            py,
+            col_w,
+            "Pulse Width",
+            patch.vco1_pulse_width,
+            0.0,
+            1.0,
+            accent,
+        );
 
         // VCO 2.
         draw_section_panel(renderer, x2, y0, col_w, row1_h, "VCO 2", accent);
@@ -4401,21 +4672,81 @@ impl DawState {
         py += PARAM_ROW_H;
         draw_param_label(renderer, x2, py, col_w, "Scale", &patch.vco2_scale);
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x2, py, col_w, "Pitch Fine", patch.vco2_pitch_fine, -1.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x2,
+            py,
+            col_w,
+            "Pitch Fine",
+            patch.vco2_pitch_fine,
+            -1.0,
+            1.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x2, py, col_w, "Level", patch.vco2_level, 0.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x2,
+            py,
+            col_w,
+            "Level",
+            patch.vco2_level,
+            0.0,
+            1.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x2, py, col_w, "Pulse Width", patch.vco2_pulse_width, 0.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x2,
+            py,
+            col_w,
+            "Pulse Width",
+            patch.vco2_pulse_width,
+            0.0,
+            1.0,
+            accent,
+        );
 
         // Mix / LFO.
         let mix_h = SECTION_HEADER_H + 3.0 * PARAM_ROW_H + 8.0;
         draw_section_panel(renderer, x3, y0, col_w, mix_h, "MIX / LFO", accent);
         py = y0 + SECTION_HEADER_H;
-        draw_param_bar(renderer, x3, py, col_w, "VCO Mix", patch.vco_mix, 0.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x3,
+            py,
+            col_w,
+            "VCO Mix",
+            patch.vco_mix,
+            0.0,
+            1.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x3, py, col_w, "Ring Mod", patch.ring_mod_depth, 0.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x3,
+            py,
+            col_w,
+            "Ring Mod",
+            patch.ring_mod_depth,
+            0.0,
+            1.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x3, py, col_w, "LFO Rate", patch.lfo_rate, 0.1, 20.0, accent);
+        draw_param_bar(
+            renderer,
+            x3,
+            py,
+            col_w,
+            "LFO Rate",
+            patch.lfo_rate,
+            0.1,
+            20.0,
+            accent,
+        );
 
         // --- Row 2: EG1, EG2, Filters ---
         let row2_y = y0 + row1_h + SETUP_ROW_GAP;
@@ -4424,42 +4755,180 @@ impl DawState {
         // EG 1 (HPF).
         draw_section_panel(renderer, x1, row2_y, col_w, row2_h, "EG 1 (HPF)", accent);
         py = row2_y + SECTION_HEADER_H;
-        draw_param_bar(renderer, x1, py, col_w, "Attack", patch.eg1_attack, 0.0, 5.0, accent);
+        draw_param_bar(
+            renderer,
+            x1,
+            py,
+            col_w,
+            "Attack",
+            patch.eg1_attack,
+            0.0,
+            5.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x1, py, col_w, "Decay", patch.eg1_decay, 0.0, 5.0, accent);
+        draw_param_bar(
+            renderer,
+            x1,
+            py,
+            col_w,
+            "Decay",
+            patch.eg1_decay,
+            0.0,
+            5.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x1, py, col_w, "Sustain", patch.eg1_sustain, 0.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x1,
+            py,
+            col_w,
+            "Sustain",
+            patch.eg1_sustain,
+            0.0,
+            1.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x1, py, col_w, "Release", patch.eg1_release, 0.0, 5.0, accent);
+        draw_param_bar(
+            renderer,
+            x1,
+            py,
+            col_w,
+            "Release",
+            patch.eg1_release,
+            0.0,
+            5.0,
+            accent,
+        );
 
         // EG 2 (VCA/LPF).
-        draw_section_panel(renderer, x2, row2_y, col_w, row2_h, "EG 2 (VCA/LPF)", accent);
+        draw_section_panel(
+            renderer,
+            x2,
+            row2_y,
+            col_w,
+            row2_h,
+            "EG 2 (VCA/LPF)",
+            accent,
+        );
         py = row2_y + SECTION_HEADER_H;
-        draw_param_bar(renderer, x2, py, col_w, "Attack", patch.eg2_attack, 0.0, 5.0, accent);
+        draw_param_bar(
+            renderer,
+            x2,
+            py,
+            col_w,
+            "Attack",
+            patch.eg2_attack,
+            0.0,
+            5.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x2, py, col_w, "Decay", patch.eg2_decay, 0.0, 5.0, accent);
+        draw_param_bar(
+            renderer,
+            x2,
+            py,
+            col_w,
+            "Decay",
+            patch.eg2_decay,
+            0.0,
+            5.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x2, py, col_w, "Sustain", patch.eg2_sustain, 0.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x2,
+            py,
+            col_w,
+            "Sustain",
+            patch.eg2_sustain,
+            0.0,
+            1.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x2, py, col_w, "Release", patch.eg2_release, 0.0, 5.0, accent);
+        draw_param_bar(
+            renderer,
+            x2,
+            py,
+            col_w,
+            "Release",
+            patch.eg2_release,
+            0.0,
+            5.0,
+            accent,
+        );
 
         // Filters (HPF + LPF stacked in column 3).
         let filter_h = SECTION_HEADER_H + 2.0 * PARAM_ROW_H + 8.0;
         draw_section_panel(renderer, x3, row2_y, col_w, filter_h, "HPF", accent);
         py = row2_y + SECTION_HEADER_H;
-        draw_param_bar(renderer, x3, py, col_w, "Cutoff", patch.hpf_cutoff, 20.0, 20000.0, accent);
+        draw_param_bar(
+            renderer,
+            x3,
+            py,
+            col_w,
+            "Cutoff",
+            patch.hpf_cutoff,
+            20.0,
+            20000.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x3, py, col_w, "Resonance", patch.hpf_resonance, 0.0, 4.0, accent);
+        draw_param_bar(
+            renderer,
+            x3,
+            py,
+            col_w,
+            "Resonance",
+            patch.hpf_resonance,
+            0.0,
+            4.0,
+            accent,
+        );
 
         let lpf_y = row2_y + filter_h + SETUP_ROW_GAP;
         let lpf_h = SECTION_HEADER_H + 3.0 * PARAM_ROW_H + 8.0;
         draw_section_panel(renderer, x3, lpf_y, col_w, lpf_h, "LPF", accent);
         py = lpf_y + SECTION_HEADER_H;
-        draw_param_bar(renderer, x3, py, col_w, "Cutoff", patch.lpf_cutoff, 20.0, 20000.0, accent);
+        draw_param_bar(
+            renderer,
+            x3,
+            py,
+            col_w,
+            "Cutoff",
+            patch.lpf_cutoff,
+            20.0,
+            20000.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x3, py, col_w, "Resonance", patch.lpf_resonance, 0.0, 2.0, accent);
+        draw_param_bar(
+            renderer,
+            x3,
+            py,
+            col_w,
+            "Resonance",
+            patch.lpf_resonance,
+            0.0,
+            2.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x3, py, col_w, "Saturation", patch.lpf_saturation, 0.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x3,
+            py,
+            col_w,
+            "Saturation",
+            patch.lpf_saturation,
+            0.0,
+            1.0,
+            accent,
+        );
 
         // --- Row 3: Voice, Velocity, Glide ---
         let row3_y = row2_y + row2_h + SETUP_ROW_GAP;
@@ -4468,22 +4937,76 @@ impl DawState {
         let voice_h = SECTION_HEADER_H + 2.0 * PARAM_ROW_H + 8.0;
         draw_section_panel(renderer, x1, row3_y, col_w, voice_h, "VOICE", accent);
         py = row3_y + SECTION_HEADER_H;
-        let priority_label = if patch.voice_mode.starts_with("low") { "Low" } else { "High" };
+        let priority_label = if patch.voice_mode.starts_with("low") {
+            "Low"
+        } else {
+            "High"
+        };
         draw_param_label(renderer, x1, py, col_w, "Priority", priority_label);
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x1, py, col_w, "Voices", patch.voice_count as f64, 1.0, 10.0, accent);
+        draw_param_bar(
+            renderer,
+            x1,
+            py,
+            col_w,
+            "Voices",
+            patch.voice_count as f64,
+            1.0,
+            10.0,
+            accent,
+        );
 
         // Velocity.
         let vel_h = SECTION_HEADER_H + 4.0 * PARAM_ROW_H + 8.0;
         draw_section_panel(renderer, x2, row3_y, col_w, vel_h, "VELOCITY", accent);
         py = row3_y + SECTION_HEADER_H;
-        draw_param_bar(renderer, x2, py, col_w, "VCA Depth", patch.velocity_vca_depth, 0.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x2,
+            py,
+            col_w,
+            "VCA Depth",
+            patch.velocity_vca_depth,
+            0.0,
+            1.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x2, py, col_w, "Filter Depth", patch.velocity_filter_depth, 0.0, 4.0, accent);
+        draw_param_bar(
+            renderer,
+            x2,
+            py,
+            col_w,
+            "Filter Depth",
+            patch.velocity_filter_depth,
+            0.0,
+            4.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x2, py, col_w, "Env Depth", patch.velocity_envelope_depth, 0.0, 1.0, accent);
+        draw_param_bar(
+            renderer,
+            x2,
+            py,
+            col_w,
+            "Env Depth",
+            patch.velocity_envelope_depth,
+            0.0,
+            1.0,
+            accent,
+        );
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x2, py, col_w, "Pitch Depth", patch.velocity_pitch_depth, 0.0, 12.0, accent);
+        draw_param_bar(
+            renderer,
+            x2,
+            py,
+            col_w,
+            "Pitch Depth",
+            patch.velocity_pitch_depth,
+            0.0,
+            12.0,
+            accent,
+        );
 
         // Glide.
         let glide_h = SECTION_HEADER_H + 2.0 * PARAM_ROW_H + 8.0;
@@ -4492,7 +5015,17 @@ impl DawState {
         let glide_status = if patch.glide_enabled { "ON" } else { "OFF" };
         draw_param_label(renderer, x3, py, col_w, "Enabled", glide_status);
         py += PARAM_ROW_H;
-        draw_param_bar(renderer, x3, py, col_w, "Time", patch.glide_time, 0.0, 2.0, accent);
+        draw_param_bar(
+            renderer,
+            x3,
+            py,
+            col_w,
+            "Time",
+            patch.glide_time,
+            0.0,
+            2.0,
+            accent,
+        );
 
         // --- Row 4: Mod Matrix (full width) ---
         let row4_y = row3_y + vel_h + SETUP_ROW_GAP;
@@ -4539,7 +5072,13 @@ impl DawState {
 
         // Chain title.
         let title = format!("Pre-Split Mono Chain  [{}]", chain.name);
-        renderer.draw_text(&title, SETUP_MARGIN + 8.0, y0, FontSize::Medium, TEXT_PRIMARY);
+        renderer.draw_text(
+            &title,
+            SETUP_MARGIN + 8.0,
+            y0,
+            FontSize::Medium,
+            TEXT_PRIMARY,
+        );
 
         // Signal flow indicator.
         renderer.draw_text(
@@ -4561,9 +5100,17 @@ impl DawState {
                 TEXT_SECONDARY,
             );
         } else {
-            let sel = self.selected_pedal
+            let sel = self
+                .selected_pedal
                 .and_then(|(c, idx)| if c == 0 { Some(idx) } else { None });
-            draw_pedal_chain(renderer, SETUP_MARGIN, pedals_y, &chain.pre_pedals, accent, sel);
+            draw_pedal_chain(
+                renderer,
+                SETUP_MARGIN,
+                pedals_y,
+                &chain.pre_pedals,
+                accent,
+                sel,
+            );
         }
 
         // Controls hint.
@@ -4596,7 +5143,13 @@ impl DawState {
         // Positional stage controls.
         let is_3d = chain.position_3d_enabled;
         let is_orbital = chain.orbital_enabled;
-        let pos_rows = if is_orbital { 7 } else if is_3d { 4 } else { 2 };
+        let pos_rows = if is_orbital {
+            7
+        } else if is_3d {
+            4
+        } else {
+            2
+        };
         let pos_h = SECTION_HEADER_H + pos_rows as f32 * PARAM_ROW_H + 8.0;
         draw_section_panel(
             renderer,
@@ -4608,29 +5161,142 @@ impl DawState {
             accent,
         );
         let mut py = y0 + SECTION_HEADER_H;
-        let mode_label = if is_orbital { "Orbital" } else if is_3d { "3D Position" } else { "Pan" };
-        draw_param_label(renderer, SETUP_MARGIN, py, full_w, "Mode (click to toggle)", mode_label);
+        let mode_label = if is_orbital {
+            "Orbital"
+        } else if is_3d {
+            "3D Position"
+        } else {
+            "Pan"
+        };
+        draw_param_label(
+            renderer,
+            SETUP_MARGIN,
+            py,
+            full_w,
+            "Mode (click to toggle)",
+            mode_label,
+        );
         py += PARAM_ROW_H;
         if is_orbital {
-            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Semi-major", chain.orbital_semi_major, 0.0, 1.0, accent);
+            draw_param_bar(
+                renderer,
+                SETUP_MARGIN,
+                py,
+                full_w,
+                "Semi-major",
+                chain.orbital_semi_major,
+                0.0,
+                1.0,
+                accent,
+            );
             py += PARAM_ROW_H;
-            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Eccentricity", chain.orbital_eccentricity, 0.0, 0.99, accent);
+            draw_param_bar(
+                renderer,
+                SETUP_MARGIN,
+                py,
+                full_w,
+                "Eccentricity",
+                chain.orbital_eccentricity,
+                0.0,
+                0.99,
+                accent,
+            );
             py += PARAM_ROW_H;
-            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Inclination", chain.orbital_inclination, 0.0, 180.0, accent);
+            draw_param_bar(
+                renderer,
+                SETUP_MARGIN,
+                py,
+                full_w,
+                "Inclination",
+                chain.orbital_inclination,
+                0.0,
+                180.0,
+                accent,
+            );
             py += PARAM_ROW_H;
-            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Ascending Node", chain.orbital_ascending_node, 0.0, 360.0, accent);
+            draw_param_bar(
+                renderer,
+                SETUP_MARGIN,
+                py,
+                full_w,
+                "Ascending Node",
+                chain.orbital_ascending_node,
+                0.0,
+                360.0,
+                accent,
+            );
             py += PARAM_ROW_H;
-            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Periapsis", chain.orbital_periapsis, 0.0, 360.0, accent);
+            draw_param_bar(
+                renderer,
+                SETUP_MARGIN,
+                py,
+                full_w,
+                "Periapsis",
+                chain.orbital_periapsis,
+                0.0,
+                360.0,
+                accent,
+            );
             py += PARAM_ROW_H;
-            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Period (bars)", chain.orbital_period, 0.25, 64.0, accent);
+            draw_param_bar(
+                renderer,
+                SETUP_MARGIN,
+                py,
+                full_w,
+                "Period (bars)",
+                chain.orbital_period,
+                0.25,
+                64.0,
+                accent,
+            );
         } else if is_3d {
-            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Azimuth", chain.azimuth, 0.0, 360.0, accent);
+            draw_param_bar(
+                renderer,
+                SETUP_MARGIN,
+                py,
+                full_w,
+                "Azimuth",
+                chain.azimuth,
+                0.0,
+                360.0,
+                accent,
+            );
             py += PARAM_ROW_H;
-            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Elevation", chain.elevation, -90.0, 90.0, accent);
+            draw_param_bar(
+                renderer,
+                SETUP_MARGIN,
+                py,
+                full_w,
+                "Elevation",
+                chain.elevation,
+                -90.0,
+                90.0,
+                accent,
+            );
             py += PARAM_ROW_H;
-            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Distance", chain.position_distance, 0.0, 1.0, accent);
+            draw_param_bar(
+                renderer,
+                SETUP_MARGIN,
+                py,
+                full_w,
+                "Distance",
+                chain.position_distance,
+                0.0,
+                1.0,
+                accent,
+            );
         } else {
-            draw_param_bar(renderer, SETUP_MARGIN, py, full_w, "Pan", chain.pan, -1.0, 1.0, accent);
+            draw_param_bar(
+                renderer,
+                SETUP_MARGIN,
+                py,
+                full_w,
+                "Pan",
+                chain.pan,
+                -1.0,
+                1.0,
+                accent,
+            );
         }
 
         let chains_y = y0 + pos_h + SETUP_ROW_GAP;
@@ -4658,9 +5324,17 @@ impl DawState {
                 TEXT_SECONDARY,
             );
         } else {
-            let sel = self.selected_pedal
+            let sel = self
+                .selected_pedal
                 .and_then(|(c, idx)| if c == 1 { Some(idx) } else { None });
-            draw_pedal_chain(renderer, left_x, left_y, &chain.post_pedals_left, accent, sel);
+            draw_pedal_chain(
+                renderer,
+                left_x,
+                left_y,
+                &chain.post_pedals_left,
+                accent,
+                sel,
+            );
         }
 
         // Right channel chain.
@@ -4684,9 +5358,17 @@ impl DawState {
                 TEXT_SECONDARY,
             );
         } else {
-            let sel = self.selected_pedal
+            let sel = self
+                .selected_pedal
                 .and_then(|(c, idx)| if c == 2 { Some(idx) } else { None });
-            draw_pedal_chain(renderer, right_x, right_y, &chain.post_pedals_right, accent, sel);
+            draw_pedal_chain(
+                renderer,
+                right_x,
+                right_y,
+                &chain.post_pedals_right,
+                accent,
+                sel,
+            );
         }
 
         // Controls hint.
@@ -4722,26 +5404,62 @@ fn draw_section_panel<R: Renderer>(
 /// Supports straight, triplet (T), and dotted (D) variants.
 fn grid_label(snap_ticks: u64, ticks_per_beat: u64, ticks_per_bar: u64) -> &'static str {
     // Straight values.
-    if snap_ticks == ticks_per_bar { return "1/1"; }
-    if snap_ticks == ticks_per_beat * 2 { return "1/2"; }
-    if snap_ticks == ticks_per_beat { return "1/4"; }
-    if snap_ticks == ticks_per_beat / 2 { return "1/8"; }
-    if snap_ticks == ticks_per_beat / 4 { return "1/16"; }
-    if snap_ticks == ticks_per_beat / 8 { return "1/32"; }
+    if snap_ticks == ticks_per_bar {
+        return "1/1";
+    }
+    if snap_ticks == ticks_per_beat * 2 {
+        return "1/2";
+    }
+    if snap_ticks == ticks_per_beat {
+        return "1/4";
+    }
+    if snap_ticks == ticks_per_beat / 2 {
+        return "1/8";
+    }
+    if snap_ticks == ticks_per_beat / 4 {
+        return "1/16";
+    }
+    if snap_ticks == ticks_per_beat / 8 {
+        return "1/32";
+    }
     // Triplet values (base * 2/3).
-    if snap_ticks == ticks_per_bar * 2 / 3 { return "1/1T"; }
-    if snap_ticks == ticks_per_beat * 2 * 2 / 3 { return "1/2T"; }
-    if snap_ticks == ticks_per_beat * 2 / 3 { return "1/4T"; }
-    if snap_ticks == ticks_per_beat / 2 * 2 / 3 { return "1/8T"; }
-    if snap_ticks == ticks_per_beat / 4 * 2 / 3 { return "1/16T"; }
-    if snap_ticks == ticks_per_beat / 8 * 2 / 3 { return "1/32T"; }
+    if snap_ticks == ticks_per_bar * 2 / 3 {
+        return "1/1T";
+    }
+    if snap_ticks == ticks_per_beat * 2 * 2 / 3 {
+        return "1/2T";
+    }
+    if snap_ticks == ticks_per_beat * 2 / 3 {
+        return "1/4T";
+    }
+    if snap_ticks == ticks_per_beat / 2 * 2 / 3 {
+        return "1/8T";
+    }
+    if snap_ticks == ticks_per_beat / 4 * 2 / 3 {
+        return "1/16T";
+    }
+    if snap_ticks == ticks_per_beat / 8 * 2 / 3 {
+        return "1/32T";
+    }
     // Dotted values (base * 3/2).
-    if snap_ticks == ticks_per_bar * 3 / 2 { return "1/1D"; }
-    if snap_ticks == ticks_per_beat * 2 * 3 / 2 { return "1/2D"; }
-    if snap_ticks == ticks_per_beat * 3 / 2 { return "1/4D"; }
-    if snap_ticks == ticks_per_beat / 2 * 3 / 2 { return "1/8D"; }
-    if snap_ticks == ticks_per_beat / 4 * 3 / 2 { return "1/16D"; }
-    if snap_ticks == ticks_per_beat / 8 * 3 / 2 { return "1/32D"; }
+    if snap_ticks == ticks_per_bar * 3 / 2 {
+        return "1/1D";
+    }
+    if snap_ticks == ticks_per_beat * 2 * 3 / 2 {
+        return "1/2D";
+    }
+    if snap_ticks == ticks_per_beat * 3 / 2 {
+        return "1/4D";
+    }
+    if snap_ticks == ticks_per_beat / 2 * 3 / 2 {
+        return "1/8D";
+    }
+    if snap_ticks == ticks_per_beat / 4 * 3 / 2 {
+        return "1/16D";
+    }
+    if snap_ticks == ticks_per_beat / 8 * 3 / 2 {
+        return "1/32D";
+    }
     "Custom"
 }
 
@@ -4824,7 +5542,16 @@ fn draw_pedal_chain<R: Renderer>(
         let param_count = pedal.params.len().max(1);
         let pedal_h = 28.0 + (param_count as f32) * PARAM_ROW_H + 8.0;
         let is_selected = selected_idx == Some(i);
-        draw_pedal_box(renderer, px, y, pedal_w, pedal_h, pedal, accent, is_selected);
+        draw_pedal_box(
+            renderer,
+            px,
+            y,
+            pedal_w,
+            pedal_h,
+            pedal,
+            accent,
+            is_selected,
+        );
 
         // Connection line to next pedal.
         if i < pedals.len() - 1 {
@@ -4855,11 +5582,21 @@ fn draw_pedal_box<R: Renderer>(
     // Pedal body (warm tone).
     renderer.fill_rect(x, y, w, h, colors::PEDAL_BG);
     // Header bar. Selected pedals get an accent-colored header.
-    let header_color = if is_selected { accent } else { colors::PEDAL_HEADER };
+    let header_color = if is_selected {
+        accent
+    } else {
+        colors::PEDAL_HEADER
+    };
     renderer.fill_rect(x, y, w, 24.0, header_color);
     let type_name = pedal.pedal_type.to_uppercase();
     let header_text_color = if is_selected { BG_DARK } else { TEXT_PRIMARY };
-    renderer.draw_text(&type_name, x + 6.0, y + 4.0, FontSize::Small, header_text_color);
+    renderer.draw_text(
+        &type_name,
+        x + 6.0,
+        y + 4.0,
+        FontSize::Small,
+        header_text_color,
+    );
     // Border. Selected pedals get a thicker visual indicator (double border).
     let border_color = if is_selected { TEXT_ACCENT } else { accent };
     renderer.draw_rect(x, y, w, h, border_color);
@@ -4879,7 +5616,17 @@ fn draw_pedal_box<R: Renderer>(
     let mut py = y + 28.0;
     for param in &pedal.params {
         let (min, max) = pedal_param_range(&param.name);
-        draw_param_bar(renderer, x, py, w, &param.name, param.value, min, max, accent);
+        draw_param_bar(
+            renderer,
+            x,
+            py,
+            w,
+            &param.name,
+            param.value,
+            min,
+            max,
+            accent,
+        );
         py += PARAM_ROW_H;
     }
 }
@@ -4915,8 +5662,8 @@ fn find_pedal_param_in_chain(
 
 fn pedal_param_range(name: &str) -> (f64, f64) {
     match name {
-        "mix" | "tone" | "depth" | "sensitivity" | "warmth" | "position"
-        | "threshold" | "damping" | "decay" | "rate_factor" => (0.0, 1.0),
+        "mix" | "tone" | "depth" | "sensitivity" | "warmth" | "position" | "threshold"
+        | "damping" | "decay" | "rate_factor" => (0.0, 1.0),
         "gain" => (0.0, 20.0),
         "drive" => (1.0, 5.0),
         "feedback" => (-1.0, 1.0),
@@ -4925,8 +5672,9 @@ fn pedal_param_range(name: &str) -> (f64, f64) {
         "ratio" => (1.0, 20.0),
         "semitones" => (-24.0, 24.0),
         "bit_depth" => (1.0, 32.0),
-        "frequency_hz" | "min_freq" | "max_freq" | "low_freq" | "mid_freq"
-        | "high_freq" => (20.0, 20000.0),
+        "frequency_hz" | "min_freq" | "max_freq" | "low_freq" | "mid_freq" | "high_freq" => {
+            (20.0, 20000.0)
+        }
         "q" => (0.1, 20.0),
         "low_gain_db" | "mid_gain_db" | "high_gain_db" => (-12.0, 12.0),
         "makeup_gain" => (0.0, 4.0),
@@ -5101,18 +5849,15 @@ fn main() {
         "/System/Library/Fonts/Helvetica.ttc".to_string()
     };
 
-    let mut renderer = match sdl_renderer::SdlRenderer::new(
-        WINDOW_TITLE,
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
-        &font_path,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("[ERROR] Failed to create renderer: {e}");
-            return;
-        }
-    };
+    let mut renderer =
+        match sdl_renderer::SdlRenderer::new(WINDOW_TITLE, WINDOW_WIDTH, WINDOW_HEIGHT, &font_path)
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[ERROR] Failed to create renderer: {e}");
+                return;
+            }
+        };
 
     // Initialize audio engine and lock-free command channel.
     let mut audio_engine = AudioEngine::new(SAMPLE_RATE);
@@ -5147,7 +5892,10 @@ fn main() {
             Ok(midi_data) => {
                 match daw_core::smf::parse_smf(&midi_data) {
                     Ok(smf_result) => {
-                        eprintln!("[INFO] MIDI import: {}", daw_core::smf::describe_import(&smf_result));
+                        eprintln!(
+                            "[INFO] MIDI import: {}",
+                            daw_core::smf::describe_import(&smf_result)
+                        );
 
                         // Import tracks into DAW channels starting at import_channel.
                         // Skip empty tracks (e.g., tempo conductor track in Type 1 files).
@@ -5169,8 +5917,7 @@ fn main() {
                         if smf_result.ticks_per_beat != state.project.ticks_per_beat {
                             eprintln!(
                                 "[INFO] Adjusting ticks per beat: {} -> {}",
-                                state.project.ticks_per_beat,
-                                smf_result.ticks_per_beat
+                                state.project.ticks_per_beat, smf_result.ticks_per_beat
                             );
                             state.project.ticks_per_beat = smf_result.ticks_per_beat;
                         }
@@ -5216,9 +5963,21 @@ fn main() {
 
             // Effect chains.
             let config = &state.effects[ch];
-            apply_chain_to_engine(&mut audio_engine.channels[ch].pre_pedals, &config.pre_pedals, sr);
-            apply_chain_to_engine(&mut audio_engine.channels[ch].post_pedals_left, &config.post_pedals_left, sr);
-            apply_chain_to_engine(&mut audio_engine.channels[ch].post_pedals_right, &config.post_pedals_right, sr);
+            apply_chain_to_engine(
+                &mut audio_engine.channels[ch].pre_pedals,
+                &config.pre_pedals,
+                sr,
+            );
+            apply_chain_to_engine(
+                &mut audio_engine.channels[ch].post_pedals_left,
+                &config.post_pedals_left,
+                sr,
+            );
+            apply_chain_to_engine(
+                &mut audio_engine.channels[ch].post_pedals_right,
+                &config.post_pedals_right,
+                sr,
+            );
             apply_position_to_engine(&mut audio_engine, ch, config);
         }
     }
@@ -5238,7 +5997,9 @@ fn main() {
     }
 
     println!("[INFO] DAW started: {WINDOW_WIDTH}x{WINDOW_HEIGHT} @ {SAMPLE_RATE}Hz");
-    println!("[INFO] Controls: Space=Play/Pause, S=Stop, 1-8=Ch, P=Preset, Shift+P=Prev, M=Mute, Ctrl+S=Save, Q=Quit");
+    println!(
+        "[INFO] Controls: Space=Play/Pause, S=Stop, 1-8=Ch, P=Preset, Shift+P=Prev, M=Mute, Ctrl+S=Save, Q=Quit"
+    );
 
     // Main event loop.
     let mut event = unsafe { std::mem::zeroed::<sdl3_sys::events::SDL_Event>() };

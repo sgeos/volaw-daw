@@ -9,7 +9,10 @@ use crate::patch::{ModRoutingConfig, PatchConfig};
 fn routings_with(extra: &[(&str, &str, f64)]) -> alloc::vec::Vec<ModRoutingConfig> {
     let mut routes = crate::patch::default_mod_routings();
     for &(source, dest, depth) in extra {
-        if let Some(existing) = routes.iter_mut().find(|r| r.source == source && r.dest == dest) {
+        if let Some(existing) = routes
+            .iter_mut()
+            .find(|r| r.source == source && r.dest == dest)
+        {
             existing.depth = depth;
         } else {
             routes.push(ModRoutingConfig {
@@ -793,10 +796,7 @@ fn trumpet() -> PatchConfig {
         lpf_cutoff: 2000.0,
         lpf_resonance: 0.6,
         lfo_rate: 5.0,
-        mod_routings: routings_with(&[
-            ("eg2", "lpf_cutoff", 0.8),
-            ("lfo", "vco1_pitch", 0.008),
-        ]),
+        mod_routings: routings_with(&[("eg2", "lpf_cutoff", 0.8), ("lfo", "vco1_pitch", 0.008)]),
         ..PatchConfig::default()
     }
 }
@@ -1029,7 +1029,12 @@ mod tests {
     fn preset_names_sorted() {
         let names = preset_names();
         for i in 1..names.len() {
-            assert!(names[i - 1] <= names[i], "{} should be <= {}", names[i - 1], names[i]);
+            assert!(
+                names[i - 1] <= names[i],
+                "{} should be <= {}",
+                names[i - 1],
+                names[i]
+            );
         }
     }
 }

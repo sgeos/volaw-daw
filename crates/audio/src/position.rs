@@ -195,10 +195,18 @@ impl PositionalStage {
 
         // Update distance lowpass and elevation shelf filters.
         if (sample_rate - self.cached_sample_rate).abs() > 1.0 || self.active {
-            self.distance_lpf_left
-                .set_coefficients(BiquadType::Lowpass, lpf_freq, 0.707, sample_rate);
-            self.distance_lpf_right
-                .set_coefficients(BiquadType::Lowpass, lpf_freq, 0.707, sample_rate);
+            self.distance_lpf_left.set_coefficients(
+                BiquadType::Lowpass,
+                lpf_freq,
+                0.707,
+                sample_rate,
+            );
+            self.distance_lpf_right.set_coefficients(
+                BiquadType::Lowpass,
+                lpf_freq,
+                0.707,
+                sample_rate,
+            );
             if elev_gain_db.abs() > 0.1 {
                 self.elevation_shelf_left.set_coefficients(
                     BiquadType::HighShelf {
@@ -218,10 +226,8 @@ impl PositionalStage {
                 );
             } else {
                 // Near zero elevation: passthrough (no shelf).
-                self.elevation_shelf_left =
-                    Biquad::passthrough();
-                self.elevation_shelf_right =
-                    Biquad::passthrough();
+                self.elevation_shelf_left = Biquad::passthrough();
+                self.elevation_shelf_right = Biquad::passthrough();
             }
             self.cached_sample_rate = sample_rate;
         }
@@ -615,7 +621,10 @@ mod tests {
         // linearly (the "lighthouse" autopan effect).
         let (az0, el0, _) = compute_orbital_position(0.0, 0.5, 0.0, 0.0, 0.0, 0.0);
         assert!(az0.abs() < 1.0, "Phase 0 should be near azimuth 0");
-        assert!(el0.abs() < 1.0, "Equatorial orbit should have zero elevation");
+        assert!(
+            el0.abs() < 1.0,
+            "Equatorial orbit should have zero elevation"
+        );
 
         let (az25, _, _) = compute_orbital_position(0.25, 0.5, 0.0, 0.0, 0.0, 0.0);
         assert!(
@@ -664,14 +673,8 @@ mod tests {
         }
         // Periapsis distance = a * (1 - e) = 0.8 * 0.2 = 0.16
         // Apoapsis distance = a * (1 + e) = 0.8 * 1.8 = 1.44 (clamped to 1.0)
-        assert!(
-            min_dist < 0.25,
-            "Periapsis should be close: min {min_dist}"
-        );
-        assert!(
-            max_dist > 0.8,
-            "Apoapsis should be far: max {max_dist}"
-        );
+        assert!(min_dist < 0.25, "Periapsis should be close: min {min_dist}");
+        assert!(max_dist > 0.8, "Apoapsis should be far: max {max_dist}");
     }
 
     #[test]
@@ -686,9 +689,18 @@ mod tests {
         ];
         for (phase, a, e, i, o, w) in params {
             let (az, el, dist) = compute_orbital_position(phase, a, e, i, o, w);
-            assert!(az.is_finite(), "NaN/Inf azimuth for params {phase},{a},{e},{i},{o},{w}");
-            assert!(el.is_finite(), "NaN/Inf elevation for params {phase},{a},{e},{i},{o},{w}");
-            assert!(dist.is_finite(), "NaN/Inf distance for params {phase},{a},{e},{i},{o},{w}");
+            assert!(
+                az.is_finite(),
+                "NaN/Inf azimuth for params {phase},{a},{e},{i},{o},{w}"
+            );
+            assert!(
+                el.is_finite(),
+                "NaN/Inf elevation for params {phase},{a},{e},{i},{o},{w}"
+            );
+            assert!(
+                dist.is_finite(),
+                "NaN/Inf distance for params {phase},{a},{e},{i},{o},{w}"
+            );
         }
     }
 }

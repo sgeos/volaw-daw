@@ -106,159 +106,402 @@ impl Pedal {
     pub fn set_param(&mut self, name: &str, value: f64) -> bool {
         match self {
             Pedal::Overdrive(p) => match name {
-                "gain" => { p.gain = value; true }
-                "tone" => { p.tone = value; true }
-                "mix" => { p.mix = value; true }
+                "gain" => {
+                    p.gain = value;
+                    true
+                }
+                "tone" => {
+                    p.tone = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::Distortion(p) => match name {
-                "gain" => { p.gain = value; true }
-                "threshold" => { p.threshold = value; true }
-                "tone" => { p.tone = value; true }
-                "mix" => { p.mix = value; true }
+                "gain" => {
+                    p.gain = value;
+                    true
+                }
+                "threshold" => {
+                    p.threshold = value;
+                    true
+                }
+                "tone" => {
+                    p.tone = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::Fuzz(p) => match name {
-                "gain" => { p.gain = value; true }
-                "tone" => { p.tone = value; true }
-                "mix" => { p.mix = value; true }
+                "gain" => {
+                    p.gain = value;
+                    true
+                }
+                "tone" => {
+                    p.tone = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::TapeSaturation(p) => match name {
-                "drive" => { p.drive = value; true }
-                "warmth" => { p.warmth = value; true }
-                "mix" => { p.mix = value; true }
+                "drive" => {
+                    p.drive = value;
+                    true
+                }
+                "warmth" => {
+                    p.warmth = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::AutoWah(p) => match name {
-                "sensitivity" => { p.sensitivity = value; true }
-                "min_freq" => { p.min_freq = value; true }
-                "max_freq" => { p.max_freq = value; true }
-                "q" => { p.q = value; true }
-                "mix" => { p.mix = value; true }
+                "sensitivity" => {
+                    p.sensitivity = value;
+                    true
+                }
+                "min_freq" => {
+                    p.min_freq = value;
+                    true
+                }
+                "max_freq" => {
+                    p.max_freq = value;
+                    true
+                }
+                "q" => {
+                    p.q = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::WahManual(p) => match name {
-                "position" => { p.position = value; true }
-                "min_freq" => { p.min_freq = value; true }
-                "max_freq" => { p.max_freq = value; true }
-                "q" => { p.q = value; true }
-                "mix" => { p.mix = value; true }
+                "position" => {
+                    p.position = value;
+                    true
+                }
+                "min_freq" => {
+                    p.min_freq = value;
+                    true
+                }
+                "max_freq" => {
+                    p.max_freq = value;
+                    true
+                }
+                "q" => {
+                    p.q = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::Chorus(p) => match name {
-                "rate_hz" => { p.rate_hz = value; true }
-                "depth_ms" => { p.depth_ms = value; true }
-                "mix" => { p.mix = value; true }
+                "rate_hz" => {
+                    p.rate_hz = value;
+                    true
+                }
+                "depth_ms" => {
+                    p.depth_ms = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::Flanger(p) => match name {
-                "rate_hz" => { p.rate_hz = value; true }
-                "depth_ms" => { p.depth_ms = value; true }
-                "feedback" => { p.feedback = value; true }
-                "mix" => { p.mix = value; true }
+                "rate_hz" => {
+                    p.rate_hz = value;
+                    true
+                }
+                "depth_ms" => {
+                    p.depth_ms = value;
+                    true
+                }
+                "feedback" => {
+                    p.feedback = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::Phaser(p) => match name {
-                "rate_hz" => { p.rate_hz = value; true }
-                "depth" => { p.depth = value; true }
-                "feedback" => { p.feedback = value; true }
-                "mix" => { p.mix = value; true }
-                "stages" => { p.stages = value as usize; true }
+                "rate_hz" => {
+                    p.rate_hz = value;
+                    true
+                }
+                "depth" => {
+                    p.depth = value;
+                    true
+                }
+                "feedback" => {
+                    p.feedback = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
+                "stages" => {
+                    p.stages = value as usize;
+                    true
+                }
                 _ => false,
             },
             Pedal::Tremolo(p) => match name {
-                "rate_hz" => { p.rate_hz = value; true }
-                "depth" => { p.depth = value; true }
+                "rate_hz" => {
+                    p.rate_hz = value;
+                    true
+                }
+                "depth" => {
+                    p.depth = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::DigitalDelay(p) => match name {
-                "time_ms" => { p.time_ms = value; true }
-                "feedback" => { p.feedback = value; true }
-                "mix" => { p.mix = value; true }
+                "time_ms" => {
+                    p.time_ms = value;
+                    true
+                }
+                "feedback" => {
+                    p.feedback = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::AnalogDelay(p) => match name {
-                "time_ms" => { p.time_ms = value; true }
-                "feedback" => { p.feedback = value; true }
-                "tone" => { p.tone = value; true }
-                "mix" => { p.mix = value; true }
+                "time_ms" => {
+                    p.time_ms = value;
+                    true
+                }
+                "feedback" => {
+                    p.feedback = value;
+                    true
+                }
+                "tone" => {
+                    p.tone = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::PingPongDelay(p) => match name {
-                "time_ms" => { p.time_ms = value; true }
-                "feedback" => { p.feedback = value; true }
-                "mix" => { p.mix = value; true }
+                "time_ms" => {
+                    p.time_ms = value;
+                    true
+                }
+                "feedback" => {
+                    p.feedback = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::PlateReverb(p) => match name {
-                "decay" => { p.decay = value; true }
-                "damping" => { p.damping = value; true }
-                "mix" => { p.mix = value; true }
+                "decay" => {
+                    p.decay = value;
+                    true
+                }
+                "damping" => {
+                    p.damping = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::HallReverb(p) => match name {
-                "decay" => { p.decay = value; true }
-                "damping" => { p.damping = value; true }
-                "mix" => { p.mix = value; true }
+                "decay" => {
+                    p.decay = value;
+                    true
+                }
+                "damping" => {
+                    p.damping = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::RoomReverb(p) => match name {
-                "decay" => { p.decay = value; true }
-                "damping" => { p.damping = value; true }
-                "mix" => { p.mix = value; true }
+                "decay" => {
+                    p.decay = value;
+                    true
+                }
+                "damping" => {
+                    p.damping = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::Bitcrusher(p) => match name {
-                "bit_depth" => { p.bit_depth = value as u32; true }
-                "rate_factor" => { p.rate_factor = value; true }
-                "mix" => { p.mix = value; true }
+                "bit_depth" => {
+                    p.bit_depth = value as u32;
+                    true
+                }
+                "rate_factor" => {
+                    p.rate_factor = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::RingModulator(p) => match name {
-                "frequency_hz" => { p.frequency_hz = value; true }
-                "mix" => { p.mix = value; true }
+                "frequency_hz" => {
+                    p.frequency_hz = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::PitchShifter(p) => match name {
-                "semitones" => { p.semitones = value; true }
-                "mix" => { p.mix = value; true }
+                "semitones" => {
+                    p.semitones = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::AutoPan(p) => match name {
-                "rate_hz" => { p.rate_hz = value; true }
-                "depth" => { p.depth = value; true }
+                "rate_hz" => {
+                    p.rate_hz = value;
+                    true
+                }
+                "depth" => {
+                    p.depth = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::NoiseGate(p) => match name {
-                "threshold" => { p.threshold = value; true }
-                "attack_ms" => { p.attack_ms = value; true }
-                "release_ms" => { p.release_ms = value; true }
+                "threshold" => {
+                    p.threshold = value;
+                    true
+                }
+                "attack_ms" => {
+                    p.attack_ms = value;
+                    true
+                }
+                "release_ms" => {
+                    p.release_ms = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::Compressor(p) => match name {
-                "threshold" => { p.threshold = value; true }
-                "ratio" => { p.ratio = value; true }
-                "attack_ms" => { p.attack_ms = value; true }
-                "release_ms" => { p.release_ms = value; true }
-                "makeup_gain" => { p.makeup_gain = value; true }
+                "threshold" => {
+                    p.threshold = value;
+                    true
+                }
+                "ratio" => {
+                    p.ratio = value;
+                    true
+                }
+                "attack_ms" => {
+                    p.attack_ms = value;
+                    true
+                }
+                "release_ms" => {
+                    p.release_ms = value;
+                    true
+                }
+                "makeup_gain" => {
+                    p.makeup_gain = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::Eq(p) => match name {
-                "low_gain_db" => { p.low_gain_db = value; true }
-                "mid_gain_db" => { p.mid_gain_db = value; true }
-                "high_gain_db" => { p.high_gain_db = value; true }
-                "low_freq" => { p.low_freq = value; true }
-                "mid_freq" => { p.mid_freq = value; true }
-                "high_freq" => { p.high_freq = value; true }
+                "low_gain_db" => {
+                    p.low_gain_db = value;
+                    true
+                }
+                "mid_gain_db" => {
+                    p.mid_gain_db = value;
+                    true
+                }
+                "high_gain_db" => {
+                    p.high_gain_db = value;
+                    true
+                }
+                "low_freq" => {
+                    p.low_freq = value;
+                    true
+                }
+                "mid_freq" => {
+                    p.mid_freq = value;
+                    true
+                }
+                "high_freq" => {
+                    p.high_freq = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::Volume(p) => match name {
-                "gain" => { p.gain = value; true }
+                "gain" => {
+                    p.gain = value;
+                    true
+                }
                 _ => false,
             },
             Pedal::Buffer(p) => match name {
-                "gain" => { p.gain = value; true }
+                "gain" => {
+                    p.gain = value;
+                    true
+                }
                 _ => false,
             },
         }
@@ -295,12 +538,8 @@ impl Pedal {
             "platereverb" | "plate_reverb" => {
                 Some(Pedal::PlateReverb(PlateReverb::new(sample_rate)))
             }
-            "hallreverb" | "hall_reverb" => {
-                Some(Pedal::HallReverb(HallReverb::new(sample_rate)))
-            }
-            "roomreverb" | "room_reverb" => {
-                Some(Pedal::RoomReverb(RoomReverb::new(sample_rate)))
-            }
+            "hallreverb" | "hall_reverb" => Some(Pedal::HallReverb(HallReverb::new(sample_rate))),
+            "roomreverb" | "room_reverb" => Some(Pedal::RoomReverb(RoomReverb::new(sample_rate))),
             "bitcrusher" => Some(Pedal::Bitcrusher(Bitcrusher::new(sample_rate))),
             "ringmodulator" | "ring_modulator" => {
                 Some(Pedal::RingModulator(RingModulator::new(sample_rate)))
@@ -388,12 +627,31 @@ mod tests {
     #[test]
     fn from_name_all_25_types() {
         let names = [
-            "Overdrive", "Distortion", "Fuzz", "TapeSaturation",
-            "AutoWah", "WahManual", "Chorus", "Flanger", "Phaser", "Tremolo",
-            "DigitalDelay", "AnalogDelay", "PingPongDelay",
-            "PlateReverb", "HallReverb", "RoomReverb",
-            "Bitcrusher", "RingModulator", "PitchShifter", "AutoPan",
-            "NoiseGate", "Compressor", "Eq", "Volume", "Buffer",
+            "Overdrive",
+            "Distortion",
+            "Fuzz",
+            "TapeSaturation",
+            "AutoWah",
+            "WahManual",
+            "Chorus",
+            "Flanger",
+            "Phaser",
+            "Tremolo",
+            "DigitalDelay",
+            "AnalogDelay",
+            "PingPongDelay",
+            "PlateReverb",
+            "HallReverb",
+            "RoomReverb",
+            "Bitcrusher",
+            "RingModulator",
+            "PitchShifter",
+            "AutoPan",
+            "NoiseGate",
+            "Compressor",
+            "Eq",
+            "Volume",
+            "Buffer",
         ];
         for name in &names {
             let pedal = Pedal::from_name(name, 48000.0);

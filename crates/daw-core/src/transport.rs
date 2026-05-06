@@ -97,9 +97,13 @@ impl Transport {
         self.position_ticks += ticks;
 
         // Handle looping.
-        if self.loop_enabled && self.loop_end > self.loop_start && self.position_ticks >= self.loop_end {
+        if self.loop_enabled
+            && self.loop_end > self.loop_start
+            && self.position_ticks >= self.loop_end
+        {
             let loop_len = self.loop_end - self.loop_start;
-            self.position_ticks = self.loop_start + (self.position_ticks - self.loop_end) % loop_len;
+            self.position_ticks =
+                self.loop_start + (self.position_ticks - self.loop_end) % loop_len;
         }
 
         ticks
@@ -198,7 +202,11 @@ mod tests {
         // Advance 3 beats worth (1440 ticks). Should wrap around.
         transport.position_ticks = 900;
         transport.advance_samples(48000); // +960 ticks = 1860, wraps to 1860 - 960 = 900.
-        assert!(transport.position_ticks < 960, "position {} should be < 960", transport.position_ticks);
+        assert!(
+            transport.position_ticks < 960,
+            "position {} should be < 960",
+            transport.position_ticks
+        );
     }
 
     #[test]

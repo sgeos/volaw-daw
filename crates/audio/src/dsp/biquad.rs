@@ -89,14 +89,7 @@ impl Biquad {
                 let b0 = (1.0 + cos_w0) * 0.5;
                 (b0, b1, b0, 1.0 + alpha, -2.0 * cos_w0, 1.0 - alpha)
             }
-            BiquadType::Bandpass => (
-                alpha,
-                0.0,
-                -alpha,
-                1.0 + alpha,
-                -2.0 * cos_w0,
-                1.0 - alpha,
-            ),
+            BiquadType::Bandpass => (alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos_w0, 1.0 - alpha),
             BiquadType::Notch => (
                 1.0,
                 -2.0 * cos_w0,
@@ -202,7 +195,10 @@ mod tests {
         }
         lp.process(&mut buffer);
         // After settling, the output amplitude should be much smaller
-        let peak = buffer[200..].iter().map(|s| libm::fabs(*s)).fold(0.0f64, f64::max);
+        let peak = buffer[200..]
+            .iter()
+            .map(|s| libm::fabs(*s))
+            .fold(0.0f64, f64::max);
         assert!(peak < 0.1, "Expected attenuation, got peak {}", peak);
     }
 
@@ -226,13 +222,10 @@ mod tests {
         for (i, sample) in buffer.iter_mut().enumerate() {
             *sample = libm::sin(2.0 * PI * center * i as f64 / sr);
         }
-        let input_rms: f64 = libm::sqrt(
-            buffer.iter().map(|s| s * s).sum::<f64>() / buffer.len() as f64,
-        );
+        let input_rms: f64 =
+            libm::sqrt(buffer.iter().map(|s| s * s).sum::<f64>() / buffer.len() as f64);
         bp.process(&mut buffer);
-        let output_rms: f64 = libm::sqrt(
-            buffer[256..].iter().map(|s| s * s).sum::<f64>() / 256.0,
-        );
+        let output_rms: f64 = libm::sqrt(buffer[256..].iter().map(|s| s * s).sum::<f64>() / 256.0);
         // Output should retain significant energy at center frequency
         assert!(output_rms > input_rms * 0.3, "BPF should pass center freq");
     }

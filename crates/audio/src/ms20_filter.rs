@@ -185,8 +185,7 @@ impl Korg35Lpf {
             let denom = 1.0 + alpha * alpha * k;
 
             // Linear solution (initial guess).
-            let y2_lin =
-                (alpha * alpha * input + alpha * beta * self.s1 + beta * self.s2) / denom;
+            let y2_lin = (alpha * alpha * input + alpha * beta * self.s1 + beta * self.s2) / denom;
 
             // Newton step: f(y2) = y2 - [a^2*(input - k*tanh(y2*drive)/drive) + a*b*s1 + b*s2]
             // f'(y2) = 1 + a^2*k*sech^2(y2*drive)
@@ -194,8 +193,7 @@ impl Korg35Lpf {
             let sech2 = 1.0 - t * t;
             let fb_nl = t / drive;
             let f_val = y2_lin
-                - (alpha * alpha * (input - k * fb_nl) + alpha * beta * self.s1
-                    + beta * self.s2);
+                - (alpha * alpha * (input - k * fb_nl) + alpha * beta * self.s1 + beta * self.s2);
             let f_deriv = 1.0 + alpha * alpha * k * sech2;
             let y2 = y2_lin - f_val / f_deriv;
 
@@ -207,8 +205,7 @@ impl Korg35Lpf {
         } else {
             // Linear feedback: exact algebraic resolution.
             let denom = 1.0 + alpha * alpha * k;
-            let y2 =
-                (alpha * alpha * input + alpha * beta * self.s1 + beta * self.s2) / denom;
+            let y2 = (alpha * alpha * input + alpha * beta * self.s1 + beta * self.s2) / denom;
             let y1 = alpha * (input - k * y2) + beta * self.s1;
 
             self.s1 = 2.0 * y1 - self.s1;
@@ -254,7 +251,10 @@ mod tests {
             }
         }
 
-        assert!(energy > 1000.0, "HPF should pass high frequencies: {energy}");
+        assert!(
+            energy > 1000.0,
+            "HPF should pass high frequencies: {energy}"
+        );
     }
 
     #[test]

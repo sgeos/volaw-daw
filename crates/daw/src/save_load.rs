@@ -5,7 +5,12 @@ use daw_core::patch::{EffectChainConfig, PatchConfig};
 use daw_core::project::DawProject;
 
 /// Type alias for the loaded project data.
-type LoadedProject = (DawProject, [MidiTrack; 8], [PatchConfig; 8], [EffectChainConfig; 8]);
+type LoadedProject = (
+    DawProject,
+    [MidiTrack; 8],
+    [PatchConfig; 8],
+    [EffectChainConfig; 8],
+);
 
 /// Fixed subfolder names under the project root.
 const SAVES_DIR: &str = "saves";
@@ -78,8 +83,7 @@ pub fn save_project(
 
     // Save the project wrapper TOML.
     let project_path = saves_dir.join(format!("{filename}.toml"));
-    let toml =
-        toml::to_string_pretty(project).map_err(|e| format!("serialize project: {e}"))?;
+    let toml = toml::to_string_pretty(project).map_err(|e| format!("serialize project: {e}"))?;
     std::fs::write(&project_path, toml)
         .map_err(|e| format!("write {}: {e}", project_path.display()))?;
 
@@ -90,10 +94,7 @@ pub fn save_project(
 ///
 /// Reads the project TOML from `{root}/saves/{filename}.toml`, then loads
 /// all referenced patch, effect, and MIDI files from their folders.
-pub fn load_project(
-    root: &Path,
-    filename: &str,
-) -> Result<LoadedProject, String> {
+pub fn load_project(root: &Path, filename: &str) -> Result<LoadedProject, String> {
     let project_path = root.join(SAVES_DIR).join(format!("{filename}.toml"));
     let project_toml = std::fs::read_to_string(&project_path)
         .map_err(|e| format!("read {}: {e}", project_path.display()))?;

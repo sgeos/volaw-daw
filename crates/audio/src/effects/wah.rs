@@ -152,10 +152,8 @@ mod tests {
         wah_toe.process(&mut buf_toe, sr);
 
         // Different positions should produce different amplitudes for same tone
-        let rms_heel: f64 =
-            libm::sqrt(buf_heel[128..].iter().map(|s| s * s).sum::<f64>() / 128.0);
-        let rms_toe: f64 =
-            libm::sqrt(buf_toe[128..].iter().map(|s| s * s).sum::<f64>() / 128.0);
+        let rms_heel: f64 = libm::sqrt(buf_heel[128..].iter().map(|s| s * s).sum::<f64>() / 128.0);
+        let rms_toe: f64 = libm::sqrt(buf_toe[128..].iter().map(|s| s * s).sum::<f64>() / 128.0);
         assert!(
             (rms_heel - rms_toe).abs() > 0.001,
             "Different positions should produce different tones"

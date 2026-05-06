@@ -11,7 +11,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::midi::{MidiNote, MidiTrack, DEFAULT_TICKS_PER_BEAT};
+use crate::midi::{DEFAULT_TICKS_PER_BEAT, MidiNote, MidiTrack};
 
 /// Errors that can occur during SMF parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,25 +143,13 @@ fn parse_track(cursor: &mut Cursor<'_>, ticks_per_beat: u16) -> Result<MidiTrack
             // Channel event with new status byte.
             let status = cursor.read_u8()?;
             running_status = status;
-            parse_channel_event(
-                cursor,
-                status,
-                abs_tick,
-                &mut pending,
-                &mut notes,
-            )?;
+            parse_channel_event(cursor, status, abs_tick, &mut pending, &mut notes)?;
         } else {
             // Running status (no new status byte).
             if running_status == 0 {
                 return Err(SmfError::InvalidEvent(peek));
             }
-            parse_channel_event(
-                cursor,
-                running_status,
-                abs_tick,
-                &mut pending,
-                &mut notes,
-            )?;
+            parse_channel_event(cursor, running_status, abs_tick, &mut pending, &mut notes)?;
         }
     }
 
@@ -286,11 +274,18 @@ impl<'a> Cursor<'a> {
     }
 
     fn peek(&self) -> Result<u8, SmfError> {
-        self.data.get(self.pos).copied().ok_or(SmfError::UnexpectedEof)
+        self.data
+            .get(self.pos)
+            .copied()
+            .ok_or(SmfError::UnexpectedEof)
     }
 
     fn read_u8(&mut self) -> Result<u8, SmfError> {
-        let b = self.data.get(self.pos).copied().ok_or(SmfError::UnexpectedEof)?;
+        let b = self
+            .data
+            .get(self.pos)
+            .copied()
+            .ok_or(SmfError::UnexpectedEof)?;
         self.pos += 1;
         Ok(b)
     }
@@ -355,7 +350,13 @@ impl<'a> Cursor<'a> {
 /// exporting DAW compositions to standard .mid files. The output uses the
 /// given ticks per beat for timing resolution. The tempo and time signature
 /// are written as meta events at tick 0.
-pub fn build_smf(tracks: &[MidiTrack], ticks_per_beat: u16, tempo_bpm: f64, beats_per_bar: u8, beat_denominator: u8) -> Vec<u8> {
+pub fn build_smf(
+    tracks: &[MidiTrack],
+    ticks_per_beat: u16,
+    tempo_bpm: f64,
+    beats_per_bar: u8,
+    beat_denominator: u8,
+) -> Vec<u8> {
     // Collect all note events from all tracks with channel assignment.
     let mut events: Vec<(u64, u8, u8, u8, bool)> = Vec::new(); // (tick, channel, pitch, velocity, is_on)
 
@@ -388,13 +389,13 @@ pub fn build_smf(tracks: &[MidiTrack], ticks_per_beat: u16, tempo_bpm: f64, beat
     // nn = numerator (beats_per_bar), dd = denominator power (2^dd),
     // cc = MIDI clocks per metronome click (24), bb = 32nd notes per quarter (8).
     let denom_power = match beat_denominator {
-        1 => 0,   // 2^0 = 1
-        2 => 1,   // 2^1 = 2
-        4 => 2,   // 2^2 = 4
-        8 => 3,   // 2^3 = 8
-        16 => 4,  // 2^4 = 16
-        32 => 5,  // 2^5 = 32
-        _ => 2,   // Default to quarter note.
+        1 => 0,  // 2^0 = 1
+        2 => 1,  // 2^1 = 2
+        4 => 2,  // 2^2 = 4
+        8 => 3,  // 2^3 = 8
+        16 => 4, // 2^4 = 16
+        32 => 5, // 2^5 = 32
+        _ => 2,  // Default to quarter note.
     };
     write_var_len(&mut track_data, 0); // delta time = 0
     track_data.push(0xFF);
@@ -402,8 +403,8 @@ pub fn build_smf(tracks: &[MidiTrack], ticks_per_beat: u16, tempo_bpm: f64, beat
     track_data.push(0x04);
     track_data.push(beats_per_bar);
     track_data.push(denom_power);
-    track_data.push(24);   // MIDI clocks per metronome click
-    track_data.push(8);    // 32nd notes per quarter note
+    track_data.push(24); // MIDI clocks per metronome click
+    track_data.push(8); // 32nd notes per quarter note
 
     let mut prev_tick: u64 = 0;
 
@@ -704,9 +705,24 @@ mod tests {
     fn roundtrip_build_parse() {
         let track = MidiTrack {
             notes: vec![
-                MidiNote { tick: 0, duration: 480, pitch: 60, velocity: 100 },
-                MidiNote { tick: 480, duration: 240, pitch: 64, velocity: 80 },
-                MidiNote { tick: 720, duration: 480, pitch: 67, velocity: 90 },
+                MidiNote {
+                    tick: 0,
+                    duration: 480,
+                    pitch: 60,
+                    velocity: 100,
+                },
+                MidiNote {
+                    tick: 480,
+                    duration: 240,
+                    pitch: 64,
+                    velocity: 80,
+                },
+                MidiNote {
+                    tick: 720,
+                    duration: 480,
+                    pitch: 67,
+                    velocity: 90,
+                },
             ],
             ticks_per_beat: 480,
         };
@@ -787,11 +803,17 @@ mod tests {
     fn describe_import_format() {
         let result = SmfResult {
             tracks: vec![
-                MidiTrack { notes: vec![], ticks_per_beat: 480 },
                 MidiTrack {
-                    notes: vec![
-                        MidiNote { tick: 0, duration: 480, pitch: 60, velocity: 100 },
-                    ],
+                    notes: vec![],
+                    ticks_per_beat: 480,
+                },
+                MidiTrack {
+                    notes: vec![MidiNote {
+                        tick: 0,
+                        duration: 480,
+                        pitch: 60,
+                        velocity: 100,
+                    }],
                     ticks_per_beat: 480,
                 },
             ],
@@ -853,7 +875,14 @@ mod tests {
             expected_usec as u8,
         ];
         // Search for the tempo meta event (FF 51 03 + 3 bytes) in the file.
-        let pattern = [0xFF, 0x51, 0x03, tempo_bytes[0], tempo_bytes[1], tempo_bytes[2]];
+        let pattern = [
+            0xFF,
+            0x51,
+            0x03,
+            tempo_bytes[0],
+            tempo_bytes[1],
+            tempo_bytes[2],
+        ];
         let found = smf_data.windows(pattern.len()).any(|w| w == pattern);
         assert!(found, "tempo meta event not found in SMF data");
     }
@@ -870,9 +899,12 @@ mod tests {
     #[test]
     fn build_smf_roundtrip_with_tempo() {
         let track = MidiTrack {
-            notes: vec![
-                MidiNote { tick: 0, duration: 480, pitch: 60, velocity: 100 },
-            ],
+            notes: vec![MidiNote {
+                tick: 0,
+                duration: 480,
+                pitch: 60,
+                velocity: 100,
+            }],
             ticks_per_beat: 480,
         };
         let smf_data = build_smf(core::slice::from_ref(&track), 480, 90.0, 3, 4);

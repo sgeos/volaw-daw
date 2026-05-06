@@ -40,9 +40,19 @@ pub enum AudioCommand {
     /// Set VCO2 fine pitch in semitones (-12 to +12).
     SetVco2PitchFine(f64),
     /// Set envelope generator 1 parameters (attack, decay, sustain, release).
-    SetEg1Adsr { attack: f64, decay: f64, sustain: f64, release: f64 },
+    SetEg1Adsr {
+        attack: f64,
+        decay: f64,
+        sustain: f64,
+        release: f64,
+    },
     /// Set envelope generator 2 parameters (attack, decay, sustain, release).
-    SetEg2Adsr { attack: f64, decay: f64, sustain: f64, release: f64 },
+    SetEg2Adsr {
+        attack: f64,
+        decay: f64,
+        sustain: f64,
+        release: f64,
+    },
     /// Set LFO rate in Hz.
     SetLfoRate(f64),
     /// Set channel volume (left, right).
@@ -71,10 +81,7 @@ fn extract_f64(val: &Value) -> Result<f64, VmError> {
 ///
 /// These closures push AudioCommands to the shared buffer when called.
 /// The host reads the buffer after each tick and applies commands to the engine.
-fn register_audio_command_natives(
-    vm: &mut Vm,
-    commands: &Rc<RefCell<Vec<AudioCommand>>>,
-) {
+fn register_audio_command_natives(vm: &mut Vm, commands: &Rc<RefCell<Vec<AudioCommand>>>) {
     // audio::note_on(freq: f64, velocity: f64) -> ()
     let cmds = commands.clone();
     vm.register_native_closure("audio::note_on", move |args| {
@@ -172,8 +179,7 @@ fn register_audio_command_natives(
             )));
         }
         let res = extract_f64(&args[0])?;
-        cmds.borrow_mut()
-            .push(AudioCommand::SetHpfResonance(res));
+        cmds.borrow_mut().push(AudioCommand::SetHpfResonance(res));
         Ok(Value::Unit)
     });
 
@@ -201,8 +207,7 @@ fn register_audio_command_natives(
             )));
         }
         let st = extract_f64(&args[0])?;
-        cmds.borrow_mut()
-            .push(AudioCommand::SetVco1PitchFine(st));
+        cmds.borrow_mut().push(AudioCommand::SetVco1PitchFine(st));
         Ok(Value::Unit)
     });
 
@@ -216,8 +221,7 @@ fn register_audio_command_natives(
             )));
         }
         let st = extract_f64(&args[0])?;
-        cmds.borrow_mut()
-            .push(AudioCommand::SetVco2PitchFine(st));
+        cmds.borrow_mut().push(AudioCommand::SetVco2PitchFine(st));
         Ok(Value::Unit)
     });
 
@@ -319,8 +323,7 @@ fn register_audio_command_natives(
             )));
         }
         let w = extract_f64(&args[0])?;
-        cmds.borrow_mut()
-            .push(AudioCommand::SetVco1PulseWidth(w));
+        cmds.borrow_mut().push(AudioCommand::SetVco1PulseWidth(w));
         Ok(Value::Unit)
     });
 
@@ -334,8 +337,7 @@ fn register_audio_command_natives(
             )));
         }
         let w = extract_f64(&args[0])?;
-        cmds.borrow_mut()
-            .push(AudioCommand::SetVco2PulseWidth(w));
+        cmds.borrow_mut().push(AudioCommand::SetVco2PulseWidth(w));
         Ok(Value::Unit)
     });
 }
@@ -365,16 +367,13 @@ impl ScriptRunner {
     /// Registers both pure audio utility functions (midi_to_freq, etc.)
     /// and audio command functions (note_on, set_lpf_cutoff, etc.).
     pub fn from_source(source: &str) -> Result<Self, ScriptError> {
-        let tokens = tokenize(source)
-            .map_err(|e| ScriptError(format!("lex error: {:?}", e)))?;
-        let program = parse(&tokens)
-            .map_err(|e| ScriptError(format!("parse error: {:?}", e)))?;
-        let module = compile(&program)
-            .map_err(|e| ScriptError(format!("compile error: {:?}", e)))?;
+        let tokens = tokenize(source).map_err(|e| ScriptError(format!("lex error: {:?}", e)))?;
+        let program = parse(&tokens).map_err(|e| ScriptError(format!("parse error: {:?}", e)))?;
+        let module =
+            compile(&program).map_err(|e| ScriptError(format!("compile error: {:?}", e)))?;
 
-        let mut vm = Vm::new(module);
-        let commands: Rc<RefCell<Vec<AudioCommand>>> =
-            Rc::new(RefCell::new(Vec::new()));
+        let mut vm = Vm::new(module).map_err(|e| ScriptError(format!("verify error: {:?}", e)))?;
+        let commands: Rc<RefCell<Vec<AudioCommand>>> = Rc::new(RefCell::new(Vec::new()));
 
         // Register pure utility natives.
         keleusma::audio_natives::register_audio_natives(&mut vm);
@@ -394,12 +393,7 @@ impl ScriptRunner {
     /// The script receives a `TickState` struct with transport position
     /// and timing information. Returns any audio commands produced during
     /// execution. Errors are stored in `last_error` but do not propagate.
-    pub fn tick(
-        &mut self,
-        position_ticks: u64,
-        tempo: f64,
-        beat: f64,
-    ) -> Vec<AudioCommand> {
+    pub fn tick(&mut self, position_ticks: u64, tempo: f64, beat: f64) -> Vec<AudioCommand> {
         let state = Value::Struct {
             type_name: String::from("TickState"),
             fields: alloc::vec![
@@ -409,15 +403,29 @@ impl ScriptRunner {
             ],
         };
 
-        let result = if !self.started {
+        // Drive the VM until it yields, finishes, or errors. A loop
+        // function emits VmState::Reset between iterations to clear its
+        // arena. The host resumes with the same input on Reset so that
+        // the next iteration executes within the same host tick.
+        let mut result = if !self.started {
             self.started = true;
-            self.vm.call(&[state])
+            self.vm.call(core::slice::from_ref(&state))
         } else {
-            self.vm.resume(state)
+            self.vm.resume(state.clone())
         };
+        // Cap the inner resume loop to bound execution per tick. A
+        // pathological script could otherwise spin on Reset forever.
+        let mut budget = 16usize;
+        while let Ok(VmState::Reset) = &result {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            result = self.vm.resume(state.clone());
+        }
 
         match result {
-            Ok(VmState::Yielded(_)) | Ok(VmState::Finished(_)) => {
+            Ok(VmState::Yielded(_)) | Ok(VmState::Finished(_)) | Ok(VmState::Reset) => {
                 self.last_error = None;
             }
             Err(e) => {
@@ -438,11 +446,7 @@ impl ScriptRunner {
 ///
 /// Each command modifies the synthesizer or channel parameters.
 /// Commands are applied in order.
-pub fn apply_commands(
-    engine: &mut AudioEngine,
-    channel: usize,
-    commands: &[AudioCommand],
-) {
+pub fn apply_commands(engine: &mut AudioEngine, channel: usize, commands: &[AudioCommand]) {
     for cmd in commands {
         match cmd {
             AudioCommand::NoteOn { freq, velocity } => {

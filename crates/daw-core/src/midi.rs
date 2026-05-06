@@ -63,7 +63,8 @@ impl MidiTrack {
 
     /// Sort notes by start tick, then by pitch (ascending).
     pub fn sort(&mut self) {
-        self.notes.sort_by(|a, b| a.tick.cmp(&b.tick).then(a.pitch.cmp(&b.pitch)));
+        self.notes
+            .sort_by(|a, b| a.tick.cmp(&b.tick).then(a.pitch.cmp(&b.pitch)));
     }
 
     /// Check whether the track is monophonic (no overlapping notes).
@@ -214,9 +215,24 @@ mod tests {
     fn non_overlapping_is_monophonic() {
         let track = MidiTrack {
             notes: alloc::vec![
-                MidiNote { tick: 0, duration: 480, pitch: 60, velocity: 100 },
-                MidiNote { tick: 480, duration: 480, pitch: 64, velocity: 100 },
-                MidiNote { tick: 960, duration: 480, pitch: 67, velocity: 100 },
+                MidiNote {
+                    tick: 0,
+                    duration: 480,
+                    pitch: 60,
+                    velocity: 100
+                },
+                MidiNote {
+                    tick: 480,
+                    duration: 480,
+                    pitch: 64,
+                    velocity: 100
+                },
+                MidiNote {
+                    tick: 960,
+                    duration: 480,
+                    pitch: 67,
+                    velocity: 100
+                },
             ],
             ticks_per_beat: 480,
         };
@@ -227,8 +243,18 @@ mod tests {
     fn overlapping_is_not_monophonic() {
         let track = MidiTrack {
             notes: alloc::vec![
-                MidiNote { tick: 0, duration: 600, pitch: 60, velocity: 100 },
-                MidiNote { tick: 480, duration: 480, pitch: 64, velocity: 100 },
+                MidiNote {
+                    tick: 0,
+                    duration: 600,
+                    pitch: 60,
+                    velocity: 100
+                },
+                MidiNote {
+                    tick: 480,
+                    duration: 480,
+                    pitch: 64,
+                    velocity: 100
+                },
             ],
             ticks_per_beat: 480,
         };
@@ -239,8 +265,18 @@ mod tests {
     fn autofix_latest_truncates_earlier() {
         let mut track = MidiTrack {
             notes: alloc::vec![
-                MidiNote { tick: 0, duration: 600, pitch: 60, velocity: 100 },
-                MidiNote { tick: 480, duration: 480, pitch: 64, velocity: 100 },
+                MidiNote {
+                    tick: 0,
+                    duration: 600,
+                    pitch: 60,
+                    velocity: 100
+                },
+                MidiNote {
+                    tick: 480,
+                    duration: 480,
+                    pitch: 64,
+                    velocity: 100
+                },
             ],
             ticks_per_beat: 480,
         };
@@ -254,8 +290,18 @@ mod tests {
     fn autofix_highest_keeps_higher_pitch() {
         let mut track = MidiTrack {
             notes: alloc::vec![
-                MidiNote { tick: 0, duration: 600, pitch: 72, velocity: 100 },
-                MidiNote { tick: 480, duration: 480, pitch: 60, velocity: 100 },
+                MidiNote {
+                    tick: 0,
+                    duration: 600,
+                    pitch: 72,
+                    velocity: 100
+                },
+                MidiNote {
+                    tick: 480,
+                    duration: 480,
+                    pitch: 60,
+                    velocity: 100
+                },
             ],
             ticks_per_beat: 480,
         };
@@ -271,8 +317,18 @@ mod tests {
     fn autofix_lowest_keeps_lower_pitch() {
         let mut track = MidiTrack {
             notes: alloc::vec![
-                MidiNote { tick: 0, duration: 600, pitch: 72, velocity: 100 },
-                MidiNote { tick: 480, duration: 480, pitch: 60, velocity: 100 },
+                MidiNote {
+                    tick: 0,
+                    duration: 600,
+                    pitch: 72,
+                    velocity: 100
+                },
+                MidiNote {
+                    tick: 480,
+                    duration: 480,
+                    pitch: 60,
+                    velocity: 100
+                },
             ],
             ticks_per_beat: 480,
         };
@@ -287,8 +343,18 @@ mod tests {
     fn autofix_removes_zero_duration() {
         let mut track = MidiTrack {
             notes: alloc::vec![
-                MidiNote { tick: 0, duration: 960, pitch: 72, velocity: 100 },
-                MidiNote { tick: 480, duration: 100, pitch: 60, velocity: 100 },
+                MidiNote {
+                    tick: 0,
+                    duration: 960,
+                    pitch: 72,
+                    velocity: 100
+                },
+                MidiNote {
+                    tick: 480,
+                    duration: 100,
+                    pitch: 60,
+                    velocity: 100
+                },
             ],
             ticks_per_beat: 480,
         };
@@ -328,11 +394,11 @@ mod tests {
 
     #[test]
     fn black_keys() {
-        assert!(MidiTrack::is_black_key(61));  // C#
-        assert!(MidiTrack::is_black_key(63));  // D#
-        assert!(MidiTrack::is_black_key(66));  // F#
-        assert!(MidiTrack::is_black_key(68));  // G#
-        assert!(MidiTrack::is_black_key(70));  // A#
+        assert!(MidiTrack::is_black_key(61)); // C#
+        assert!(MidiTrack::is_black_key(63)); // D#
+        assert!(MidiTrack::is_black_key(66)); // F#
+        assert!(MidiTrack::is_black_key(68)); // G#
+        assert!(MidiTrack::is_black_key(70)); // A#
         assert!(!MidiTrack::is_black_key(60)); // C
         assert!(!MidiTrack::is_black_key(64)); // E
         assert!(!MidiTrack::is_black_key(65)); // F
@@ -342,9 +408,24 @@ mod tests {
     fn sort_by_tick() {
         let mut track = MidiTrack {
             notes: alloc::vec![
-                MidiNote { tick: 960, duration: 480, pitch: 67, velocity: 100 },
-                MidiNote { tick: 0, duration: 480, pitch: 60, velocity: 100 },
-                MidiNote { tick: 480, duration: 480, pitch: 64, velocity: 100 },
+                MidiNote {
+                    tick: 960,
+                    duration: 480,
+                    pitch: 67,
+                    velocity: 100
+                },
+                MidiNote {
+                    tick: 0,
+                    duration: 480,
+                    pitch: 60,
+                    velocity: 100
+                },
+                MidiNote {
+                    tick: 480,
+                    duration: 480,
+                    pitch: 64,
+                    velocity: 100
+                },
             ],
             ticks_per_beat: 480,
         };

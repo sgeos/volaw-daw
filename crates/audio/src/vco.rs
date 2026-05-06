@@ -226,11 +226,7 @@ fn sawtooth(phase: f64) -> f64 {
 /// narrow pulses.
 fn pw_square(phase: f64, pulse_width: f64) -> f64 {
     let pw = pulse_width.clamp(0.01, 0.99);
-    if phase < pw {
-        1.0
-    } else {
-        -1.0
-    }
+    if phase < pw { 1.0 } else { -1.0 }
 }
 
 /// Sine wave from phase (0.0 to 1.0). Output: -1.0 to +1.0.
@@ -332,7 +328,10 @@ mod tests {
         let mut state = 0x12345678_9ABCDEF0u64;
         for _ in 0..1000 {
             let sample = white_noise(&mut state);
-            assert!((-1.0..=1.0).contains(&sample), "Noise sample out of range: {sample}");
+            assert!(
+                (-1.0..=1.0).contains(&sample),
+                "Noise sample out of range: {sample}"
+            );
         }
     }
 
@@ -341,7 +340,10 @@ mod tests {
         let mut state = 0x12345678_9ABCDEF0u64;
         let s1 = white_noise(&mut state);
         let s2 = white_noise(&mut state);
-        assert!((s1 - s2).abs() > 1e-10, "Sequential noise samples should differ");
+        assert!(
+            (s1 - s2).abs() > 1e-10,
+            "Sequential noise samples should differ"
+        );
     }
 
     #[test]
@@ -352,10 +354,16 @@ mod tests {
 
         // At extremes, should stay at extremes.
         let q_max = quantize_amplitude(1.0, 4);
-        assert!((q_max - 1.0).abs() < 1e-10, "1.0 should quantize to 1.0: {q_max}");
+        assert!(
+            (q_max - 1.0).abs() < 1e-10,
+            "1.0 should quantize to 1.0: {q_max}"
+        );
 
         let q_min = quantize_amplitude(-1.0, 4);
-        assert!((q_min - (-1.0)).abs() < 1e-10, "-1.0 should quantize to -1.0: {q_min}");
+        assert!(
+            (q_min - (-1.0)).abs() < 1e-10,
+            "-1.0 should quantize to -1.0: {q_min}"
+        );
     }
 
     #[test]
@@ -397,7 +405,10 @@ mod tests {
     #[test]
     fn fine_pitch_one_octave_down() {
         let m = fine_pitch_multiplier(-12.0);
-        assert!((m - 0.5).abs() < 1e-10, "-12 semitones = -1 octave = 0.5x: {m}");
+        assert!(
+            (m - 0.5).abs() < 1e-10,
+            "-12 semitones = -1 octave = 0.5x: {m}"
+        );
     }
 
     #[test]
@@ -497,7 +508,11 @@ mod tests {
                     break;
                 }
             }
-            assert!(has_nonzero, "Waveform {:?} should produce non-zero output", wf);
+            assert!(
+                has_nonzero,
+                "Waveform {:?} should produce non-zero output",
+                wf
+            );
         }
     }
 
@@ -568,7 +583,10 @@ mod tests {
                 break;
             }
         }
-        assert!(has_nonzero, "PCM with loaded wavetable should produce output");
+        assert!(
+            has_nonzero,
+            "PCM with loaded wavetable should produce output"
+        );
     }
 
     #[test]

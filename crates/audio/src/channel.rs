@@ -153,8 +153,10 @@ impl Channel {
         );
 
         // Post-positional per-speaker pedal chains.
-        self.post_pedals_left.process(&mut left_out[..len], sample_rate);
-        self.post_pedals_right.process(&mut right_out[..len], sample_rate);
+        self.post_pedals_left
+            .process(&mut left_out[..len], sample_rate);
+        self.post_pedals_right
+            .process(&mut right_out[..len], sample_rate);
 
         // Apply per-channel volume trim.
         let vol_l = self.volume_left;

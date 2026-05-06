@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::channel::{clamp_volume, Channel};
+use crate::channel::{Channel, clamp_volume};
 use crate::limiter::LookaheadLimiter;
 use crate::metronome::Metronome;
 

@@ -479,9 +479,7 @@ impl Ms20Voice {
                 let eg2_mod = eg2_val * vel_env_scale;
 
                 // Compute keyboard tracking (normalized: C2=0, C7=1).
-                let key_track = ((libm::log2(voice.note_freq.max(1.0))
-                    - libm::log2(65.41))
-                    / 5.0)
+                let key_track = ((libm::log2(voice.note_freq.max(1.0)) - libm::log2(65.41)) / 5.0)
                     .clamp(0.0, 1.0);
 
                 // Compute modulation outputs.
@@ -602,14 +600,16 @@ impl Ms20Voice {
     /// lowest note for Low mode. Panics if held_notes is empty.
     fn mono_select_note(&self) -> (f64, f64) {
         let note = match self.voice_mode {
-            VoiceMode::High(_) => self
-                .held_notes
-                .iter()
-                .max_by(|a, b| a.freq.partial_cmp(&b.freq).unwrap_or(core::cmp::Ordering::Equal)),
-            VoiceMode::Low(_) => self
-                .held_notes
-                .iter()
-                .min_by(|a, b| a.freq.partial_cmp(&b.freq).unwrap_or(core::cmp::Ordering::Equal)),
+            VoiceMode::High(_) => self.held_notes.iter().max_by(|a, b| {
+                a.freq
+                    .partial_cmp(&b.freq)
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            }),
+            VoiceMode::Low(_) => self.held_notes.iter().min_by(|a, b| {
+                a.freq
+                    .partial_cmp(&b.freq)
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            }),
         };
         let n = note.expect("held_notes must not be empty when selecting");
         (n.freq, n.velocity)
@@ -840,9 +840,16 @@ mod tests {
             freqs.push(glide.tick(48000.0));
         }
 
-        assert!(freqs[0] < 500.0, "Glide should start near source: {}", freqs[0]);
+        assert!(
+            freqs[0] < 500.0,
+            "Glide should start near source: {}",
+            freqs[0]
+        );
         let last = freqs[freqs.len() - 1];
-        assert!((last - 880.0).abs() < 10.0, "Glide should end near target: {last}");
+        assert!(
+            (last - 880.0).abs() < 10.0,
+            "Glide should end near target: {last}"
+        );
 
         let increasing = freqs.windows(2).filter(|w| w[1] > w[0]).count();
         assert!(
@@ -871,7 +878,10 @@ mod tests {
                 max_freq = f;
             }
         }
-        assert!(max_freq > 880.0, "Overshoot should exceed target: {max_freq}");
+        assert!(
+            max_freq > 880.0,
+            "Overshoot should exceed target: {max_freq}"
+        );
     }
 
     #[test]
@@ -885,7 +895,10 @@ mod tests {
         }
         glide.reset();
         let freq = glide.current_freq();
-        assert!((freq - 440.0).abs() < 1e-6, "Reset should return to default: {freq}");
+        assert!(
+            (freq - 440.0).abs() < 1e-6,
+            "Reset should return to default: {freq}"
+        );
     }
 
     #[test]
@@ -1221,7 +1234,10 @@ mod tests {
         let mut buf = [0.0f64; 4800];
         synth.process(&mut buf, 48000);
         let energy: f64 = buf.iter().map(|s| s * s).sum();
-        assert!(energy > 0.001, "Additive mix should produce output: {energy}");
+        assert!(
+            energy > 0.001,
+            "Additive mix should produce output: {energy}"
+        );
     }
 
     #[test]
@@ -1330,5 +1346,4 @@ mod tests {
         );
         assert!(energy2 > 0.1, "Second note should produce audible output");
     }
-
 }

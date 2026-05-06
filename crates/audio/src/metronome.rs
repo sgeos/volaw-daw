@@ -132,7 +132,9 @@ mod tests {
         m.click_beat(48000);
         let mut buf = [0.0f64; 128];
         m.render(&mut buf);
-        let max = buf.iter().fold(0.0f64, |a, &b| if b.abs() > a { b.abs() } else { a });
+        let max = buf
+            .iter()
+            .fold(0.0f64, |a, &b| if b.abs() > a { b.abs() } else { a });
         assert!(max > 0.01, "expected nonzero audio, got max {max}");
     }
 

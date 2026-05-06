@@ -12,8 +12,7 @@ pub unsafe fn translate_event(event: &SDL_Event) -> Option<DawInput> {
     let event_type = unsafe { event.r#type };
 
     // Quit events.
-    if event_type == SDL_EventType::QUIT.0
-        || event_type == SDL_EventType::WINDOW_CLOSE_REQUESTED.0
+    if event_type == SDL_EventType::QUIT.0 || event_type == SDL_EventType::WINDOW_CLOSE_REQUESTED.0
     {
         return Some(DawInput::Quit);
     }
@@ -25,8 +24,7 @@ pub unsafe fn translate_event(event: &SDL_Event) -> Option<DawInput> {
             return None;
         }
         // Check for modifier key combinations (Ctrl or Cmd on macOS).
-        let has_ctrl = (key.r#mod.0 & SDL_KMOD_CTRL.0) != 0
-            || (key.r#mod.0 & SDL_KMOD_GUI.0) != 0;
+        let has_ctrl = (key.r#mod.0 & SDL_KMOD_CTRL.0) != 0 || (key.r#mod.0 & SDL_KMOD_GUI.0) != 0;
         let has_shift = (key.r#mod.0 & SDL_KMOD_SHIFT.0) != 0;
         if has_ctrl && has_shift {
             return translate_ctrl_shift_scancode(key.scancode);

@@ -99,7 +99,10 @@ mod tests {
         let mut buffer = [9.9f64; 4];
         input.process(&mut buffer);
         for s in &buffer {
-            assert!(s.abs() < f64::EPSILON, "inactive input should write silence");
+            assert!(
+                s.abs() < f64::EPSILON,
+                "inactive input should write silence"
+            );
         }
         // Samples should still be in queue since inactive does not consume.
         assert_eq!(input.queued(), 3);

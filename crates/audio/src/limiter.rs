@@ -137,11 +137,7 @@ impl LookaheadLimiter {
             }
 
             // Window maximum.
-            let window_max = self
-                .peak_deque
-                .front()
-                .map(|&(_, v)| v)
-                .unwrap_or(0.0);
+            let window_max = self.peak_deque.front().map(|&(_, v)| v).unwrap_or(0.0);
 
             // Target gain: reduce only when window max exceeds ceiling.
             let target_gain = if window_max > self.ceiling {
@@ -154,8 +150,8 @@ impl LookaheadLimiter {
             if target_gain < self.gain {
                 self.gain = target_gain;
             } else {
-                self.gain = self.release_coeff * self.gain
-                    + (1.0 - self.release_coeff) * target_gain;
+                self.gain =
+                    self.release_coeff * self.gain + (1.0 - self.release_coeff) * target_gain;
             }
 
             // Read delayed samples and apply gain.
@@ -311,10 +307,7 @@ mod tests {
         limiter.process_interleaved(&mut buf);
 
         for (i, sample) in buf.iter().enumerate() {
-            assert!(
-                sample.is_finite(),
-                "Sample {i} is not finite: {sample}"
-            );
+            assert!(sample.is_finite(), "Sample {i} is not finite: {sample}");
         }
     }
 
@@ -349,8 +342,8 @@ mod tests {
         // At the end of the quiet period, gain should have recovered
         // close to 1.0, so output should be close to 0.3.
         let tail_start = total - 4800; // last 100ms
-        let tail_avg: f64 = out_l[tail_start..total].iter().sum::<f64>()
-            / (total - tail_start) as f64;
+        let tail_avg: f64 =
+            out_l[tail_start..total].iter().sum::<f64>() / (total - tail_start) as f64;
         assert!(
             (tail_avg - 0.3).abs() < 0.05,
             "Gain did not recover: tail average {tail_avg}, expected ~0.3"

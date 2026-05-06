@@ -13,13 +13,26 @@ use audio::NUM_CHANNELS;
 /// A command sent from the UI thread to the audio thread.
 pub enum EngineCommand {
     // -- Note events (hot path) --
-    NoteOn { channel: u8, freq: f64, velocity: f64 },
-    NoteOff { channel: u8 },
-    NoteOffFreq { channel: u8, freq: f64 },
+    NoteOn {
+        channel: u8,
+        freq: f64,
+        velocity: f64,
+    },
+    NoteOff {
+        channel: u8,
+    },
+    NoteOffFreq {
+        channel: u8,
+        freq: f64,
+    },
 
     // -- Metronome (hot path) --
-    ClickBeat { sample_rate: u32 },
-    ClickDownbeat { sample_rate: u32 },
+    ClickBeat {
+        sample_rate: u32,
+    },
+    ClickDownbeat {
+        sample_rate: u32,
+    },
 
     // -- Positional updates (hot path) --
     SetPosition {
@@ -30,18 +43,48 @@ pub enum EngineCommand {
     },
 
     // -- Channel configuration (warm path) --
-    SetChannelEnabled { channel: u8, enabled: bool },
-    SetChannelVolume { channel: u8, left: f64, right: f64 },
-    SetMetronomeEnabled { enabled: bool },
+    SetChannelEnabled {
+        channel: u8,
+        enabled: bool,
+    },
+    SetChannelVolume {
+        channel: u8,
+        left: f64,
+        right: f64,
+    },
+    SetMetronomeEnabled {
+        enabled: bool,
+    },
 
     // -- Script-generated parameter changes (hot path) --
-    SetLpfCutoff { channel: u8, value: f64 },
-    SetLpfResonance { channel: u8, value: f64 },
-    SetHpfCutoff { channel: u8, value: f64 },
-    SetHpfResonance { channel: u8, value: f64 },
-    SetVcoMix { channel: u8, value: f64 },
-    SetVco1PitchFine { channel: u8, value: f64 },
-    SetVco2PitchFine { channel: u8, value: f64 },
+    SetLpfCutoff {
+        channel: u8,
+        value: f64,
+    },
+    SetLpfResonance {
+        channel: u8,
+        value: f64,
+    },
+    SetHpfCutoff {
+        channel: u8,
+        value: f64,
+    },
+    SetHpfResonance {
+        channel: u8,
+        value: f64,
+    },
+    SetVcoMix {
+        channel: u8,
+        value: f64,
+    },
+    SetVco1PitchFine {
+        channel: u8,
+        value: f64,
+    },
+    SetVco2PitchFine {
+        channel: u8,
+        value: f64,
+    },
     SetEg1Adsr {
         channel: u8,
         attack: f64,
@@ -56,11 +99,27 @@ pub enum EngineCommand {
         sustain: f64,
         release: f64,
     },
-    SetLfoRate { channel: u8, value: f64 },
-    SetVolume { channel: u8, left: f64, right: f64 },
-    SetPan { channel: u8, pan: f64 },
-    SetVco1PulseWidth { channel: u8, value: f64 },
-    SetVco2PulseWidth { channel: u8, value: f64 },
+    SetLfoRate {
+        channel: u8,
+        value: f64,
+    },
+    SetVolume {
+        channel: u8,
+        left: f64,
+        right: f64,
+    },
+    SetPan {
+        channel: u8,
+        pan: f64,
+    },
+    SetVco1PulseWidth {
+        channel: u8,
+        value: f64,
+    },
+    SetVco2PulseWidth {
+        channel: u8,
+        value: f64,
+    },
 
     // -- Bulk mutation (cold path) --
     /// Boxed closure for complex operations that cannot be expressed
@@ -297,34 +356,13 @@ pub fn audio_command_to_engine_command(
             channel,
             freq: *freq,
         },
-        AudioCommand::SetLpfCutoff(v) => EngineCommand::SetLpfCutoff {
-            channel,
-            value: *v,
-        },
-        AudioCommand::SetLpfResonance(v) => EngineCommand::SetLpfResonance {
-            channel,
-            value: *v,
-        },
-        AudioCommand::SetHpfCutoff(v) => EngineCommand::SetHpfCutoff {
-            channel,
-            value: *v,
-        },
-        AudioCommand::SetHpfResonance(v) => EngineCommand::SetHpfResonance {
-            channel,
-            value: *v,
-        },
-        AudioCommand::SetVcoMix(v) => EngineCommand::SetVcoMix {
-            channel,
-            value: *v,
-        },
-        AudioCommand::SetVco1PitchFine(v) => EngineCommand::SetVco1PitchFine {
-            channel,
-            value: *v,
-        },
-        AudioCommand::SetVco2PitchFine(v) => EngineCommand::SetVco2PitchFine {
-            channel,
-            value: *v,
-        },
+        AudioCommand::SetLpfCutoff(v) => EngineCommand::SetLpfCutoff { channel, value: *v },
+        AudioCommand::SetLpfResonance(v) => EngineCommand::SetLpfResonance { channel, value: *v },
+        AudioCommand::SetHpfCutoff(v) => EngineCommand::SetHpfCutoff { channel, value: *v },
+        AudioCommand::SetHpfResonance(v) => EngineCommand::SetHpfResonance { channel, value: *v },
+        AudioCommand::SetVcoMix(v) => EngineCommand::SetVcoMix { channel, value: *v },
+        AudioCommand::SetVco1PitchFine(v) => EngineCommand::SetVco1PitchFine { channel, value: *v },
+        AudioCommand::SetVco2PitchFine(v) => EngineCommand::SetVco2PitchFine { channel, value: *v },
         AudioCommand::SetEg1Adsr {
             attack,
             decay,
@@ -349,26 +387,18 @@ pub fn audio_command_to_engine_command(
             sustain: *sustain,
             release: *release,
         },
-        AudioCommand::SetLfoRate(v) => EngineCommand::SetLfoRate {
-            channel,
-            value: *v,
-        },
+        AudioCommand::SetLfoRate(v) => EngineCommand::SetLfoRate { channel, value: *v },
         AudioCommand::SetVolume { left, right } => EngineCommand::SetVolume {
             channel,
             left: *left,
             right: *right,
         },
-        AudioCommand::SetPan(v) => EngineCommand::SetPan {
-            channel,
-            pan: *v,
-        },
-        AudioCommand::SetVco1PulseWidth(v) => EngineCommand::SetVco1PulseWidth {
-            channel,
-            value: *v,
-        },
-        AudioCommand::SetVco2PulseWidth(v) => EngineCommand::SetVco2PulseWidth {
-            channel,
-            value: *v,
-        },
+        AudioCommand::SetPan(v) => EngineCommand::SetPan { channel, pan: *v },
+        AudioCommand::SetVco1PulseWidth(v) => {
+            EngineCommand::SetVco1PulseWidth { channel, value: *v }
+        }
+        AudioCommand::SetVco2PulseWidth(v) => {
+            EngineCommand::SetVco2PulseWidth { channel, value: *v }
+        }
     }
 }

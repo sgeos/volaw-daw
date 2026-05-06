@@ -20,8 +20,8 @@
 
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Cache-line-aligned wrapper to prevent false sharing between
 /// the head and tail atomic counters.
@@ -241,8 +241,7 @@ mod tests {
 
     #[test]
     fn boxed_closure() {
-        let (mut tx, mut rx) =
-            ring_buffer::<Box<dyn FnOnce() -> i32 + Send>>(4);
+        let (mut tx, mut rx) = ring_buffer::<Box<dyn FnOnce() -> i32 + Send>>(4);
         assert!(tx.push(Box::new(|| 42)).is_ok());
         let f = rx.pop().unwrap();
         assert_eq!(f(), 42);

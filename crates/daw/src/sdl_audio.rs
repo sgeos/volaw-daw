@@ -1,7 +1,7 @@
 use audio::AudioEngine;
 use sdl3_sys::audio::*;
 
-use crate::engine_command::{apply_engine_command, EngineCommand};
+use crate::engine_command::{EngineCommand, apply_engine_command};
 use crate::ring_buffer::Consumer;
 
 /// Audio thread state: owns the engine, command consumer, and pre-allocated
@@ -25,7 +25,11 @@ pub struct AudioThread {
 impl AudioThread {
     /// Create a new audio thread state with the given engine, command
     /// consumer, and staging buffer capacity (in f64 samples).
-    pub fn new(engine: AudioEngine, consumer: Consumer<EngineCommand>, staging_capacity: usize) -> Self {
+    pub fn new(
+        engine: AudioEngine,
+        consumer: Consumer<EngineCommand>,
+        staging_capacity: usize,
+    ) -> Self {
         Self {
             engine,
             consumer,

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::ffi::{CString, c_char, c_float, c_int};
 
 use daw_core::render::{Color, FontSize, Renderer};
-use sdl3_sys::render::*;
 use sdl3_sys::rect::SDL_FRect;
+use sdl3_sys::render::*;
 use sdl3_sys::video::*;
 use sdl3_ttf_sys::everything::*;
 
@@ -33,11 +33,12 @@ impl SdlRenderer {
     /// Create a new SDL3 renderer with a window of the given dimensions.
     pub fn new(title: &str, width: u32, height: u32, font_path: &str) -> Result<Self, String> {
         let c_title = CString::new(title).map_err(|e| format!("invalid title: {e}"))?;
-        let c_font_path =
-            CString::new(font_path).map_err(|e| format!("invalid font path: {e}"))?;
+        let c_font_path = CString::new(font_path).map_err(|e| format!("invalid font path: {e}"))?;
 
         unsafe {
-            if !sdl3_sys::init::SDL_Init(sdl3_sys::init::SDL_INIT_VIDEO | sdl3_sys::init::SDL_INIT_AUDIO) {
+            if !sdl3_sys::init::SDL_Init(
+                sdl3_sys::init::SDL_INIT_VIDEO | sdl3_sys::init::SDL_INIT_AUDIO,
+            ) {
                 return Err(sdl_error("SDL_Init"));
             }
 

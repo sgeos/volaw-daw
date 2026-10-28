@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: build / test / clippy / fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install SDL3 build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake \
+            ninja-build \
+            pkg-config \
+            build-essential \
+            libasound2-dev \
+            libpulse-dev \
+            libudev-dev \
+            libx11-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxss-dev \
+            libxtst-dev \
+            libxkbfile-dev \
+            libfreetype-dev \
+            libharfbuzz-dev \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libgles2-mesa-dev \
+            libdbus-1-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libdrm-dev \
+            libgbm-dev
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry, git database, and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo build --workspace --all-targets
+        run: cargo build --workspace --all-targets
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+      - name: cargo clippy --workspace --tests -- -D warnings
+        run: cargo clippy --workspace --tests -- -D warnings

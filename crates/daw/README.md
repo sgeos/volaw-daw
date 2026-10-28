@@ -1,6 +1,6 @@
 # Vows of Love and War - Composer
 
-> [Top-level README](../../README.md) | [Server README](../server/README.md) | [Client README](../client/README.md)
+> [Top-level README](../../README.md)
 
 SDL3-based Digital Audio Workstation (DAW) for composing music using the game audio engine. An 8-channel MIDI sequencer with piano roll editing, velocity lane, patch preset selection, effect chains, Keleusma scripting, and real-time audio playback through the MS-20 synthesizer architecture.
 

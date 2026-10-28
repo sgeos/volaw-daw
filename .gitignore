@@ -1,0 +1,22 @@
+# Build artifacts
+/target
+**/target
+
+# Editor and IDE
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project-local temporary files
+/tmp/
+crates/*/tmp/
+
+# Claude Code runtime files
+.claude/

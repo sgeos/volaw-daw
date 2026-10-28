@@ -9,60 +9,82 @@ completed, moved or abandoned.
 
 ## State on 2026-10-28
 
-- **Script contract.** `daw-core` checks each Keleusma script at load against the entry
-  contract in the `script` module documentation, and it rejects non-finite arguments to
-  the `audio::` natives. The branch is `fix/script-contract-hardening`.
-- **Template.** The repository follows `sgeos/project-template` from commit `5838ce3`,
-  merged in pull request 1.
+- **Prepared for a session in any tool.** `AGENTS.md` gives the launch commands for
+  Codex, Grok Build and Claude Code, and `docs/process/RESUME_PROMPT.md` is the prompt
+  to give them. The gate bypasses `sccache`, so it passes inside agent sandboxes.
+- **Two pull requests are stacked.** Pull request 3 on `fix/script-contract-hardening`
+  enforces the Keleusma script entry contract. The branch `chore/agent-handoff` adds the
+  handoff support on top of it, in a pull request whose base is that branch.
+- **Dependabot pull request 2** bumps the cargo dependencies, including `toml` from 0.8
+  to 1.1.
 
 ## Next step
 
-Merge pull request 3, whose checks passed on 2026-10-28. Then
-choose the next feature or fix with the operator. No milestone is defined in
+The operator merges pull request 3, then the handoff pull request, which GitHub retargets
+to `main` once its base branch is deleted, and reviews pull request 2. After that, the
+next feature or fix is the operator's choice. No milestone is defined in
 `docs/roadmap/`.
 
 ## Open
 
 - **Keleusma defect.** `keleusma` 0.2.2 does not check a host struct argument against
-  the script declaration, so a mismatch misreads values silently. It was reported to
-  `Op55-V0.2.X-keleusma` on 2026-10-28, with a pointer to `Op55-V0.3.X-keleusma`. When
-  a fixed release appears, decide whether the check in `daw-core` stays as defence in
-  depth.
-- **Template feedback.** Sent to `Op55-admin-polybasite` on 2026-10-28 in two messages.
-  No reply had been seen. Adopt any template change through a sync.
-- **`Co-Authored-By` trailer on `4aba8b9`.** It breaks the operator ruling of 2026-10-25.
-  It cannot be removed without a force-push, which the ruleset forbids, so it is
-  accepted unless the operator decides otherwise. The operator stated the ruling in the
-  user-level `~/.claude/CLAUDE.md` on 2026-10-28, so it now reaches unsynced lines.
-- **Dependabot pull request 2.** It passed CI. It moves `toml` from 0.8 to 1.1, a major
-  version, so the operator reviews it for changes to the saved project format.
+  the script declaration. `Op55-V0.2.X-keleusma` acknowledged the report on 2026-10-28
+  and queued it for reproduction on the v0.2.3 line, and it will report back only if
+  this repository is affected. When a fixed release appears, decide whether the check in
+  `daw-core` stays as defence in depth.
+- **Grok Build sandbox unmeasured.** The gate was measured inside Codex's and Claude
+  Code's sandboxes, not Grok's. The first Grok session reports its outcome.
+- **Template feedback.** Sent to `Op55-admin-polybasite` on 2026-10-28 in three
+  messages. No reply had been seen. Adopt any template change through a sync.
+- **`Co-Authored-By` trailer on `4aba8b9`.** It breaks the operator ruling of 2026-10-25,
+  and it stays because `main` forbids force-pushes. The operator stated the ruling in the
+  user-level `~/.claude/CLAUDE.md` on 2026-10-28.
+
+## If this session is not Claude Code
+
+The protocol names no tool-specific feature, but every commit so far was made with
+Claude Code, so no other assistant has exercised it yet. Anything in it that assumes a
+Claude Code feature is a defect in the protocol. Record it in `REVERSE_PROMPT.md`
+rather than working around it silently. Codex does not load `CLAUDE.md`, so read it
+explicitly. Grok Build loads it once the folder is trusted. `AGENTS.md` describes what
+each sandbox needs.
 
 ## Environment
 
-Observed on 2026-10-28 in a macOS Claude Code sandbox.
+Observed on 2026-10-28 on the macOS authoring host.
 
-- `sccache` is the configured `RUSTC_WRAPPER` and its socket is denied, so cargo fails
-  with `Operation not permitted`. Run cargo and the gate with `RUSTC_WRAPPER=` set to
-  empty.
-- `.git/config` is write-protected, so `git remote`, `git config`, setting an upstream
-  and the branch deletion in `scripts/worktree.sh rm` need escalation or print a
-  harmless warning. `git worktree add` does not.
-- Merging a pull request with `gh pr merge` was denied by the auto mode classifier, so
-  the operator merges.
-- Another session committed into the main checkout on 2026-10-28 while this line
-  worked there. Work only in a worktree.
+- `~/.cargo/config.toml` sets `rustc-wrapper = "sccache"`. A sandbox cannot start an
+  `sccache` server, so plain cargo inside one needs `RUSTC_WRAPPER=`. The gate sets it
+  itself.
+- Inside Claude Code's sandbox, `.git/config` is write-protected, so `git remote`,
+  `git config` and branch deletion need escalation or print a harmless warning. Nested
+  sandboxes are refused, so `codex sandbox` must be launched from outside one.
+- Merging with `gh pr merge` was denied by Claude Code's auto mode, so the operator
+  merges.
+- Another session committed into the main checkout on 2026-10-28. Work only in a
+  worktree.
 
 ## Validity
 
+Run from the checkout under test, on `chore/agent-handoff` or on `main` after both
+pull requests merge.
+
 ```sh
-git status --short          # clean
-git log --oneline -5        # the newest commit should describe this state
-RUSTC_WRAPPER= ./scripts/check.sh   # exits zero
+git status --short          # clean, apart from ignored files
+git log --oneline -1 -- docs/process/HANDOFF.md   # the commit that wrote this file
+git log --oneline "$(git log -1 --format=%H -- docs/process/HANDOFF.md)"..HEAD
+./scripts/check.sh          # exits zero
+gh pr list --state all --limit 5   # needs an authenticated gh
 ```
 
-Report any check not run, and any commit after the one that last rewrote this file.
+1. The gate reports 220 `audio` tests, 17 `daw` tests and 75 `daw-core` tests passed,
+   with none failed or ignored.
+2. Every commit after the one that wrote this file is reported, since this file does
+   not describe them.
+3. Without an authenticated `gh` or network access, report the pull request states as
+   unverified, naming the cause, rather than as failed.
 
 ## Mailbox
 
-None assigned. Messages from other lines arrive as cross-session messages to the
-session that sent the reports, which was `volaw-daw-b2`.
+None assigned. Cross-session messages from other lines reached the Claude Code session
+`volaw-daw-b2`, which wrote this file. A session in another tool has no such mailbox.

@@ -20,12 +20,16 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- Handoff support for Codex and Grok Build: launch commands and sandbox needs in
+  `AGENTS.md`, and a tool-neutral `docs/process/RESUME_PROMPT.md`.
 - Repository conventions adopted from `sgeos/project-template`, including the local
   gate `scripts/check.sh`, the worktree helper, the process documents and the 0BSD
   license.
 
 ### Changed
 
+- The gate bypasses a configured rustc wrapper such as `sccache` unless
+  `RUSTC_WRAPPER` is set, so it passes deterministically inside agent sandboxes.
 - `daw-core` depends on the published `keleusma` 0.2.2 crate in place of the in-tree
   crate. Keleusma scripts must use the `Word` and `Float` type names and declare
   `TickState` before reading its fields.

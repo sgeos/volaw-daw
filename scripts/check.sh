@@ -319,8 +319,18 @@ fi
 # because cargo test compiles the binary only under the test configuration. Arguments
 # after -- reach cargo test, such as a test name filter.
 #
-# Inside a sandbox that denies the sccache socket, run the gate with RUSTC_WRAPPER set
-# to empty, which bypasses sccache without changing what is checked.
+# The authoring host sets `rustc-wrapper = "sccache"` in ~/.cargo/config.toml. Inside
+# an agent sandbox, such as those of Claude Code, Codex and Grok Build, sccache can use
+# a server that is already running but cannot start one, and an idle server exits on
+# its own. The gate would then pass or fail depending on timing, as observed on
+# 2026-10-28. The gate therefore bypasses any configured wrapper with an empty
+# RUSTC_WRAPPER, which changes only caching and not what is checked. Toggling the
+# wrapper was measured to cause no rebuild. A caller that sets RUSTC_WRAPPER itself,
+# including to sccache, is respected.
+if [[ -z "${RUSTC_WRAPPER+set}" ]]; then
+    export RUSTC_WRAPPER=""
+    printf 'check.sh: note: RUSTC_WRAPPER was unset, so any configured rustc wrapper such as sccache is bypassed\n'
+fi
 
 cargo fmt --all --check || fail "cargo fmt found unformatted code"
 pass "cargo fmt is clean"

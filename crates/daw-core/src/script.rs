@@ -6,11 +6,14 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 
 use audio::AudioEngine;
+use keleusma::Arena;
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
-use keleusma::vm::{Vm, VmError, VmState};
+use keleusma::vm::{
+    DEFAULT_ARENA_CAPACITY, Vm, VmError, VmState, required_persistent_capacity_for,
+};
 
 /// An audio command produced by a Keleusma script during execution.
 ///
@@ -81,7 +84,7 @@ fn extract_f64(val: &Value) -> Result<f64, VmError> {
 ///
 /// These closures push AudioCommands to the shared buffer when called.
 /// The host reads the buffer after each tick and applies commands to the engine.
-fn register_audio_command_natives(vm: &mut Vm, commands: &Rc<RefCell<Vec<AudioCommand>>>) {
+fn register_audio_command_natives(vm: &mut Vm<'_, '_>, commands: &Rc<RefCell<Vec<AudioCommand>>>) {
     // audio::note_on(freq: f64, velocity: f64) -> ()
     let cmds = commands.clone();
     vm.register_native_closure("audio::note_on", move |args| {
@@ -346,6 +349,27 @@ fn register_audio_command_natives(vm: &mut Vm, commands: &Rc<RefCell<Vec<AudioCo
 #[derive(Debug, Clone)]
 pub struct ScriptError(pub String);
 
+/// A Keleusma VM bound to the lifetime of the arena it borrows.
+///
+/// The bytecode lifetime is `'static` because the VM owns its module
+/// bytes when constructed through `Vm::new`.
+type ScriptVm<'arena> = Vm<'static, 'arena>;
+
+// Keleusma 0.2 VMs borrow a host-owned arena. Each runner owns its own
+// arena so that dropping a runner, for example on hot reload, releases
+// the arena memory. Sharing one long-lived arena across successive VMs
+// is not viable because `Vm::new` does not rewind the arena and a safe
+// rewind requires exclusive access. `self_cell` provides the
+// self-referential owner and dependent pair without local unsafe code.
+self_cell::self_cell!(
+    struct ScriptVmCell {
+        owner: Arena,
+
+        #[not_covariant]
+        dependent: ScriptVm,
+    }
+);
+
 /// A compiled Keleusma script runner bound to a single audio channel.
 ///
 /// The runner manages a Keleusma VM instance with registered audio native
@@ -354,7 +378,7 @@ pub struct ScriptError(pub String);
 /// audio commands in a shared buffer. After execution, the host reads
 /// the commands and applies them to the audio engine.
 pub struct ScriptRunner {
-    vm: Vm,
+    vm: ScriptVmCell,
     commands: Rc<RefCell<Vec<AudioCommand>>>,
     started: bool,
     /// Last error from script execution, if any.
@@ -372,13 +396,25 @@ impl ScriptRunner {
         let module =
             compile(&program).map_err(|e| ScriptError(format!("compile error: {:?}", e)))?;
 
-        let mut vm = Vm::new(module).map_err(|e| ScriptError(format!("verify error: {:?}", e)))?;
-        let commands: Rc<RefCell<Vec<AudioCommand>>> = Rc::new(RefCell::new(Vec::new()));
+        // The default capacity bounds the operand stack, frames, and
+        // dynamic strings. `Vm::new` verifies the module's worst-case
+        // memory usage against it and rejects an oversized script here
+        // rather than failing mid-playback.
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        arena
+            .resize_persistent(required_persistent_capacity_for(&module))
+            .map_err(|e| ScriptError(format!("arena error: {:?}", e)))?;
 
-        // Register pure utility natives.
-        keleusma::audio_natives::register_audio_natives(&mut vm);
-        // Register command-producing natives.
-        register_audio_command_natives(&mut vm, &commands);
+        let commands: Rc<RefCell<Vec<AudioCommand>>> = Rc::new(RefCell::new(Vec::new()));
+        let vm = ScriptVmCell::try_new(arena, |arena| {
+            let mut vm = Vm::new(module, arena)
+                .map_err(|e| ScriptError(format!("verify error: {:?}", e)))?;
+            // Register pure utility natives.
+            keleusma::audio_natives::register_audio_natives(&mut vm);
+            // Register command-producing natives.
+            register_audio_command_natives(&mut vm, &commands);
+            Ok::<_, ScriptError>(vm)
+        })?;
 
         Ok(Self {
             vm,
@@ -394,44 +430,51 @@ impl ScriptRunner {
     /// and timing information. Returns any audio commands produced during
     /// execution. Errors are stored in `last_error` but do not propagate.
     pub fn tick(&mut self, position_ticks: u64, tempo: f64, beat: f64) -> Vec<AudioCommand> {
-        let state = Value::Struct {
-            type_name: String::from("TickState"),
-            fields: alloc::vec![
+        let state = Value::struct_value(
+            String::from("TickState"),
+            alloc::vec![
                 (String::from("ticks"), Value::Int(position_ticks as i64)),
                 (String::from("tempo"), Value::Float(tempo)),
                 (String::from("beat"), Value::Float(beat)),
             ],
-        };
+        );
 
         // Drive the VM until it yields, finishes, or errors. A loop
         // function emits VmState::Reset between iterations to clear its
         // arena. The host resumes with the same input on Reset so that
         // the next iteration executes within the same host tick.
-        let mut result = if !self.started {
-            self.started = true;
-            self.vm.call(core::slice::from_ref(&state))
-        } else {
-            self.vm.resume(state.clone())
-        };
-        // Cap the inner resume loop to bound execution per tick. A
-        // pathological script could otherwise spin on Reset forever.
-        let mut budget = 16usize;
-        while let Ok(VmState::Reset) = &result {
-            if budget == 0 {
-                break;
+        let first_call = !self.started;
+        self.started = true;
+        // The VM result is reduced to an owned outcome inside the closure
+        // because yielded values may reference arena memory.
+        let outcome: Result<(), String> = self.vm.with_dependent_mut(|_, vm| {
+            let mut result = if first_call {
+                vm.call(core::slice::from_ref(&state))
+            } else {
+                vm.resume(state.clone())
+            };
+            // Cap the inner resume loop to bound execution per tick. A
+            // pathological script could otherwise spin on Reset forever.
+            let mut budget = 16usize;
+            while let Ok(VmState::Reset) = &result {
+                if budget == 0 {
+                    break;
+                }
+                budget -= 1;
+                result = vm.resume(state.clone());
             }
-            budget -= 1;
-            result = self.vm.resume(state.clone());
-        }
 
-        match result {
-            Ok(VmState::Yielded(_)) | Ok(VmState::Finished(_)) | Ok(VmState::Reset) => {
-                self.last_error = None;
+            match result {
+                Ok(VmState::Yielded(_)) | Ok(VmState::Finished(_)) | Ok(VmState::Reset) => Ok(()),
+                // The runner never registers breakpoints, so reaching one
+                // indicates a VM or host defect rather than a script error.
+                Ok(VmState::BreakpointHit { .. }) => {
+                    Err(String::from("unexpected breakpoint state from VM"))
+                }
+                Err(e) => Err(format!("{:?}", e)),
             }
-            Err(e) => {
-                self.last_error = Some(format!("{:?}", e));
-            }
-        }
+        });
+        self.last_error = outcome.err();
 
         self.take_commands()
     }
@@ -607,8 +650,9 @@ mod tests {
     fn script_runner_resume_produces_commands() {
         let src = concat!(
             "use audio::set_lpf_cutoff\n",
+            "struct TickState { ticks: Word, tempo: Float, beat: Float }\n",
             "loop main(state: TickState) -> () {\n",
-            "  audio::set_lpf_cutoff(state.ticks as f64);\n",
+            "  audio::set_lpf_cutoff(state.ticks as Float);\n",
             "  let state = yield ();\n",
             "  state\n",
             "}\n",

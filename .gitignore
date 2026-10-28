@@ -48,3 +48,7 @@ nvim.log
 
 # Project-local scratch kept inside a crate, from before tmp/ was the convention.
 crates/*/tmp/
+
+# Worktrees created by Claude Code's built-in worktree feature, which places them in
+# .claude/worktrees/. Without this rule each one shows as untracked content.
+.claude/worktrees/

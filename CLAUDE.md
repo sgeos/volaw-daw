@@ -83,11 +83,14 @@ scripts/worktree.sh rm  feat/some-thing  # remove it once merged
 cargo run -p daw                                   # run the composer
 cargo test -p daw-core script::                    # one crate, filtered by test path
 ./scripts/check.sh -- script::                     # the gate, with a cargo test filter
-RUSTC_WRAPPER= ./scripts/check.sh                  # the gate where sccache is denied
+RUSTC_WRAPPER= cargo test -p daw-core              # plain cargo inside an agent sandbox
 ```
 
-No tests are opt-in or skipped by default. The `daw` binary needs a display and an
-audio device only when run, not when tested.
+The gate bypasses the host's `sccache` wrapper itself, and plain cargo inside an agent
+sandbox needs `RUSTC_WRAPPER=` because a sandbox cannot start an `sccache` server.
+[`AGENTS.md`](AGENTS.md) records how to start a session in Codex or Grok Build, and what
+a sandboxed agent needs. No tests are opt-in or skipped by default. The `daw` binary
+needs a display and an audio device only when run, not when tested.
 
 ## Before Trusting a Green Run
 

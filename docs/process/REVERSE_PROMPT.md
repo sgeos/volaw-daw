@@ -8,45 +8,42 @@ operator needs to decide. Facts, inferences and hypotheses are marked as such.
 
 ## Report on 2026-10-28
 
-**Task.** The operator asked for every known issue to be resolved and for the findings
-to be communicated to the other lines. The issues came from the audit of `4aba8b9` and
-from the open items of the previous handoff.
+**Task.** The operator asked for the project to be prepared for a handoff to Codex,
+Grok Build or both, following the projects already prepared. Epagoge and the
+Adventurers Creator served as the pattern.
 
-**Done, each with a test that fails when its fix is reverted.**
+**Done.**
+- `AGENTS.md` gives launch commands checked against Codex CLI 0.164.0, Grok Build 1.0.70
+  and Claude Code 2.1.312, which instruction files each tool loads, what a sandboxed
+  agent needs, and what runs in a fresh clone. It names no absolute home path, because
+  the repository is public.
+- `docs/process/RESUME_PROMPT.md` is a tool-neutral prompt for a new session.
+- The handoff gains measurable validity checks and a section for a session that is not
+  Claude Code.
+- The gate bypasses a configured rustc wrapper unless `RUSTC_WRAPPER` is set.
 
-| Issue | Resolution |
-|---|---|
-| A mismatched `TickState` declaration or `main` signature misread values silently | Rejected at load by `check_entry_contract` |
-| NaN and infinite native arguments reached the engine | Rejected in `extract_f64`, the single native boundary |
-| A tick count above `i64::MAX` wrapped to a negative value | Saturates at `i64::MAX` |
-| Startup load errors appeared only on standard error | Shown in the status bar with a count |
-| Two tests matched Keleusma message wording | Assert only the stage prefix and the type name |
-| No test covered an undeclared, unread `TickState` | Test added |
-| The README did not document the script contract | Section added, with an example the tests read from the README |
+**Why the gate changed.** Fact. Inside both Codex's and Claude Code's sandboxes,
+`sccache` could use an already running server but could not start one, and the shared
+server stops and starts with other activity on the host. Before the change, the gate
+under Codex's sandbox failed at Clippy with `sccache: error: Operation not permitted`.
+After it, the gate passed. Fact. Toggling the wrapper caused no rebuild.
 
-**Resolved by checking, with no change needed.**
-- Fact. No `.kma` file exists on this machine, so there were no local scripts to
-  migrate. The search excluded `/System` and `/private/var`.
-- Fact. The volaw workspace at `5306508` passes `cargo check` and 625 tests, with none
-  failed, against the `audio` crate on volaw-daw `main`.
+**Verified.** Facts.
+- Under `codex sandbox -P :workspace`, the gate on this tree exited zero with 220, 17 and
+  75 tests passed. A cold run on `main` at `5de8b55` took 88 seconds.
+- In Claude Code's sandbox, the gate on this tree exited zero with the same counts.
+- With `RUSTC_WRAPPER` set explicitly, the gate used it and printed no bypass note.
 
-**Communicated.**
-- The Keleusma defect, with a reproduction, to `Op55-V0.2.X-keleusma`, and a pointer to
-  `Op55-V0.3.X-keleusma`.
-- A template follow-up to `Op55-admin-polybasite`, on the trailer ruling reaching only
-  synced repositories.
-- An audit note to `volaw-64`, which is inferred and not confirmed to be the author of
-  `4aba8b9`.
-
-**Verified.** Fact. The gate passes locally on macOS with 220, 17 and 75 tests and no
-warnings.
-
-Fact. Continuous integration on Ubuntu passed on pull request 3 with the same counts.
-
-**Not verified.** The
-composer was not run interactively, so the status bar change is tested only through
-`DawState`.
+**Not verified.**
+- Grok Build's sandbox. It has no single-command runner, and a trial session was not
+  started. The inference, from its documentation, is that its `workspace` profile
+  confines writes as Codex's does.
+- No Codex or Grok model session was started, so how either tool follows the resume
+  prompt is untested.
 
 **For the operator.**
-- Merge the pull request.
-- Review Dependabot pull request 2, which moves `toml` to a new major version.
+- Merge pull request 3, then the handoff pull request, and review Dependabot pull
+  request 2.
+- Trust this folder in Grok Build at its first launch, if Grok is used.
+- Optionally run one trial session in each tool with the commands in `AGENTS.md`, as
+  was done for epagoge, so that the handoff is exercised before real work depends on it.

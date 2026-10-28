@@ -1,0 +1,9 @@
+[package]
+name = "audio-sdl"
+version.workspace = true
+edition.workspace = true
+description = "SDL3 platform layer for the audio engine, implementing audio::AudioOutput"
+
+[dependencies]
+audio = { workspace = true }
+sdl3-sys = { workspace = true }

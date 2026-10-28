@@ -1,3 +1,5 @@
+//! Translation of SDL3 events into `daw_core::DawInput`.
+
 use daw_core::input::DawInput;
 use sdl3_sys::events::*;
 use sdl3_sys::keycode::SDL_KMOD_CTRL;
@@ -8,6 +10,11 @@ use sdl3_sys::scancode::*;
 /// Translate an SDL3 event into a DAW input event.
 ///
 /// Returns `None` for events the DAW does not handle.
+///
+/// # Safety
+///
+/// `event` must be an event SDL filled, so that the union member named by
+/// its `type` field is the initialized one.
 pub unsafe fn translate_event(event: &SDL_Event) -> Option<DawInput> {
     let event_type = unsafe { event.r#type };
 

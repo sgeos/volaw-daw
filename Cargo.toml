@@ -10,3 +10,8 @@ edition = "2024"
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 audio = { path = "crates/audio" }
 daw-core = { path = "crates/daw-core" }
+audio-sdl = { path = "crates/audio-sdl" }
+daw-sdl = { path = "crates/daw-sdl" }
+volaw-audio = { path = "crates/volaw-audio" }
+sdl3-sys = { version = "0.6", features = ["build-from-source"] }
+sdl3-ttf-sys = { version = "0.6", features = ["build-from-source"] }

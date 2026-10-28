@@ -4,19 +4,20 @@
 //! integer samples, and IEEE float (format tag 3) with 32-bit samples.
 //! Stereo files are mixed down to mono by averaging channels.
 
-use std::fs;
-use std::path::Path;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// RIFF/WAV format tags.
 const FORMAT_PCM: u16 = 1;
 const FORMAT_IEEE_FLOAT: u16 = 3;
 
-/// Load a WAV file and return its samples as normalized f64 in [-1.0, 1.0].
+/// Decode the bytes of a WAV file into samples normalized to [-1.0, 1.0].
 ///
-/// Returns an error string if the file cannot be read or the format is
-/// unsupported.
-pub fn load_wav(path: &Path) -> Result<Vec<f64>, String> {
-    let data = fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+/// The bytes are untrusted input. Every offset is bounds-checked, and an
+/// unsupported or malformed file returns an error string. Reading the file is
+/// the platform's job, through `Platform::read_file`.
+pub fn decode_wav(data: &[u8]) -> Result<Vec<f64>, String> {
     if data.len() < 44 {
         return Err("file too small for WAV header".into());
     }
@@ -35,7 +36,12 @@ pub fn load_wav(path: &Path) -> Result<Vec<f64>, String> {
         let chunk_size =
             u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
                 as usize;
-        let chunk_end = (pos + 8 + chunk_size).min(data.len());
+        // Saturating arithmetic keeps a hostile chunk size from overflowing on a
+        // 32-bit target. Each step advances `pos` by at least 8, so the loop ends.
+        let chunk_end = pos
+            .saturating_add(8)
+            .saturating_add(chunk_size)
+            .min(data.len());
 
         if chunk_id == b"fmt " {
             fmt_chunk = Some(&data[pos + 8..chunk_end]);
@@ -43,7 +49,9 @@ pub fn load_wav(path: &Path) -> Result<Vec<f64>, String> {
             data_chunk = Some(&data[pos + 8..chunk_end]);
         }
         // Chunks are word-aligned.
-        pos = pos + 8 + ((chunk_size + 1) & !1);
+        pos = pos
+            .saturating_add(8)
+            .saturating_add(chunk_size.saturating_add(1) & !1);
     }
 
     let fmt = fmt_chunk.ok_or("missing fmt chunk")?;
@@ -176,6 +184,7 @@ fn data_at_f32(data: &[u8], offset: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     /// Build a minimal valid WAV file in memory.
     fn build_wav(format_tag: u16, channels: u16, bits: u16, sample_data: &[u8]) -> Vec<u8> {
@@ -214,13 +223,10 @@ mod tests {
             .flat_map(|s| s.to_le_bytes())
             .collect();
         let wav = build_wav(FORMAT_PCM, 1, 16, &sample_data);
-        let tmp = std::env::temp_dir().join("test_16bit_mono.wav");
-        fs::write(&tmp, &wav).unwrap();
-        let samples = load_wav(&tmp).unwrap();
+        let samples = decode_wav(&wav).unwrap();
         assert_eq!(samples.len(), 2);
         assert!((samples[0] - 0.0).abs() < 0.001);
         assert!((samples[1] - (32767.0 / 32768.0)).abs() < 0.001);
-        let _ = fs::remove_file(&tmp);
     }
 
     #[test]
@@ -230,12 +236,9 @@ mod tests {
         sample_data.extend_from_slice(&(-32768i16).to_le_bytes());
         sample_data.extend_from_slice(&32767i16.to_le_bytes());
         let wav = build_wav(FORMAT_PCM, 2, 16, &sample_data);
-        let tmp = std::env::temp_dir().join("test_16bit_stereo.wav");
-        fs::write(&tmp, &wav).unwrap();
-        let samples = load_wav(&tmp).unwrap();
+        let samples = decode_wav(&wav).unwrap();
         assert_eq!(samples.len(), 1);
         assert!(samples[0].abs() < 0.001);
-        let _ = fs::remove_file(&tmp);
     }
 
     #[test]
@@ -243,21 +246,27 @@ mod tests {
         // Samples: 0 (min), 128 (center), 255 (max).
         let sample_data = vec![0u8, 128, 255];
         let wav = build_wav(FORMAT_PCM, 1, 8, &sample_data);
-        let tmp = std::env::temp_dir().join("test_8bit.wav");
-        fs::write(&tmp, &wav).unwrap();
-        let samples = load_wav(&tmp).unwrap();
+        let samples = decode_wav(&wav).unwrap();
         assert_eq!(samples.len(), 3);
         assert!((samples[0] - (-1.0)).abs() < 0.01);
         assert!((samples[1] - 0.0).abs() < 0.01);
         assert!((samples[2] - (127.0 / 128.0)).abs() < 0.01);
-        let _ = fs::remove_file(&tmp);
     }
 
     #[test]
     fn reject_non_wav() {
-        let tmp = std::env::temp_dir().join("test_not_wav.wav");
-        fs::write(&tmp, b"not a wav file at all!!!!!!!!!!!!!!!!!!!!!!!!!!!").unwrap();
-        assert!(load_wav(&tmp).is_err());
-        let _ = fs::remove_file(&tmp);
+        assert!(decode_wav(b"").is_err());
+        assert!(decode_wav(b"not a wav file at all!!!!!!!!!!!!!!!!!!!!!!!!!!!").is_err());
+    }
+
+    #[test]
+    fn hostile_chunk_size_is_bounded() {
+        // A data chunk that claims u32::MAX bytes must neither panic nor read
+        // past the end of the buffer.
+        let mut wav = build_wav(FORMAT_PCM, 1, 16, &[0, 0, 1, 0]);
+        let data_size_at = wav.len() - 4 - 4;
+        wav[data_size_at..data_size_at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        let samples = decode_wav(&wav).unwrap();
+        assert_eq!(samples.len(), 2);
     }
 }

@@ -1,3 +1,5 @@
+//! `daw_core::Renderer` implemented with SDL3 and SDL3_ttf.
+
 use std::collections::HashMap;
 use std::ffi::{CString, c_char, c_float, c_int};
 
@@ -36,9 +38,8 @@ impl SdlRenderer {
         let c_font_path = CString::new(font_path).map_err(|e| format!("invalid font path: {e}"))?;
 
         unsafe {
-            if !sdl3_sys::init::SDL_Init(
-                sdl3_sys::init::SDL_INIT_VIDEO | sdl3_sys::init::SDL_INIT_AUDIO,
-            ) {
+            // Audio is initialized by `audio-sdl` when playback starts.
+            if !sdl3_sys::init::SDL_Init(sdl3_sys::init::SDL_INIT_VIDEO) {
                 return Err(sdl_error("SDL_Init"));
             }
 
@@ -99,9 +100,17 @@ impl SdlRenderer {
         }
     }
 
-    /// Return the raw SDL window pointer (for SDL_StartTextInput / SDL_StopTextInput).
-    pub fn window(&self) -> *mut SDL_Window {
-        self.window
+    /// Start or stop SDL text input events for the window. The DAW core
+    /// reports when it wants text, and the entry point forwards it here.
+    pub fn set_text_input(&mut self, enabled: bool) {
+        // Safety: `window` is valid from construction until drop.
+        unsafe {
+            if enabled {
+                sdl3_sys::keyboard::SDL_StartTextInput(self.window);
+            } else {
+                sdl3_sys::keyboard::SDL_StopTextInput(self.window);
+            }
+        }
     }
 
     fn font_size_index(size: FontSize) -> usize {

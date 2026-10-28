@@ -7,8 +7,9 @@
 //! rebuild) use the `Bulk` variant, which carries a boxed closure
 //! allocated on the UI thread.
 
-use audio::AudioEngine;
-use audio::NUM_CHANNELS;
+use alloc::boxed::Box;
+
+use crate::engine::{AudioEngine, NUM_CHANNELS};
 
 /// A command sent from the UI thread to the audio thread.
 pub enum EngineCommand {
@@ -311,8 +312,8 @@ pub fn apply_engine_command(engine: &mut AudioEngine, cmd: EngineCommand) {
             if ch < NUM_CHANNELS {
                 // Constant-power pan law.
                 let angle = (pan + 1.0) * 0.25 * core::f64::consts::PI;
-                let left = angle.cos();
-                let right = angle.sin();
+                let left = libm::cos(angle);
+                let right = libm::sin(angle);
                 engine.channels[ch].set_volume(left, right);
             }
         }
@@ -334,71 +335,6 @@ pub fn apply_engine_command(engine: &mut AudioEngine, cmd: EngineCommand) {
         }
         EngineCommand::Bulk(f) => {
             f(engine);
-        }
-    }
-}
-
-/// Convert a `daw_core::script::AudioCommand` into an `EngineCommand`
-/// for a specific channel.
-pub fn audio_command_to_engine_command(
-    channel: u8,
-    cmd: &daw_core::script::AudioCommand,
-) -> EngineCommand {
-    use daw_core::script::AudioCommand;
-    match cmd {
-        AudioCommand::NoteOn { freq, velocity } => EngineCommand::NoteOn {
-            channel,
-            freq: *freq,
-            velocity: *velocity,
-        },
-        AudioCommand::NoteOff => EngineCommand::NoteOff { channel },
-        AudioCommand::NoteOffFreq { freq } => EngineCommand::NoteOffFreq {
-            channel,
-            freq: *freq,
-        },
-        AudioCommand::SetLpfCutoff(v) => EngineCommand::SetLpfCutoff { channel, value: *v },
-        AudioCommand::SetLpfResonance(v) => EngineCommand::SetLpfResonance { channel, value: *v },
-        AudioCommand::SetHpfCutoff(v) => EngineCommand::SetHpfCutoff { channel, value: *v },
-        AudioCommand::SetHpfResonance(v) => EngineCommand::SetHpfResonance { channel, value: *v },
-        AudioCommand::SetVcoMix(v) => EngineCommand::SetVcoMix { channel, value: *v },
-        AudioCommand::SetVco1PitchFine(v) => EngineCommand::SetVco1PitchFine { channel, value: *v },
-        AudioCommand::SetVco2PitchFine(v) => EngineCommand::SetVco2PitchFine { channel, value: *v },
-        AudioCommand::SetEg1Adsr {
-            attack,
-            decay,
-            sustain,
-            release,
-        } => EngineCommand::SetEg1Adsr {
-            channel,
-            attack: *attack,
-            decay: *decay,
-            sustain: *sustain,
-            release: *release,
-        },
-        AudioCommand::SetEg2Adsr {
-            attack,
-            decay,
-            sustain,
-            release,
-        } => EngineCommand::SetEg2Adsr {
-            channel,
-            attack: *attack,
-            decay: *decay,
-            sustain: *sustain,
-            release: *release,
-        },
-        AudioCommand::SetLfoRate(v) => EngineCommand::SetLfoRate { channel, value: *v },
-        AudioCommand::SetVolume { left, right } => EngineCommand::SetVolume {
-            channel,
-            left: *left,
-            right: *right,
-        },
-        AudioCommand::SetPan(v) => EngineCommand::SetPan { channel, pan: *v },
-        AudioCommand::SetVco1PulseWidth(v) => {
-            EngineCommand::SetVco1PulseWidth { channel, value: *v }
-        }
-        AudioCommand::SetVco2PulseWidth(v) => {
-            EngineCommand::SetVco2PulseWidth { channel, value: *v }
         }
     }
 }

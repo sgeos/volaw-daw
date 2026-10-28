@@ -8,42 +8,49 @@ operator needs to decide. Facts, inferences and hypotheses are marked as such.
 
 ## Report on 2026-10-28
 
-**Task.** The operator asked for the project to be prepared for a handoff to Codex,
-Grok Build or both, following the projects already prepared. Epagoge and the
-Adventurers Creator served as the pattern.
+**Task.** The operator asked that the workspace follow the operator's preferred Rust
+architecture, a `no_std` core, a platform layer implementing core traits, and entry
+points that wire them, with a library that both volaw and the DAW depend on.
 
 **Done.**
-- `AGENTS.md` gives launch commands checked against Codex CLI 0.164.0, Grok Build 1.0.70
-  and Claude Code 2.1.312, which instruction files each tool loads, what a sandboxed
-  agent needs, and what runs in a fresh clone. It names no absolute home path, because
-  the repository is public.
-- `docs/process/RESUME_PROMPT.md` is a tool-neutral prompt for a new session.
-- The handoff gains measurable validity checks and a section for a session that is not
-  Claude Code.
-- The gate bypasses a configured rustc wrapper unless `RUSTC_WRAPPER` is set.
+- `audio` gained the engine command protocol, the lock-free queue, `EngineRunner`, and
+  the `AudioSource`, `AudioOutput` and `CommandSink` traits, all moved or written as
+  `no_std`.
+- `daw-core` gained `DawApp`, the state machine formerly in the binary, and persistence,
+  WAV decoding and engine setup. `Platform` gained `path_exists` and `modified_stamp`,
+  and `MemoryPlatform` implements it for tests.
+- New crates `audio-sdl` and `daw-sdl` hold the SDL3 and std code. New entry library
+  `volaw-audio` wires the engine to SDL3 output. The `daw` binary only wires.
+- The gate and continuous integration build the core for `thumbv7em-none-eabihf`.
+- Records are in `docs/architecture/LAYERS.md` and
+  `docs/decisions/LAYERED_ARCHITECTURE.md`.
 
-**Why the gate changed.** Fact. Inside both Codex's and Claude Code's sandboxes,
-`sccache` could use an already running server but could not start one, and the shared
-server stops and starts with other activity on the host. Before the change, the gate
-under Codex's sandbox failed at Clippy with `sccache: error: Operation not permitted`.
-After it, the gate passed. Fact. Toggling the wrapper caused no rebuild.
+**Decided by this line, open to revision.** The crate names `audio-sdl`, `daw-sdl` and
+`volaw-audio`. Keeping `audio` and `daw-core` under their names so volaw's path
+dependency keeps working. Rejecting project file names that escape the project root,
+which changes behaviour for such a project.
 
-**Verified.** Facts.
-- Under `codex sandbox -P :workspace`, the gate on this tree exited zero with 220, 17 and
-  75 tests passed. A cold run on `main` at `5de8b55` took 88 seconds.
-- In Claude Code's sandbox, the gate on this tree exited zero with the same counts.
-- With `RUSTC_WRAPPER` set explicitly, the gate used it and printed no bypass note.
+**Verified.** Facts, observed on the macOS authoring host.
+- The gate exited zero with 358 tests passed, against 312 on `main` at `aa086d5`. Every
+  former test was moved or replaced, none removed without a successor.
+- `audio` and `daw-core` build for `thumbv7em-none-eabihf`.
+- volaw's `client-core` and `client-sdl` at `969dfbb` pass `cargo check --locked`
+  against this tree, in a scratch copy. With `client-sdl` changed to use `volaw-audio`,
+  the copy also passed `cargo check`.
+- The composer started under SDL's dummy video and audio drivers, opened the audio
+  stream without a warning, reported malformed arguments, and ran its frame loop for
+  five seconds until stopped.
 
 **Not verified.**
-- Grok Build's sandbox. It has no single-command runner, and a trial session was not
-  started. The inference, from its documentation, is that its `workspace` profile
-  confines writes as Codex's does.
-- No Codex or Grok model session was started, so how either tool follows the resume
-  prompt is untested.
+- Interactive use with a real display and audio device. Inference: the event loop,
+  drawing and input code moved without change apart from mechanical substitutions, so
+  behaviour should match, but no one has played a note on this tree.
+- Continuous integration on this branch, because nothing has been pushed.
+- Running `target/debug/daw` directly fails to find `libSDL3_ttf.0.dylib`, because the
+  binary has no runtime search path. `cargo run` sets the path. Hypothesis: this was
+  already so on `main`, which was not checked.
 
 **For the operator.**
-- Merge pull request 3, then the handoff pull request, and review Dependabot pull
-  request 2.
-- Trust this folder in Grok Build at its first launch, if Grok is used.
-- Optionally run one trial session in each tool with the commands in `AGENTS.md`, as
-  was done for epagoge, so that the handoff is exercised before real work depends on it.
+- Review the branch, and confirm a push and pull request.
+- Run `cargo run -p daw` once and play a few notes.
+- Decide whether the volaw line should adopt `volaw-audio` now.

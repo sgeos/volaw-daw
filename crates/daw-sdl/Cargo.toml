@@ -1,0 +1,10 @@
+[package]
+name = "daw-sdl"
+version.workspace = true
+edition.workspace = true
+description = "SDL3 platform layer for the DAW, implementing the daw-core Platform and Renderer traits"
+
+[dependencies]
+daw-core = { workspace = true }
+sdl3-sys = { workspace = true }
+sdl3-ttf-sys = { workspace = true }

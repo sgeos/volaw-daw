@@ -342,3 +342,19 @@ pass "cargo build succeeded for every target"
 cargo test --workspace --locked -- "${project_args[@]+"${project_args[@]}"}" ||
     fail "cargo test failed"
 pass "cargo test passed, see the counts above"
+
+# The core layer, `audio` and `daw-core`, must stay `no_std`. A host build cannot
+# prove that, because a test module's `extern crate std` brings std's float methods
+# into scope for the whole crate, and the dependencies may enable std on their own.
+# Building for a bare-metal target, which has no std at all, does prove it. The target
+# is installed with `rustup target add thumbv7em-none-eabihf`. Without it the check is
+# skipped with a note, never silently, and continuous integration installs it.
+no_std_target="thumbv7em-none-eabihf"
+if rustup target list --installed 2>/dev/null | grep -qx "$no_std_target"; then
+    cargo build -p audio -p daw-core --target "$no_std_target" --locked ||
+        fail "the core crates do not build for $no_std_target, so they are not no_std"
+    pass "audio and daw-core build for $no_std_target, so the core layer is no_std"
+else
+    printf 'check.sh: note: target %s is not installed, so the no_std build was skipped\n' \
+        "$no_std_target"
+fi

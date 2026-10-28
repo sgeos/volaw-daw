@@ -1,0 +1,21 @@
+#!/bin/sh
+# Pre-push hook. Runs the local gate before code leaves the machine, so a push that
+# would fail continuous integration fails here first.
+#
+# Opt in once per clone with `git config core.hooksPath scripts/hooks`.
+# Skip it for a work-in-progress push with `git push --no-verify`.
+#
+# CHECK_ARGS, if set, is split on whitespace and passed to the gate. Quotes inside it
+# are not interpreted, so `CHECK_ARGS="-- -m 'not socket'"` reaches the gate as the
+# four words `--`, `-m`, `'not` and `socket'`. Only arguments without spaces can be
+# passed this way, for example `CHECK_ARGS=--hygiene-only` or `CHECK_ARGS="-- -m
+# unit"`. The hook does not use eval to honour quotes, because that would run any shell
+# code placed in the variable. An agent pushing from inside a sandbox, where tests that
+# need denied capabilities fail, passes the sandbox form of the gate here when it has no
+# spaces. Otherwise it runs the sandbox form by hand first, pushes with --no-verify,
+# and says so in its report.
+
+set -eu
+
+# shellcheck disable=SC2086 # CHECK_ARGS is split on purpose.
+exec "$(git rev-parse --show-toplevel)/scripts/check.sh" ${CHECK_ARGS:-}

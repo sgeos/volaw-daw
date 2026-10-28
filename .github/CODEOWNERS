@@ -1,0 +1,7 @@
+# Owners are requested for review automatically on every pull request that touches
+# their paths. Later lines take precedence over earlier ones, so order them from
+# general to specific. Agent lines open most pull requests, so this keeps the maintainer
+# in the loop on each one. That is one notification per pull request, by intent. A
+# project that opens many pull requests a day and does not want them may delete this
+# file.
+* @sgeos

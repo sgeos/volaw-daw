@@ -1,3 +1,18 @@
+//! Keleusma script integration for per-channel audio control.
+//!
+//! Targets the published `keleusma` 0.2.2 crate. Scripts must follow the
+//! 0.2 surface language, which uses the `Word` and `Float` numeric type
+//! names in place of the removed `i64` and `f64` names. Each tick the host
+//! passes a `TickState` struct to the script's entry point. A script that
+//! reads its fields must declare it with this exact field order.
+//!
+//! ```text
+//! struct TickState { ticks: Word, tempo: Float, beat: Float }
+//! ```
+//!
+//! An undeclared `TickState` is resolved by the 0.2 type checker as an
+//! opaque host type, so field access on it fails to compile.
+
 extern crate alloc;
 use alloc::format;
 use alloc::rc::Rc;
@@ -600,6 +615,7 @@ mod tests {
         let src = concat!(
             "use audio::note_on\n",
             "use audio::midi_to_freq\n",
+            "struct TickState { ticks: Word, tempo: Float, beat: Float }\n",
             "loop main(state: TickState) -> () {\n",
             "  let freq = audio::midi_to_freq(60);\n",
             "  audio::note_on(freq, 0.8);\n",
@@ -625,6 +641,7 @@ mod tests {
             "use audio::note_on\n",
             "use audio::set_lpf_cutoff\n",
             "use audio::midi_to_freq\n",
+            "struct TickState { ticks: Word, tempo: Float, beat: Float }\n",
             "loop main(state: TickState) -> () {\n",
             "  audio::set_lpf_cutoff(2000.0);\n",
             "  let freq = audio::midi_to_freq(69);\n",
@@ -673,7 +690,10 @@ mod tests {
     fn script_runner_error_stored() {
         // Script that finishes after first call (non-loop).
         // tick() passes a TickState argument, so the script must accept one parameter.
-        let src = "fn main(state: TickState) -> () { () }";
+        let src = concat!(
+            "struct TickState { ticks: Word, tempo: Float, beat: Float }\n",
+            "fn main(state: TickState) -> () { () }\n",
+        );
         let mut runner = ScriptRunner::from_source(src).expect("compile failed");
 
         // First tick: should finish successfully.
@@ -727,6 +747,74 @@ mod tests {
             assert!((voice.eg1.attack - 0.01).abs() < 0.001);
             assert!((voice.eg1.sustain - 0.5).abs() < 0.001);
         }
+    }
+
+    #[test]
+    fn script_reads_every_tick_state_field() {
+        // Verifies that the host-built TickState matches the declared
+        // field order and types for all three fields.
+        let src = concat!(
+            "use audio::set_lpf_cutoff\n",
+            "use audio::set_lpf_resonance\n",
+            "use audio::set_vco_mix\n",
+            "struct TickState { ticks: Word, tempo: Float, beat: Float }\n",
+            "loop main(state: TickState) -> () {\n",
+            "  audio::set_lpf_cutoff(state.ticks as Float);\n",
+            "  audio::set_lpf_resonance(state.tempo);\n",
+            "  audio::set_vco_mix(state.beat);\n",
+            "  let state = yield ();\n",
+            "  state\n",
+            "}\n",
+        );
+        let mut runner = ScriptRunner::from_source(src).expect("compile failed");
+        let cmds = runner.tick(960, 132.5, 0.25);
+        assert_eq!(runner.last_error, None);
+        assert_eq!(
+            cmds,
+            alloc::vec![
+                AudioCommand::SetLpfCutoff(960.0),
+                AudioCommand::SetLpfResonance(132.5),
+                AudioCommand::SetVcoMix(0.25),
+            ]
+        );
+    }
+
+    #[test]
+    fn undeclared_tick_state_field_access_rejected() {
+        // Keleusma 0.2 resolves an undeclared type name as opaque.
+        let src = concat!(
+            "use audio::set_lpf_cutoff\n",
+            "loop main(state: TickState) -> () {\n",
+            "  audio::set_lpf_cutoff(state.tempo);\n",
+            "  let state = yield ();\n",
+            "  state\n",
+            "}\n",
+        );
+        let err = ScriptRunner::from_source(src)
+            .err()
+            .expect("compile succeeded");
+        assert!(
+            err.0.contains("field access on non-struct type TickState"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn legacy_numeric_type_names_rejected() {
+        // Keleusma 0.2 removed the `i64` and `f64` surface type names.
+        let src = concat!(
+            "struct TickState { ticks: i64, tempo: f64, beat: f64 }\n",
+            "fn main(state: TickState) -> () { () }\n",
+        );
+        let err = ScriptRunner::from_source(src)
+            .err()
+            .expect("compile succeeded");
+        assert!(
+            err.0.starts_with("parse error") && err.0.contains("expected type"),
+            "{}",
+            err.0
+        );
     }
 
     #[test]

@@ -183,7 +183,10 @@ daw_projects/
 
 - **daw-core** (no_std+alloc): Shared DAW logic including MIDI track representation, transport state, patch configuration, preset definitions, rendering trait, Standard MIDI File parser/builder, and Keleusma script runner
 - **audio** (no_std+alloc): 8-channel synthesizer engine with dual VCO, dual envelope generator, HPF/LPF filters, LFO, modulation matrix, 25-pedal DSP effect chain, and metronome click generator
-- **keleusma** (no_std+alloc): Keleusma scripting language with lexer, parser, compiler, and virtual machine
+
+### External Dependencies
+
+- **keleusma** 0.2.2 (no_std+alloc, published on crates.io): Keleusma scripting language with lexer, parser, compiler, and virtual machine. It is consumed by daw-core and is no longer part of this workspace.
 
 ## Testing
 
@@ -192,4 +195,4 @@ cargo test -p daw
 cargo test -p daw-core
 ```
 
-The DAW binary has 3 unit tests. The daw-core library has 60 tests covering MIDI track operations, transport logic, project serialization, preset loading, rendering calculations, Standard MIDI File parsing, and Keleusma script integration.
+The DAW binary has 14 unit tests. The daw-core library has 69 tests covering MIDI track operations, transport logic, project serialization, preset loading, rendering calculations, Standard MIDI File parsing, and Keleusma script integration.

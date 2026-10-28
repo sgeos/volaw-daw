@@ -1,72 +1,134 @@
+# Continuous integration. The job runs the local gate, scripts/check.sh, so a green run
+# here means what a green run on a developer machine means.
+#
+# Supply chain. Actions are pinned to full commit hashes with the release tag in a
+# comment, so a moved or compromised tag cannot change what runs. Dependabot proposes
+# newer pins after a cooldown. The workflow only reads the repository, and no secret is
+# given to it.
+#
+# Account load. GitHub-hosted runners share one concurrent-job limit across the whole
+# sgeos account, so one busy repository delays every other. When this workflow grows a
+# matrix, add `max-parallel` to it. Run a reduced, fast set on pull requests, and the
+# full matrix on pushes to main, so that every commit on main has a complete result of
+# its own. A pull request that needs the full set before merging opts in with a
+# `full-ci` label, for example with
+# `if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci')`.
+# The cheap hygiene part of the gate can run as its own job with
+# `./scripts/check.sh --hygiene-only`.
+#
+# Required check. The ruleset requires one check, `CI result`, from the last job below,
+# which always runs and fails when any job it needs failed or was cancelled. GitHub
+# counts a skipped job as passing, so jobs may be skipped on purpose, such as the full
+# set on an unlabelled pull request. A required check must itself never be skipped, and
+# a workflow skipped by `paths-ignore` reports no check at all, so a required check
+# would never arrive. Skip work inside jobs instead, and add every new job to `needs`.
+
 name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
-env:
-  CARGO_TERM_COLOR: always
+# No permissions by default. Each job grants only what it needs.
+permissions: {}
+
+# Supersede an in-flight run when a pull request is pushed again, and leave branch runs
+# alone. The group is the ref for a pull request and the unique run identifier
+# otherwise, so that a second merge to main cannot cancel the first merge's run and
+# leave a commit on main with no result of its own.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   check:
-    name: build / test / clippy / fmt
+    name: check
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The daw crate builds SDL3 and SDL3_ttf from source through the
+      # `build-from-source` features of sdl3-sys and sdl3-ttf-sys, which need a C
+      # toolchain, CMake and the display, audio and font development headers.
       - name: Install SDL3 build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake \
-            ninja-build \
-            pkg-config \
-            build-essential \
-            libasound2-dev \
-            libpulse-dev \
-            libudev-dev \
-            libx11-dev \
-            libxext-dev \
-            libxrandr-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libxinerama-dev \
-            libxss-dev \
-            libxtst-dev \
-            libxkbfile-dev \
-            libfreetype-dev \
-            libharfbuzz-dev \
-            libgl1-mesa-dev \
-            libegl1-mesa-dev \
-            libgles2-mesa-dev \
-            libdbus-1-dev \
-            libwayland-dev \
-            libxkbcommon-dev \
-            libdrm-dev \
-            libgbm-dev
-
-      - name: Install stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+            cmake ninja-build pkg-config build-essential \
+            libasound2-dev libpulse-dev libudev-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxinerama-dev libxss-dev libxtst-dev libxkbfile-dev \
+            libfreetype-dev libharfbuzz-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libdbus-1-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev
+      # rust-toolchain is pinned to a commit of its `stable` branch. A pin by hash
+      # cannot convey the toolchain through the ref name, so it is named explicitly.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-10-16
         with:
+          toolchain: stable
           components: rustfmt, clippy
-
-      - name: Cache cargo registry, git database, and target
-        uses: Swatinem/rust-cache@v2
+      # The cache holds the registry and target directory, which spares the SDL3
+      # source build on most runs. The workflow publishes nothing, so a poisoned
+      # cache could affect only this check, not a release.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: ci
+      #
+      # The gate needs shellcheck. GitHub's Ubuntu runners include it, and its macOS
+      # runners do not, so a macOS job installs it first:
+      #
+      # - run: command -v shellcheck >/dev/null || brew install shellcheck
+      #
+      # Find the commit for a release tag with
+      # `gh api repos/OWNER/ACTION/commits/TAG --jq .sha`, and keep the tag in a comment.
+      # Give every job its own timeout-minutes, sized to a few times its usual run, so a
+      # hung job releases its runner instead of holding one of the account's shared slots.
+      - name: Run the local gate
+        run: ./scripts/check.sh
 
-      - name: cargo fmt --check
-        run: cargo fmt --check
+  # Lints the workflows themselves. actionlint checks syntax, expressions and the
+  # shell in run steps, and zizmor checks for known security weaknesses, such as
+  # injection through untrusted input, excessive permissions and unpinned actions. Both
+  # run here only, because neither is commonly installed on a developer machine. The
+  # actionlint image is pinned by digest, and zizmor's version is pinned explicitly.
+  workflows:
+    name: workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: >-
+          docker run --rm --volume "$PWD:/repo" --workdir /repo
+          rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+          -color
+      - name: zizmor
+        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
+        with:
+          version: 1.31.1
+          advanced-security: false
 
-      - name: cargo build --workspace --all-targets
-        run: cargo build --workspace --all-targets
-
-      - name: cargo test --workspace
-        run: cargo test --workspace
-
-      - name: cargo clippy --workspace --tests -- -D warnings
-        run: cargo clippy --workspace --tests -- -D warnings
+  # The single required check. Keep its name in step with the ruleset.
+  ci-result:
+    name: CI result
+    if: always()
+    needs: [check, workflows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Fail if a needed job failed or was cancelled
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+      - name: Report success
+        run: echo "every needed job passed or was skipped on purpose"

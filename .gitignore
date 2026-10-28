@@ -1,22 +1,50 @@
-# Build artifacts
+# Project-local scratch directory, committed through a .gitkeep marker with its
+# contents ignored. Use `tmp/` for transient files such as commit messages, draft
+# text, scratch scripts and probe outputs. scripts/check.sh fails if anything else
+# under tmp/ is tracked.
+/tmp/*
+!/tmp/.gitkeep
+
+# Local, never-committed material such as credentials, API keys and
+# environment-specific notes. Ignored whole, so the directory does not exist in a
+# fresh clone. scripts/check.sh fails if anything
+# under it is tracked.
+/secret/
+
+# Environment files, which usually hold credentials. Commit an example with
+# placeholder values instead.
+.env
+.env.*
+!.env.example
+
+# Agent runtime state and personal settings, local to each contributor and not project
+# content. Shared Claude Code configuration, such as .claude/settings.json, skills,
+# agents and commands, is not ignored, so a project can commit it deliberately. Codex's
+# directory holds host-specific settings, such as a context window, and is ignored
+# whole.
+.claude/settings.local.json
+.claude/.cc-writes/
+.codex/
+
+# Operating system and editor droppings.
+.DS_Store
+Thumbs.db
+*.swp
+*~
+nvim.log
+
+# Add language and tool entries below, such as build output, dependency
+# directories and virtual environments.
+
+# Rust build output. Cargo.lock is committed, because the workspace builds a binary.
 /target
 **/target
 
-# Editor and IDE
-*.swp
+# Editor and IDE settings.
 *.swo
-*~
 .idea/
 .vscode/
 *.iml
 
-# OS files
-.DS_Store
-Thumbs.db
-
-# Project-local temporary files
-/tmp/
+# Project-local scratch kept inside a crate, from before tmp/ was the convention.
 crates/*/tmp/
-
-# Claude Code runtime files
-.claude/

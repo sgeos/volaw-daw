@@ -1,0 +1,19 @@
+# volaw-daw
+
+> volaw-daw is a digital audio workstation for composing music for the Vows of Love and War game audio engine. It is a Rust workspace with a `no_std` audio
+> engine crate, a `no_std` DAW logic crate with Keleusma scripting, and an SDL3 composer binary.
+
+This file follows the llms.txt convention. It is an index for language models and agents
+that read the repository from outside, such as a model asked to write code against it.
+Links are absolute, so the file works when fetched on its own. They name `HEAD`,
+which GitHub resolves to the default branch, whatever it is called.
+
+## Start Here
+
+- [AGENTS.md](https://github.com/sgeos/volaw-daw/blob/HEAD/AGENTS.md): onboarding for any AI assistant.
+- [CLAUDE.md](https://github.com/sgeos/volaw-daw/blob/HEAD/CLAUDE.md): authoritative project context, conventions and per-session protocol.
+- [README](https://github.com/sgeos/volaw-daw/blob/HEAD/README.md): project overview and quick start.
+
+## Documentation
+
+- [Documentation index](https://github.com/sgeos/volaw-daw/blob/HEAD/docs/README.md): architecture, decisions, roadmap and process.

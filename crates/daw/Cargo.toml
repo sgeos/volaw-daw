@@ -11,6 +11,6 @@ path = "src/main.rs"
 daw-core = { workspace = true }
 audio = { workspace = true }
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1.1"
 sdl3-sys = { version = "0.6", features = ["build-from-source"] }
 sdl3-ttf-sys = { version = "0.6", features = ["build-from-source"] }

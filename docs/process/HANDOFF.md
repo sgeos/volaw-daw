@@ -17,7 +17,7 @@ completed, moved or abandoned.
 
 ## Next step
 
-Merge the pull request for `fix/script-contract-hardening` once its checks pass. Then
+Merge pull request 3, whose checks passed on 2026-10-28. Then
 choose the next feature or fix with the operator. No milestone is defined in
 `docs/roadmap/`.
 
@@ -32,7 +32,10 @@ choose the next feature or fix with the operator. No milestone is defined in
   No reply had been seen. Adopt any template change through a sync.
 - **`Co-Authored-By` trailer on `4aba8b9`.** It breaks the operator ruling of 2026-10-25.
   It cannot be removed without a force-push, which the ruleset forbids, so it is
-  accepted unless the operator decides otherwise.
+  accepted unless the operator decides otherwise. The operator stated the ruling in the
+  user-level `~/.claude/CLAUDE.md` on 2026-10-28, so it now reaches unsynced lines.
+- **Dependabot pull request 2.** It passed CI. It moves `toml` from 0.8 to 1.1, a major
+  version, so the operator reviews it for changes to the saved project format.
 
 ## Environment
 

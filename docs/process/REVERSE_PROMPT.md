@@ -41,11 +41,12 @@ from the open items of the previous handoff.
 **Verified.** Fact. The gate passes locally on macOS with 220, 17 and 75 tests and no
 warnings.
 
-**Not verified.** Continuous integration on Ubuntu is observed on the pull request. The
+Fact. Continuous integration on Ubuntu passed on pull request 3 with the same counts.
+
+**Not verified.** The
 composer was not run interactively, so the status bar change is tested only through
 `DawState`.
 
 **For the operator.**
 - Merge the pull request.
-- Optionally state the trailer ruling in the user-level `~/.claude/CLAUDE.md`, as the
-  message to `Op55-admin-polybasite` explains.
+- Review Dependabot pull request 2, which moves `toml` to a new major version.

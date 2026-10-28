@@ -6,6 +6,18 @@ All notable changes are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A Keleusma script whose `TickState` declaration or `main` signature differs from the
+  host layout is rejected at load. Under `keleusma` 0.2.2 such a script read the wrong
+  values without any error.
+- The `audio::` script functions reject NaN and infinite arguments as a script error,
+  so a non-finite value cannot reach the synthesizer.
+- A tick count above the range of a Keleusma `Word` saturates instead of wrapping to a
+  negative value.
+- A script that fails to load at startup is reported in the status bar, as hot-reload
+  errors already were.
+
 ### Added
 
 - Repository conventions adopted from `sgeos/project-template`, including the local

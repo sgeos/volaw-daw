@@ -34,8 +34,9 @@ next feature or fix is the operator's choice. No milestone is defined in
   `daw-core` stays as defence in depth.
 - **Grok Build sandbox unmeasured.** The gate was measured inside Codex's and Claude
   Code's sandboxes, not Grok's. The first Grok session reports its outcome.
-- **Template feedback.** Sent to `Op55-admin-polybasite` on 2026-10-28 in three
-  messages. No reply had been seen. Adopt any template change through a sync.
+- **Template feedback.** Sent to `Op55-admin-polybasite` on 2026-10-28 in four
+  messages. The last confirms that the template does not ignore `.claude/worktrees/`,
+  which this repository now ignores. No reply had been seen. Adopt any template change through a sync.
 - **`Co-Authored-By` trailer on `4aba8b9`.** It breaks the operator ruling of 2026-10-25,
   and it stays because `main` forbids force-pushes. The operator stated the ruling in the
   user-level `~/.claude/CLAUDE.md` on 2026-10-28.

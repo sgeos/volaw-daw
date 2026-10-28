@@ -28,6 +28,7 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- `.claude/worktrees/`, where Claude Code creates its worktrees, is ignored.
 - The gate bypasses a configured rustc wrapper such as `sccache` unless
   `RUSTC_WRAPPER` is set, so it passes deterministically inside agent sandboxes.
 - `daw-core` depends on the published `keleusma` 0.2.2 crate in place of the in-tree

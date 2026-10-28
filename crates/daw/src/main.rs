@@ -839,9 +839,12 @@ impl DawState {
     ///
     /// Reads each script file from the scripts/ folder under the project root
     /// and compiles it into a ScriptRunner. Errors are logged but do not
-    /// prevent other channels from loading.
+    /// prevent other channels from loading. The first error is also shown
+    /// in the status bar with a count of any others, because a composer
+    /// started outside a terminal has no visible standard error.
     fn load_scripts(&mut self) {
         let scripts_dir = self.project_root.join("scripts");
+        let mut failures: Vec<String> = Vec::new();
         for ch in 0..8 {
             let filename = &self.project.channels[ch].script_file;
             if filename.is_empty() {
@@ -864,6 +867,7 @@ impl DawState {
                             filename,
                             e.0
                         );
+                        failures.push(format!("Script Ch{}: {}", ch + 1, e.0));
                         self.scripts[ch] = None;
                     }
                 },
@@ -874,9 +878,18 @@ impl DawState {
                         filename,
                         e
                     );
+                    failures.push(format!("Script Ch{}: could not read {filename}", ch + 1));
                     self.scripts[ch] = None;
                 }
             }
+        }
+        if let Some(first) = failures.first() {
+            let more = failures.len() - 1;
+            self.status_message = Some(if more == 0 {
+                first.clone()
+            } else {
+                format!("{first} (and {more} more, see the log)")
+            });
         }
     }
 
@@ -6038,4 +6051,102 @@ fn main() {
         let _ = Box::from_raw(audio_thread_ptr);
     }
     println!("[INFO] DAW shutdown");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A project directory under the system temporary directory, removed
+    /// when dropped. The process identifier and test name keep parallel
+    /// test runs apart.
+    struct TempProject(PathBuf);
+
+    impl TempProject {
+        fn new(name: &str) -> Self {
+            let root =
+                std::env::temp_dir().join(format!("volaw-daw-test-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("scripts")).expect("create scripts dir");
+            Self(root)
+        }
+
+        fn write_script(&self, file: &str, source: &str) {
+            std::fs::write(self.0.join("scripts").join(file), source).expect("write script");
+        }
+    }
+
+    impl Drop for TempProject {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn state_for(project: &TempProject) -> DawState {
+        let (producer, _consumer) = ring_buffer::ring_buffer(16);
+        let mut state = DawState::new(producer);
+        state.project_root = project.0.clone();
+        state
+    }
+
+    #[test]
+    fn load_scripts_reports_failure_in_status_bar() {
+        let project = TempProject::new("load-failure");
+        // A reordered declaration, which the entry contract rejects.
+        project.write_script(
+            "bad.kma",
+            "struct TickState { beat: Float, tempo: Float, ticks: Word }\n\
+             fn main(state: TickState) -> () { () }\n",
+        );
+        let mut state = state_for(&project);
+        state.project.channels[1].script_file = String::from("bad.kma");
+        state.project.channels[2].script_file = String::from("missing.kma");
+        state.load_scripts();
+
+        assert!(state.scripts[1].is_none());
+        assert!(state.scripts[2].is_none());
+        let message = state.status_message.expect("no status message");
+        assert!(
+            message.starts_with("Script Ch2: contract error"),
+            "{message}"
+        );
+        assert!(message.ends_with("(and 1 more, see the log)"), "{message}");
+    }
+
+    #[test]
+    fn readme_channel_script_example_runs() {
+        // The example is read from the README, so the documentation cannot
+        // drift from what the composer accepts.
+        let readme = include_str!("../README.md");
+        let section = readme
+            .split("### Channel Scripts")
+            .nth(1)
+            .expect("README has no Channel Scripts section");
+        let example = section
+            .split("```")
+            .nth(1)
+            .expect("Channel Scripts section has no code block");
+        let mut runner =
+            daw_core::script::ScriptRunner::from_source(example).expect("README example rejected");
+        let cmds = runner.tick(0, 120.0, 0.5);
+        assert_eq!(runner.last_error, None);
+        assert_eq!(
+            cmds,
+            vec![daw_core::script::AudioCommand::SetLpfCutoff(
+                200.0 + 0.5 * 1000.0
+            )]
+        );
+    }
+
+    #[test]
+    fn load_scripts_success_leaves_status_bar_alone() {
+        let project = TempProject::new("load-success");
+        project.write_script("ok.kma", "fn main(state: TickState) -> () { () }\n");
+        let mut state = state_for(&project);
+        state.project.channels[0].script_file = String::from("ok.kma");
+        state.load_scripts();
+
+        assert!(state.scripts[0].is_some());
+        assert_eq!(state.status_message, None);
+    }
 }

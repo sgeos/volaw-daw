@@ -168,6 +168,24 @@ daw_projects/
       my_song.mid         # Exported Standard MIDI File
 ```
 
+### Channel Scripts
+
+Each tick, the composer passes the transport state to the script's `main` function. The entry function takes exactly one parameter of type `TickState`. A script that reads the transport state declares the struct exactly as follows, with the same field names, types and order.
+
+```
+use audio::set_lpf_cutoff
+
+struct TickState { ticks: Word, tempo: Float, beat: Float }
+
+loop main(state: TickState) -> () {
+  audio::set_lpf_cutoff(200.0 + state.beat * 1000.0);
+  let state = yield ();
+  state
+}
+```
+
+A script that never reads the transport state may omit the declaration. The composer rejects a script with a different entry signature or a different `TickState` declaration at load, because Keleusma 0.2.2 would otherwise read the wrong values without reporting an error. Arguments to the `audio::` functions must be finite numbers, so a NaN or an infinity stops the script with an error. Load errors and runtime errors both appear in the status bar.
+
 ## Architecture
 
 | Module | Purpose |
@@ -195,4 +213,4 @@ cargo test -p daw
 cargo test -p daw-core
 ```
 
-The DAW binary has 14 unit tests. The daw-core library has 69 tests covering MIDI track operations, transport logic, project serialization, preset loading, rendering calculations, Standard MIDI File parsing, and Keleusma script integration.
+The DAW binary has 17 unit tests. The daw-core library has 75 tests covering MIDI track operations, transport logic, project serialization, preset loading, rendering calculations, Standard MIDI File parsing, and Keleusma script integration.

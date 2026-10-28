@@ -8,22 +8,44 @@ operator needs to decide. Facts, inferences and hypotheses are marked as such.
 
 ## Report on 2026-10-28
 
-**Done.** The repository was synchronized with `sgeos/project-template` at commit
-`5838ce3`. Template files were added, the placeholders were replaced, and the gate,
-continuous integration, Dependabot and ignore rules were adapted to the Rust workspace.
-The previous workflow's SDL3 dependency installation was carried into the gate's job.
+**Task.** The operator asked for every known issue to be resolved and for the findings
+to be communicated to the other lines. The issues came from the audit of `4aba8b9` and
+from the open items of the previous handoff.
 
-**Decided by the operator.** The GitHub repository is public, and the license is 0BSD.
+**Done, each with a test that fails when its fix is reverted.**
 
-**Verified.** Fact. `scripts/check.sh` exits zero locally on macOS with
-`RUSTC_WRAPPER=` set to empty. It reported 220 `audio` tests, 14 `daw` tests and 69
-`daw-core` tests passed, none skipped. The gate rejects an unknown argument with exit
-status 2 and passes arguments after `--` to `cargo test` as a filter.
+| Issue | Resolution |
+|---|---|
+| A mismatched `TickState` declaration or `main` signature misread values silently | Rejected at load by `check_entry_contract` |
+| NaN and infinite native arguments reached the engine | Rejected in `extract_f64`, the single native boundary |
+| A tick count above `i64::MAX` wrapped to a negative value | Saturates at `i64::MAX` |
+| Startup load errors appeared only on standard error | Shown in the status bar with a count |
+| Two tests matched Keleusma message wording | Assert only the stage prefix and the type name |
+| No test covered an undeclared, unread `TickState` | Test added |
+| The README did not document the script contract | Section added, with an example the tests read from the README |
 
-**Not verified.** The continuous integration run on Ubuntu is observed on the pull
-request, not here. The disclosure scan was skipped because no
-`secret/disclosure-terms.txt` exists.
+**Resolved by checking, with no change needed.**
+- Fact. No `.kma` file exists on this machine, so there were no local scripts to
+  migrate. The search excluded `/System` and `/private/var`.
+- Fact. The volaw workspace at `5306508` passes `cargo check` and 625 tests, with none
+  failed, against the `audio` crate on volaw-daw `main`.
 
-**For the operator.** Merging the pull request and applying the repository settings
-and ruleset are outward-facing, as are the remaining items under Open in
-[`HANDOFF.md`](HANDOFF.md).
+**Communicated.**
+- The Keleusma defect, with a reproduction, to `Op55-V0.2.X-keleusma`, and a pointer to
+  `Op55-V0.3.X-keleusma`.
+- A template follow-up to `Op55-admin-polybasite`, on the trailer ruling reaching only
+  synced repositories.
+- An audit note to `volaw-64`, which is inferred and not confirmed to be the author of
+  `4aba8b9`.
+
+**Verified.** Fact. The gate passes locally on macOS with 220, 17 and 75 tests and no
+warnings.
+
+**Not verified.** Continuous integration on Ubuntu is observed on the pull request. The
+composer was not run interactively, so the status bar change is tested only through
+`DawState`.
+
+**For the operator.**
+- Merge the pull request.
+- Optionally state the trailer ruling in the user-level `~/.claude/CLAUDE.md`, as the
+  message to `Op55-admin-polybasite` explains.

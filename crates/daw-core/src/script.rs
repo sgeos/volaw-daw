@@ -3,15 +3,38 @@
 //! Targets the published `keleusma` 0.2.2 crate. Scripts must follow the
 //! 0.2 surface language, which uses the `Word` and `Float` numeric type
 //! names in place of the removed `i64` and `f64` names. Each tick the host
-//! passes a `TickState` struct to the script's entry point. A script that
-//! reads its fields must declare it with this exact field order.
+//! passes a `TickState` struct to the script's entry point.
+//!
+//! # Entry contract
+//!
+//! The entry function `main` takes exactly one parameter annotated as
+//! `TickState`. A script that reads its fields declares it exactly as
+//! follows, with these field names, types and order.
 //!
 //! ```text
 //! struct TickState { ticks: Word, tempo: Float, beat: Float }
 //! ```
 //!
 //! An undeclared `TickState` is resolved by the 0.2 type checker as an
-//! opaque host type, so field access on it fails to compile.
+//! opaque host type. Such a script loads, and field access on it fails to
+//! compile.
+//!
+//! The contract is checked at load, because Keleusma 0.2.2 does not check
+//! it. The host struct is packed into a flat body in field order without
+//! its field names, and the compiler resolves field access by the offsets
+//! of the script's own declaration. A declaration that differs from the
+//! host layout, under any struct name, therefore reads the wrong bytes as
+//! the declared types and reports no error. A reordered declaration was
+//! observed to read the tick count as `4.598e18`. `ScriptRunner::from_source`
+//! rejects any entry signature or `TickState` declaration that differs from
+//! the contract, rather than letting it misread values during playback.
+//!
+//! # Native arguments
+//!
+//! Script values reach the audio engine only through the `audio::*`
+//! command natives. Each argument must be a finite number. A NaN or an
+//! infinity is rejected as a script error, because a non-finite value
+//! survives the engine's clamps and could persist in filter state.
 
 extern crate alloc;
 use alloc::format;
@@ -22,6 +45,7 @@ use core::cell::RefCell;
 
 use audio::AudioEngine;
 use keleusma::Arena;
+use keleusma::ast::{PrimType, Program, StructDef, TypeDef, TypeExpr};
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -83,10 +107,105 @@ pub enum AudioCommand {
     SetVco2PulseWidth(f64),
 }
 
-/// Extract an f64 from a Keleusma Value, accepting both Float and Int.
+/// Name of the struct the host passes to the script entry point.
+const TICK_STATE: &str = "TickState";
+
+/// Name of the script entry function, fixed by the Keleusma compiler.
+const ENTRY_FUNCTION: &str = "main";
+
+/// Fields of `TickState` in the order the host packs them.
+///
+/// `ScriptRunner::tick` builds the struct from these names in this order,
+/// and `check_tick_state_decl` requires a script declaration to match it.
+/// See the module documentation for why a mismatch must be rejected.
+const TICK_STATE_FIELDS: [(&str, PrimType); 3] = [
+    ("ticks", PrimType::Word),
+    ("tempo", PrimType::Float),
+    ("beat", PrimType::Float),
+];
+
+/// Build a contract violation error with a common prefix.
+fn contract_error(detail: &str) -> ScriptError {
+    ScriptError(format!("contract error: {detail}"))
+}
+
+/// Check a script's own `TickState` declaration against the host layout.
+fn check_tick_state_decl(def: &StructDef) -> Result<(), ScriptError> {
+    let matches_layout = def.type_params.is_empty()
+        && def.const_params.is_empty()
+        && def.fields.len() == TICK_STATE_FIELDS.len()
+        && def
+            .fields
+            .iter()
+            .zip(TICK_STATE_FIELDS.iter())
+            .all(|(field, (name, prim))| {
+                field.name == *name && matches!(&field.type_expr, TypeExpr::Prim(p, _) if p == prim)
+            });
+    if matches_layout {
+        Ok(())
+    } else {
+        Err(contract_error(
+            "TickState must be declared exactly as \
+             `struct TickState { ticks: Word, tempo: Float, beat: Float }`",
+        ))
+    }
+}
+
+/// Check the entry contract described in the module documentation.
+///
+/// Rejects a `TickState` declaration that differs from the host layout, a
+/// `TickState` that is declared as an enum or newtype, and an entry
+/// function whose parameters are anything other than one `TickState`.
+/// An undeclared `TickState` is accepted, since field access on it fails
+/// to compile and nothing can be misread.
+fn check_entry_contract(program: &Program) -> Result<(), ScriptError> {
+    for def in &program.types {
+        match def {
+            TypeDef::Struct(s) if s.name == TICK_STATE => check_tick_state_decl(s)?,
+            TypeDef::Enum(e) if e.name == TICK_STATE => {
+                return Err(contract_error("TickState must be a struct, not an enum"));
+            }
+            TypeDef::Newtype(n) if n.name == TICK_STATE => {
+                return Err(contract_error("TickState must be a struct, not a newtype"));
+            }
+            _ => {}
+        }
+    }
+
+    let entry = program
+        .functions
+        .iter()
+        .find(|f| f.name == ENTRY_FUNCTION)
+        .ok_or_else(|| contract_error("the script has no `main` entry function"))?;
+    let takes_tick_state = match entry.params.as_slice() {
+        [param] => matches!(
+            &param.type_expr,
+            Some(TypeExpr::Named(name, args, consts, _))
+                if name == TICK_STATE && args.is_empty() && consts.is_empty()
+        ),
+        _ => false,
+    };
+    if takes_tick_state {
+        Ok(())
+    } else {
+        Err(contract_error(
+            "`main` must take exactly one parameter annotated as `TickState`",
+        ))
+    }
+}
+
+/// Extract a finite f64 from a Keleusma Value, accepting both Float and Int.
+///
+/// Every command native reads its arguments through this function, so it
+/// is the single boundary where script values enter the audio engine. NaN
+/// and infinities are rejected, as the module documentation explains. An
+/// Int always converts to a finite f64, rounding above 2^53.
 fn extract_f64(val: &Value) -> Result<f64, VmError> {
     match val {
-        Value::Float(f) => Ok(*f),
+        Value::Float(f) if f.is_finite() => Ok(*f),
+        Value::Float(f) => Err(VmError::NativeError(format!(
+            "expected a finite number, got {f}"
+        ))),
         Value::Int(i) => Ok(*i as f64),
         other => Err(VmError::TypeError(format!(
             "expected f64, got {}",
@@ -410,6 +529,9 @@ impl ScriptRunner {
         let program = parse(&tokens).map_err(|e| ScriptError(format!("parse error: {:?}", e)))?;
         let module =
             compile(&program).map_err(|e| ScriptError(format!("compile error: {:?}", e)))?;
+        // Checked after compilation, so that an ill-formed script reports
+        // its compile error first.
+        check_entry_contract(&program)?;
 
         // The default capacity bounds the operand stack, frames, and
         // dynamic strings. `Vm::new` verifies the module's worst-case
@@ -444,13 +566,18 @@ impl ScriptRunner {
     /// The script receives a `TickState` struct with transport position
     /// and timing information. Returns any audio commands produced during
     /// execution. Errors are stored in `last_error` but do not propagate.
+    ///
+    /// A `Word` is a signed 64-bit integer, so a position above `i64::MAX`
+    /// saturates rather than wrapping to a negative tick count.
     pub fn tick(&mut self, position_ticks: u64, tempo: f64, beat: f64) -> Vec<AudioCommand> {
+        let ticks = i64::try_from(position_ticks).unwrap_or(i64::MAX);
+        let [(ticks_name, _), (tempo_name, _), (beat_name, _)] = TICK_STATE_FIELDS;
         let state = Value::struct_value(
-            String::from("TickState"),
+            String::from(TICK_STATE),
             alloc::vec![
-                (String::from("ticks"), Value::Int(position_ticks as i64)),
-                (String::from("tempo"), Value::Float(tempo)),
-                (String::from("beat"), Value::Float(beat)),
+                (String::from(ticks_name), Value::Int(ticks)),
+                (String::from(tempo_name), Value::Float(tempo)),
+                (String::from(beat_name), Value::Float(beat)),
             ],
         );
 
@@ -790,14 +917,36 @@ mod tests {
             "  state\n",
             "}\n",
         );
+        // Only the stage prefix, which this module writes, and the type
+        // name are asserted, so a reworded Keleusma message does not break
+        // the test.
         let err = ScriptRunner::from_source(src)
             .err()
             .expect("compile succeeded");
         assert!(
-            err.0.contains("field access on non-struct type TickState"),
+            err.0.starts_with("compile error") && err.0.contains(TICK_STATE),
             "{}",
             err.0
         );
+    }
+
+    #[test]
+    fn undeclared_tick_state_without_field_access_accepted() {
+        // A script that never reads TickState need not declare it.
+        let src = concat!(
+            "use audio::set_vco_mix\n",
+            "loop main(state: TickState) -> () {\n",
+            "  audio::set_vco_mix(0.5);\n",
+            "  let state = yield ();\n",
+            "  state\n",
+            "}\n",
+        );
+        let mut runner = ScriptRunner::from_source(src).expect("compile failed");
+        assert_eq!(
+            runner.tick(0, 120.0, 0.0),
+            alloc::vec![AudioCommand::SetVcoMix(0.5)]
+        );
+        assert_eq!(runner.last_error, None);
     }
 
     #[test]
@@ -810,11 +959,110 @@ mod tests {
         let err = ScriptRunner::from_source(src)
             .err()
             .expect("compile succeeded");
-        assert!(
-            err.0.starts_with("parse error") && err.0.contains("expected type"),
-            "{}",
-            err.0
+        assert!(err.0.starts_with("parse error"), "{}", err.0);
+    }
+
+    /// Wrap a declaration and entry signature into a minimal script.
+    fn script_with(decl: &str, signature: &str) -> String {
+        format!("{decl}fn main{signature} -> () {{ () }}\n")
+    }
+
+    /// Assert that a script is rejected by the entry contract check.
+    fn assert_contract_rejected(src: &str) {
+        match ScriptRunner::from_source(src) {
+            Ok(_) => panic!("script was accepted:\n{src}"),
+            Err(e) => assert!(e.0.starts_with("contract error"), "{}\n{src}", e.0),
+        }
+    }
+
+    #[test]
+    fn tick_state_declaration_mismatch_rejected() {
+        // Each of these loaded before the contract check. The first three
+        // were observed to misread values silently under keleusma 0.2.2.
+        let declarations = [
+            "struct TickState { beat: Float, tempo: Float, ticks: Word }\n",
+            "struct TickState { ticks: Word, beat: Float, tempo: Float }\n",
+            "struct TickState { ticks: Float, tempo: Float, beat: Float }\n",
+            "struct TickState { ticks: Word, tempo: Float }\n",
+            "struct TickState { ticks: Word, tempo: Float, beat: Float, bar: Float }\n",
+            "struct TickState { tick: Word, tempo: Float, beat: Float }\n",
+        ];
+        for decl in declarations {
+            assert_contract_rejected(&script_with(decl, "(state: TickState)"));
+        }
+    }
+
+    #[test]
+    fn tick_state_non_struct_rejected() {
+        assert_contract_rejected(&script_with(
+            "newtype TickState = Float;\n",
+            "(state: TickState)",
+        ));
+        assert_contract_rejected(&script_with(
+            "enum TickState { A, B }\n",
+            "(state: TickState)",
+        ));
+    }
+
+    #[test]
+    fn entry_signature_mismatch_rejected() {
+        let decl = "struct TickState { ticks: Word, tempo: Float, beat: Float }\n";
+        // A correctly laid out struct under another name is rejected too,
+        // because the check cannot tell which struct is meant as the host
+        // state once the name differs.
+        let other = "struct Other { ticks: Word, tempo: Float, beat: Float }\n";
+        let cases = [
+            (decl, "()"),
+            (decl, "(a: TickState, b: TickState)"),
+            (decl, "(state)"),
+            (decl, "(state: Word)"),
+            (decl, "(state: (Word, Float, Float))"),
+            (other, "(state: Other)"),
+        ];
+        for (d, signature) in cases {
+            assert_contract_rejected(&script_with(d, signature));
+        }
+    }
+
+    #[test]
+    fn non_finite_native_argument_rejected() {
+        for expr in ["0.0 / 0.0", "1.0 / 0.0", "-1.0 / 0.0"] {
+            let src = format!(
+                "use audio::set_lpf_cutoff\n\
+                 loop main(state: TickState) -> () {{\n\
+                 \x20 audio::set_lpf_cutoff({expr});\n\
+                 \x20 let state = yield ();\n\
+                 \x20 state\n\
+                 }}\n"
+            );
+            let mut runner = ScriptRunner::from_source(&src).expect("compile failed");
+            let cmds = runner.tick(0, 120.0, 0.0);
+            assert!(cmds.is_empty(), "{expr} produced {cmds:?}");
+            let err = runner.last_error.expect("no error recorded");
+            assert!(err.contains("finite"), "{expr}: {err}");
+        }
+    }
+
+    #[test]
+    fn tick_count_above_word_range_saturates() {
+        let src = concat!(
+            "use audio::set_lpf_cutoff\n",
+            "struct TickState { ticks: Word, tempo: Float, beat: Float }\n",
+            "loop main(state: TickState) -> () {\n",
+            "  audio::set_lpf_cutoff(state.ticks as Float);\n",
+            "  let state = yield ();\n",
+            "  state\n",
+            "}\n",
         );
+        let mut runner = ScriptRunner::from_source(src).expect("compile failed");
+        let boundary = u64::try_from(i64::MAX).expect("i64::MAX fits in u64");
+        for position in [boundary, boundary + 1, u64::MAX] {
+            assert_eq!(
+                runner.tick(position, 120.0, 0.0),
+                alloc::vec![AudioCommand::SetLpfCutoff(i64::MAX as f64)],
+                "position {position}"
+            );
+        }
     }
 
     #[test]

@@ -9,27 +9,30 @@ completed, moved or abandoned.
 
 ## State on 2026-10-28
 
-- **Remote.** `https://github.com/sgeos/volaw-daw` was created as a public repository
-  at the operator's choice, and `main` was pushed with its full history.
-- **Template.** The repository adopted `sgeos/project-template` at its commit `5838ce3`
-  on the branch `chore/template-sync`, with the 0BSD license at the operator's choice.
-- **Keleusma.** `daw-core` depends on the published `keleusma` 0.2.2. Its script tests
-  declare `TickState` and use the 0.2 type names `Word` and `Float`.
+- **Script contract.** `daw-core` checks each Keleusma script at load against the entry
+  contract in the `script` module documentation, and it rejects non-finite arguments to
+  the `audio::` natives. The branch is `fix/script-contract-hardening`.
+- **Template.** The repository follows `sgeos/project-template` from commit `5838ce3`,
+  merged in pull request 1.
 
 ## Next step
 
-Choose the next feature or fix with the operator. No milestone is defined in
+Merge the pull request for `fix/script-contract-hardening` once its checks pass. Then
+choose the next feature or fix with the operator. No milestone is defined in
 `docs/roadmap/`.
 
 ## Open
 
-- **Existing scripts.** Keleusma scripts kept in local `daw_projects/` folders were
-  written for the older surface language and have not been checked against 0.2.2. A
-  script that names `i64` or `f64`, or reads `TickState` without declaring it, fails to
-  compile at load. How the composer surfaces that error has not been checked.
-- **The volaw dependency.** The private volaw repository consumes `audio` by the sibling
-  path `../volaw-daw/crates/audio`. It has not been built against this tree since the
-  split.
+- **Keleusma defect.** `keleusma` 0.2.2 does not check a host struct argument against
+  the script declaration, so a mismatch misreads values silently. It was reported to
+  `Op55-V0.2.X-keleusma` on 2026-10-28, with a pointer to `Op55-V0.3.X-keleusma`. When
+  a fixed release appears, decide whether the check in `daw-core` stays as defence in
+  depth.
+- **Template feedback.** Sent to `Op55-admin-polybasite` on 2026-10-28 in two messages.
+  No reply had been seen. Adopt any template change through a sync.
+- **`Co-Authored-By` trailer on `4aba8b9`.** It breaks the operator ruling of 2026-10-25.
+  It cannot be removed without a force-push, which the ruleset forbids, so it is
+  accepted unless the operator decides otherwise.
 
 ## Environment
 
@@ -38,9 +41,13 @@ Observed on 2026-10-28 in a macOS Claude Code sandbox.
 - `sccache` is the configured `RUSTC_WRAPPER` and its socket is denied, so cargo fails
   with `Operation not permitted`. Run cargo and the gate with `RUSTC_WRAPPER=` set to
   empty.
-- `.git/config` is write-protected, so `git remote`, `git config` and setting an
-  upstream need escalation. `git worktree add` does not.
-- `shellcheck` and `python3` are installed under `/opt/local/bin`.
+- `.git/config` is write-protected, so `git remote`, `git config`, setting an upstream
+  and the branch deletion in `scripts/worktree.sh rm` need escalation or print a
+  harmless warning. `git worktree add` does not.
+- Merging a pull request with `gh pr merge` was denied by the auto mode classifier, so
+  the operator merges.
+- Another session committed into the main checkout on 2026-10-28 while this line
+  worked there. Work only in a worktree.
 
 ## Validity
 
@@ -54,5 +61,5 @@ Report any check not run, and any commit after the one that last rewrote this fi
 
 ## Mailbox
 
-None assigned. Name the line's mailbox here once it has one, with the commands that
-check it.
+None assigned. Messages from other lines arrive as cross-session messages to the
+session that sent the reports, which was `volaw-daw-b2`.

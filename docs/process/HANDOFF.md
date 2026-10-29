@@ -32,9 +32,12 @@ volaw repository and needs its line.
 - **`daw-core/src/app.rs` is about 5,800 lines.** It was moved whole. Splitting it is
   technical debt.
 - **Keleusma defect.** `keleusma` 0.2.2 does not check a host struct argument against
-  the script declaration. `Op55-V0.2.X-keleusma` queued it for the v0.2.3 line on
-  2026-10-28. When a fixed release appears, decide whether the check in `daw-core`
-  stays as defence in depth.
+  the script declaration. `Op55-V0.2.X-keleusma` reported on 2026-10-28 that the defect
+  reproduces on v0.2.3, that a module records only a composite's kind and size, and
+  that the fix awaits the keleusma operator. `daw-core` is unaffected meanwhile,
+  because `ScriptRunner::from_source` rejects any `TickState` declaration that differs
+  from the contract and `tick` builds the struct in that order. When a fixed release
+  appears, decide whether the check stays as defence in depth.
 - **Grok Build sandbox unmeasured.** The first Grok session reports its outcome.
 - **Template feedback.** Sent to `Op55-admin-polybasite` on 2026-10-28. No reply had
   been seen. Adopt any template change through a sync.

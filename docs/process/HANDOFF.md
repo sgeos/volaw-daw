@@ -9,12 +9,12 @@ completed, moved or abandoned.
 
 ## State on 2026-10-30
 
-- **Studio page and new effects.** Branch `feat/daw-ui-overhaul` adds the Studio home
-  page, mouse controls on every pedal, a grid pedal picker, and the Wavefolder, Filter,
-  Vibrato and Pitch Corrector effects, as `docs/decisions/STUDIO_PAGE.md` records. It
-  also splits the `daw-core` application module by concern. It merges through a pull
-  request.
-- Pull requests 1 to 6 are merged.
+- Pull requests 1 to 7 are merged. Pull request 7 added the Studio page, mouse controls
+  on every pedal and four effects.
+- **Local specification draft.** The operator keeps a specification of the composer
+  under `openspec/`, which `.gitignore` excludes at the operator's instruction. Its
+  notes live beside it. Branch `chore/ignore-spec-draft` adds only the ignore rule and these
+  process files, and merges through a pull request.
 
 ## Next step
 

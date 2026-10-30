@@ -13,7 +13,9 @@
 # directory, such as ../<repository>-worktrees outside the sandbox. Override the branch
 # new work starts from with WORKTREE_TRUNK, which
 # defaults to main. If the trunk has no local branch, as in a fresh clone, new work
-# starts from origin/<trunk>, and the new branch does not track it.
+# starts from origin/<trunk>, and the new branch does not track it. When SCRATCH_BASE
+# is set, `new` links the tree's build output to a scratch volume through
+# scripts/scratch.sh, and `rm` deletes that tree's folder there once the tree is gone.
 #
 # Usage:
 #   scripts/worktree.sh new  feat/some-thing   # new branch off the trunk, in a new tree
@@ -72,7 +74,12 @@ case "$command" in
                 { printf 'worktree.sh: no branch %s or %s\n' "$trunk" "$start" >&2; exit 1; }
         fi
         mkdir -p "$base"
-        git -C "$main_root" worktree add --no-track -b "$2" "$path" "$start"
+        # git reports progress on standard output, which would follow the tree's path into
+        # a caller's $(scripts/worktree.sh new ...), so send it to standard error.
+        git -C "$main_root" worktree add --no-track -b "$2" "$path" "$start" >&2
+        if [[ -n "${SCRATCH_BASE:-}" ]]; then
+            (cd "$path" && scripts/scratch.sh link) >&2
+        fi
         printf '%s\n' "$path"
         ;;
     list)
@@ -86,6 +93,12 @@ case "$command" in
         require_branch "${2:-}"
         path="$(tree_path "$2")"
         git -C "$main_root" worktree remove "$path"
+        # Build output only, kept under this repository's and tree's names by scratch.sh.
+        scratch="${SCRATCH_BASE:-}/$(basename "$main_root")/$(basename "$path")"
+        if [[ -n "${SCRATCH_BASE:-}" && -d "$scratch" ]]; then
+            rm -rf "$scratch"
+            printf 'worktree.sh: removed build output in %s\n' "$scratch" >&2
+        fi
         git -C "$main_root" branch -d "$2"
         ;;
     *)

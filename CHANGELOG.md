@@ -26,6 +26,9 @@ All notable changes are recorded here. The format follows
   returns a command sink. The DAW uses it, and it is meant to replace volaw's own bridge.
 - Handoff support for Codex and Grok Build: launch commands and sandbox needs in
   `AGENTS.md`, and a tool-neutral `docs/process/RESUME_PROMPT.md`.
+- `scripts/scratch.sh`, which keeps build output on a scratch volume named by
+  `SCRATCH_BASE`, and scratch linking in `scripts/worktree.sh new` and `rm`, synced from
+  `sgeos/project-template` at commit `3954eba`, released as `v1.0.8`.
 - Repository conventions adopted from `sgeos/project-template`, including the local
   gate `scripts/check.sh`, the worktree helper, the process documents and the 0BSD
   license.

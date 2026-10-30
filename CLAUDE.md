@@ -83,6 +83,7 @@ publishing a release or package, and force-pushing.
 ./scripts/check.sh                       # the local gate, which continuous integration also runs
 scripts/worktree.sh new feat/some-thing  # an isolated worktree for a parallel line
 scripts/worktree.sh rm  feat/some-thing  # remove it once merged
+scripts/scratch.sh status                # where build output lives, with SCRATCH_BASE set
 ```
 
 ```sh
@@ -129,6 +130,31 @@ its marker, is tracked. If `secret/disclosure-terms.txt` exists, one term per li
 gate also fails when a tracked file contains any of those terms, and it prints only the
 file and line. The scan cannot run in a clone or in continuous integration, which do not
 have the list, and the gate says so when it skips.
+
+## Build Output on a Scratch Volume
+
+A machine may keep build output on a separate volume with a quota, so that it fills that
+volume instead of the system disk. When `SCRATCH_BASE` is set, `scripts/scratch.sh link`
+moves each directory named in `SCRATCH_DIRS`, `target` by default, to
+`$SCRATCH_BASE/<repository>/<tree>/` and leaves a symbolic link in the tree, and
+`scripts/worktree.sh new` does so for every new worktree. Without `SCRATCH_BASE`, build
+output stays in the tree and nothing changes. Here the only managed directory is
+Cargo's `target`, and the private volaw repository builds this workspace into its own
+`target` through its sibling path dependency, so a link here does not move volaw's
+build output.
+
+- **Only rebuildable output goes there.** Never move `tmp/`, `secret/` or anything else
+  that holds work, because the scratch volume is meant to be filled and pruned.
+- **A clean deletes the link.** `cargo clean`, and any command that removes the build
+  directory, deletes the link rather than the files, and the next build recreates a real
+  directory in the tree. Run `scripts/scratch.sh link` after a clean and before building,
+  and check `scripts/scratch.sh status` when the disk fills unexpectedly.
+- **The sandbox must allow it.** The agent sandbox resolves the link to its real path,
+  so a build that is refused there needs `SCRATCH_BASE` in the sandbox's writable paths.
+  Report the refusal to the operator rather than moving the output back.
+- **Nothing is committed.** The links and the scratch volume are local to the machine.
+  `.gitignore` lists `/target` and `**/target` without a trailing slash, so that the
+  patterns match a link as well as a directory.
 
 ## Coding Conventions
 

@@ -6,7 +6,7 @@ A state file, overwritten whole after each task. It reports what was done, what 
 decided and by whom, what was verified and how, what was not verified, and what the
 operator needs to decide. Facts, inferences and hypotheses are marked as such.
 
-## Report on 2026-10-28
+## Report on 2026-10-30
 
 **Task.** The operator asked that the workspace follow the operator's preferred Rust
 architecture, a `no_std` core, a platform layer implementing core traits, and entry
@@ -45,12 +45,20 @@ which changes behaviour for such a project.
 - Interactive use with a real display and audio device. Inference: the event loop,
   drawing and input code moved without change apart from mechanical substitutions, so
   behaviour should match, but no one has played a note on this tree.
-- Continuous integration on this branch, because nothing has been pushed.
+- Continuous integration on this branch at the time of writing. The operator asked on
+  2026-10-30 for the branch to be pushed, and the pull request reports the result.
 - Running `target/debug/daw` directly fails to find `libSDL3_ttf.0.dylib`, because the
-  binary has no runtime search path. `cargo run` sets the path. Hypothesis: this was
-  already so on `main`, which was not checked.
+  binary has no runtime search path. `cargo run` sets the path. Inference, not tested
+  by running `main`. Neither `main` at `aa086d5` nor this branch has a build script or
+  linker setting that adds a search path, and both link the same `sdl3-sys` and
+  `sdl3-ttf-sys` builds, so `main` most likely behaves the same.
+
+**Keleusma status.** `Op55-V0.2.X-keleusma` reported on 2026-10-28 that the host
+struct defect reproduces on keleusma v0.2.3 and that its fix awaits the keleusma
+operator. `daw-core` is unaffected, because its load-time contract check rejects any
+`TickState` declaration that differs from the host layout.
 
 **For the operator.**
-- Review the branch, and confirm a push and pull request.
+- Review the pull request and merge it once continuous integration passes.
 - Run `cargo run -p daw` once and play a few notes.
 - Decide whether the volaw line should adopt `volaw-audio` now.

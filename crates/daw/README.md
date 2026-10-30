@@ -32,6 +32,7 @@ Opens a 1440x900 window titled "Vows of Love and War - Composer" with an empty 8
 | `--project <name>` | Load a saved project on startup |
 | `--import-midi <path>` | Import a Standard MIDI File (.mid) |
 | `--import-channel <n>` | Channel index to import into (0-based, default: 0) |
+| `--script <n> <file>` | Assign a Keleusma script from `scripts/` to channel `n` (0-based) |
 
 Examples:
 
@@ -188,19 +189,16 @@ A script that never reads the transport state may omit the declaration. The comp
 
 ## Architecture
 
-| Module | Purpose |
-|--------|---------|
-| `main.rs` | Application entry point, DAW state machine, event loop, input handling, rendering |
-| `save_load.rs` | Project persistence (TOML save/load) |
-| `sdl_audio.rs` | Audio device bridge (SDL3 audio callback to AudioEngine) |
-| `sdl_input.rs` | SDL3 keyboard and mouse event translation |
-| `sdl_platform.rs` | Platform trait implementation for std file I/O |
-| `sdl_renderer.rs` | SDL3 renderer with TTF text caching |
+The composer is the entry point of a layered workspace, described in
+[`docs/architecture/LAYERS.md`](../../docs/architecture/LAYERS.md). `src/main.rs` only
+parses arguments and wires the layers.
 
-### Library Crates
-
-- **daw-core** (no_std+alloc): Shared DAW logic including MIDI track representation, transport state, patch configuration, preset definitions, rendering trait, Standard MIDI File parser/builder, and Keleusma script runner
-- **audio** (no_std+alloc): 8-channel synthesizer engine with dual VCO, dual envelope generator, HPF/LPF filters, LFO, modulation matrix, 25-pedal DSP effect chain, and metronome click generator
+| Crate | Role for the composer |
+|-------|-----------------------|
+| `daw-core` | `DawApp`, the state machine for editing, playback scheduling, input handling and drawing, plus persistence, presets, scripts and MIDI files. `no_std` |
+| `audio` | The synthesizer engine and the lock-free command queue to it. `no_std` |
+| `daw-sdl` | The SDL3 renderer, SDL3 event translation and the std file system platform |
+| `volaw-audio` | Starts the engine on the SDL3 audio device, through `audio-sdl` |
 
 ### External Dependencies
 
@@ -213,4 +211,4 @@ cargo test -p daw
 cargo test -p daw-core
 ```
 
-The DAW binary has 17 unit tests. The daw-core library has 75 tests covering MIDI track operations, transport logic, project serialization, preset loading, rendering calculations, Standard MIDI File parsing, and Keleusma script integration.
+The DAW binary has 4 unit tests, for argument parsing and the README script example. The daw-core library has 106 tests covering the application, MIDI track operations, transport logic, project persistence, preset loading, rendering calculations, WAV decoding, Standard MIDI File parsing, and Keleusma script integration.

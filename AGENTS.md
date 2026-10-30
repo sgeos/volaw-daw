@@ -105,13 +105,13 @@ a clone, which shows that the tree validates without the authoring host.
 | Needed by | What a clone must provide |
 | --- | --- |
 | Building `daw` | A C toolchain and CMake, because SDL3 and SDL3_ttf build from source. On Linux, also the development headers that `.github/workflows/ci.yml` installs |
-| The gate | `git`, `python3` and `shellcheck`, as `CLAUDE.md` and the README describe |
+| The gate | `git`, `python3` and `shellcheck`, as `CLAUDE.md` and the README describe, and the Rust target `thumbv7em-none-eabihf` for the `no_std` build, which the gate skips with a note when absent |
 | The disclosure scan | `secret/disclosure-terms.txt`. No list exists on the authoring host either, so the scan skips everywhere and says so |
 | Running the composer | A display and an audio device. No test needs them |
 
 **The volaw game repository is private and is not needed here.** It consumes the
 `audio` crate by the sibling path `../volaw-daw/crates/audio`. A change to the public API
-of `audio` should be checked against it, which needs the authoring host or access to
+of `audio` or `volaw-audio` should be checked against it, which needs the authoring host or access to
 that repository.
 
 ## Obligations that matter most here

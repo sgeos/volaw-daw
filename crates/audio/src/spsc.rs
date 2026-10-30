@@ -18,10 +18,12 @@
 //! - Lamport, "Proving the Correctness of Multiprocess Programs" (1977)
 //! - Vyukov, "Bounded MPMC queue" (adapted for SPSC)
 
-use std::cell::UnsafeCell;
-use std::mem::MaybeUninit;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use alloc::boxed::Box;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::cell::UnsafeCell;
+use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 /// Cache-line-aligned wrapper to prevent false sharing between
 /// the head and tail atomic counters.
@@ -34,6 +36,23 @@ struct Shared<T> {
     head: CacheAligned<AtomicUsize>,
     tail: CacheAligned<AtomicUsize>,
     mask: usize,
+}
+
+impl<T> Drop for Shared<T> {
+    /// Drop every value still queued. Both halves are gone when this runs, so
+    /// access is exclusive. Without this, a pending value such as a boxed
+    /// closure in `EngineCommand::Bulk` would leak at shutdown. The loop visits
+    /// at most `mask` slots, because `tail` reaches `head` within one lap.
+    fn drop(&mut self) {
+        let head = *self.head.0.get_mut();
+        let mut tail = *self.tail.0.get_mut();
+        while tail != head {
+            // Safety: slots in [tail, head) were written by `push` and not yet
+            // read by `pop`, so each is initialized exactly once.
+            unsafe { self.buffer[tail].get_mut().assume_init_drop() };
+            tail = (tail + 1) & self.mask;
+        }
+    }
 }
 
 // Safety: The SPSC protocol ensures that the producer exclusively
@@ -92,6 +111,11 @@ impl<T> Producer<T> {
 }
 
 impl<T> Consumer<T> {
+    /// The number of values the buffer can hold at once.
+    pub fn capacity(&self) -> usize {
+        self.shared.mask
+    }
+
     /// Attempt to dequeue a value. Returns `None` if the buffer is empty.
     pub fn pop(&mut self) -> Option<T> {
         let tail = self.cached_tail;
@@ -146,7 +170,10 @@ pub fn ring_buffer<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
+    use alloc::string::{String, ToString};
 
     #[test]
     fn push_pop_single() {
@@ -245,5 +272,28 @@ mod tests {
         assert!(tx.push(Box::new(|| 42)).is_ok());
         let f = rx.pop().unwrap();
         assert_eq!(f(), 42);
+    }
+
+    #[test]
+    fn pending_values_are_dropped_with_the_buffer() {
+        let marker = Arc::new(());
+        let (mut tx, rx) = ring_buffer::<Arc<()>>(8);
+        for _ in 0..3 {
+            assert!(tx.push(Arc::clone(&marker)).is_ok());
+        }
+        assert_eq!(Arc::strong_count(&marker), 4);
+        drop(tx);
+        drop(rx);
+        assert_eq!(Arc::strong_count(&marker), 1);
+    }
+
+    #[test]
+    fn capacity_matches_usable_slots() {
+        let (mut tx, rx) = ring_buffer::<u8>(5);
+        let mut pushed = 0;
+        while tx.push(0).is_ok() {
+            pushed += 1;
+        }
+        assert_eq!(pushed, rx.capacity());
     }
 }

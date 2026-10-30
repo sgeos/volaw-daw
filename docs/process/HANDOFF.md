@@ -9,37 +9,40 @@ completed, moved or abandoned.
 
 ## State on 2026-10-28
 
-- **Prepared for a session in any tool.** `AGENTS.md` gives the launch commands for
-  Codex, Grok Build and Claude Code, and `docs/process/RESUME_PROMPT.md` is the prompt
-  to give them. The gate bypasses `sccache`, so it passes inside agent sandboxes.
-- **Two pull requests are stacked.** Pull request 3 on `fix/script-contract-hardening`
-  enforces the Keleusma script entry contract. The branch `chore/agent-handoff` adds the
-  handoff support on top of it, in a pull request whose base is that branch.
-- **Dependabot pull request 2** bumps the cargo dependencies, including `toml` from 0.8
-  to 1.1.
+- **Layered architecture in review.** The branch `refactor/layered-architecture` splits
+  the workspace into a `no_std` core, a std platform layer and entry points, as
+  `docs/architecture/LAYERS.md` describes. It adds `audio-sdl`, `daw-sdl` and the
+  shared entry library `volaw-audio`, and moves the DAW state machine into `daw-core`
+  as `DawApp`. It awaits the operator's push and review.
+- Pull requests 1 to 4 are merged, including Dependabot's `toml` 1.1 bump.
 
 ## Next step
 
-The operator merges pull request 3, then the handoff pull request, which GitHub retargets
-to `main` once its base branch is deleted, and reviews pull request 2. After that, the
-next feature or fix is the operator's choice. No milestone is defined in
-`docs/roadmap/`.
+The operator reviews the branch, confirms a push, and merges the pull request. Then
+volaw can move from its own SDL audio bridge to `volaw-audio`, which is a change in the
+volaw repository and needs its line.
 
 ## Open
 
+- **volaw adoption of `volaw-audio`.** A trial in a scratch copy of volaw at `969dfbb`
+  replaced `client-sdl`'s bridge with `volaw-audio` and passed `cargo check`. Nothing
+  was written to the volaw checkout. The volaw line decides when to adopt it.
+- **Shared song playback.** Scheduling a project's notes lives in `DawApp`. The game
+  cannot play a DAW project without it. Moving it into a shared module is unscheduled.
+- **`daw-core/src/app.rs` is about 5,800 lines.** It was moved whole. Splitting it is
+  technical debt.
 - **Keleusma defect.** `keleusma` 0.2.2 does not check a host struct argument against
-  the script declaration. `Op55-V0.2.X-keleusma` acknowledged the report on 2026-10-28
-  and queued it for reproduction on the v0.2.3 line, and it will report back only if
-  this repository is affected. When a fixed release appears, decide whether the check in
-  `daw-core` stays as defence in depth.
-- **Grok Build sandbox unmeasured.** The gate was measured inside Codex's and Claude
-  Code's sandboxes, not Grok's. The first Grok session reports its outcome.
-- **Template feedback.** Sent to `Op55-admin-polybasite` on 2026-10-28 in four
-  messages. The last confirms that the template does not ignore `.claude/worktrees/`,
-  which this repository now ignores. No reply had been seen. Adopt any template change through a sync.
-- **`Co-Authored-By` trailer on `4aba8b9`.** It breaks the operator ruling of 2026-10-25,
-  and it stays because `main` forbids force-pushes. The operator stated the ruling in the
-  user-level `~/.claude/CLAUDE.md` on 2026-10-28.
+  the script declaration. `Op55-V0.2.X-keleusma` reported on 2026-10-28 that the defect
+  reproduces on v0.2.3, that a module records only a composite's kind and size, and
+  that the fix awaits the keleusma operator. `daw-core` is unaffected meanwhile,
+  because `ScriptRunner::from_source` rejects any `TickState` declaration that differs
+  from the contract and `tick` builds the struct in that order. When a fixed release
+  appears, decide whether the check stays as defence in depth.
+- **Grok Build sandbox unmeasured.** The first Grok session reports its outcome.
+- **Template feedback.** Sent to `Op55-admin-polybasite` on 2026-10-28. No reply had
+  been seen. Adopt any template change through a sync.
+- **`Co-Authored-By` trailer on `4aba8b9`.** It stays because `main` forbids
+  force-pushes.
 
 ## If this session is not Claude Code
 
@@ -67,8 +70,8 @@ Observed on 2026-10-28 on the macOS authoring host.
 
 ## Validity
 
-Run from the checkout under test, on `chore/agent-handoff` or on `main` after both
-pull requests merge.
+Run from the checkout under test, on `refactor/layered-architecture` or on `main`
+after it merges.
 
 ```sh
 git status --short          # clean, apart from ignored files
@@ -78,8 +81,9 @@ git log --oneline "$(git log -1 --format=%H -- docs/process/HANDOFF.md)"..HEAD
 gh pr list --state all --limit 5   # needs an authenticated gh
 ```
 
-1. The gate reports 220 `audio` tests, 17 `daw` tests and 75 `daw-core` tests passed,
-   with none failed or ignored.
+1. The gate reports 237 `audio`, 5 `audio-sdl`, 4 `daw`, 106 `daw-core`, 4 `daw-sdl`
+   and 2 `volaw-audio` tests passed, with none failed or ignored, and reports that the
+   core crates build for `thumbv7em-none-eabihf`.
 2. Every commit after the one that wrote this file is reported, since this file does
    not describe them.
 3. Without an authenticated `gh` or network access, report the pull request states as

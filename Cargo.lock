@@ -16,6 +16,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "audio-sdl"
+version = "0.1.0"
+dependencies = [
+ "audio",
+ "sdl3-sys",
+]
+
+[[package]]
 name = "bytecheck"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -63,10 +71,9 @@ version = "0.1.0"
 dependencies = [
  "audio",
  "daw-core",
+ "daw-sdl",
  "sdl3-sys",
- "sdl3-ttf-sys",
- "serde",
- "toml",
+ "volaw-audio",
 ]
 
 [[package]]
@@ -78,13 +85,17 @@ dependencies = [
  "libm",
  "self_cell",
  "serde",
+ "toml",
 ]
 
 [[package]]
-name = "equivalent"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+name = "daw-sdl"
+version = "0.1.0"
+dependencies = [
+ "daw-core",
+ "sdl3-sys",
+ "sdl3-ttf-sys",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -94,25 +105,9 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "hashbrown"
-version = "0.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
-
-[[package]]
-name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
-
-[[package]]
-name = "indexmap"
-version = "2.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7714e70437a7dc3ac8eb7e6f8df75fd8eb422675fc7678aff7364301092b1017"
-dependencies = [
- "equivalent",
- "hashbrown 0.16.1",
-]
 
 [[package]]
 name = "keleusma"
@@ -242,7 +237,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "815cc8a37159a463064825246cadb07961e25cd9885908606f6d08a98d8f8874"
 dependencies = [
  "bytecheck",
- "hashbrown 0.17.1",
+ "hashbrown",
  "munge",
  "ptr_meta",
  "rancor",
@@ -408,7 +403,6 @@ version = "1.1.8+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20489e00e4d8741d6be680764cc12e270655e375a20d1011e844a9c3379e678d"
 dependencies = [
- "indexmap",
  "serde_core",
  "serde_spanned",
  "toml_datetime",
@@ -452,6 +446,14 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+
+[[package]]
+name = "volaw-audio"
+version = "0.1.0"
+dependencies = [
+ "audio",
+ "audio-sdl",
+]
 
 [[package]]
 name = "winnow"

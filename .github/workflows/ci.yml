@@ -73,6 +73,8 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+          # The gate builds the no_std core layer for a bare-metal target.
+          targets: thumbv7em-none-eabihf
       # The cache holds the registry and target directory, which spares the SDL3
       # source build on most runs. The workflow publishes nothing, so a poisoned
       # cache could affect only this check, not a release.

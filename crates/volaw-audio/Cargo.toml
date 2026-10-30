@@ -1,0 +1,9 @@
+[package]
+name = "volaw-audio"
+version.workspace = true
+edition.workspace = true
+description = "Entry library that wires the audio engine to SDL3 output, shared by the volaw client and the DAW"
+
+[dependencies]
+audio = { workspace = true }
+audio-sdl = { workspace = true }

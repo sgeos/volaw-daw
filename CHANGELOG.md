@@ -6,6 +6,36 @@ All notable changes are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The workspace is layered into a `no_std` core, a std platform layer and entry points.
+  The DAW state machine moved from the `daw` binary into `daw-core` as `DawApp`, which
+  reaches files, logging and time only through the `Platform` trait. The engine command
+  protocol, the lock-free queue and the audio-thread runner moved into `audio`.
+- Project persistence and WAV decoding moved into `daw-core` and no longer need `std`.
+- The gate builds `audio` and `daw-core` for `thumbv7em-none-eabihf` to prove they are
+  `no_std`. Continuous integration installs that target.
+- A malformed `--import-channel` or `--script` argument is reported and ignored instead
+  of being read as channel 0.
+
+### Added
+
+- `audio-sdl`, the SDL3 audio output, and `daw-sdl`, the SDL3 renderer, input and file
+  system platform for the DAW.
+- `volaw-audio`, an entry library that starts the engine on the default audio device and
+  returns a command sink. The DAW uses it, and it is meant to replace volaw's own bridge.
+
+### Fixed
+
+- Commands still queued when the audio queue is dropped are now dropped too. Before,
+  a pending boxed closure leaked at shutdown.
+- The audio callback drains at most one queue capacity of commands per block, and never
+  reallocates its staging buffer on the audio thread.
+- A project, patch, effect, MIDI or script file name that is absolute or contains `..`
+  is rejected, so a project file cannot read or write outside its root.
+- A WAV chunk size near `u32::MAX` cannot overflow the offset arithmetic on a 32-bit
+  target.
+
 ### Fixed
 
 - A Keleusma script whose `TickState` declaration or `main` signature differs from the

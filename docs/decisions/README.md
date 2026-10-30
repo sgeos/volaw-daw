@@ -6,4 +6,6 @@ One file per decision, named for its subject, recording the date, who decided, t
 options considered and the reason for the choice. A superseded decision stays, marked
 with what replaced it. Start each one from [`TEMPLATE.md`](TEMPLATE.md).
 
-No decisions recorded yet.
+| Decision | Status |
+|----------|--------|
+| [`LAYERED_ARCHITECTURE.md`](LAYERED_ARCHITECTURE.md) | Decided on 2026-10-28 |

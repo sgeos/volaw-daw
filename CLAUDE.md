@@ -6,18 +6,24 @@ only what applies broadly. History lives in git and in `CHANGELOG.md`.
 
 ## Project Overview
 
-volaw-daw is the composer for the Vows of Love and War game. It is a Rust workspace of
-three crates. `audio` is a `no_std` 8-channel synthesizer engine with a 25-pedal effect
-chain, and the private volaw game repository consumes it by the sibling path
-`../volaw-daw/crates/audio`. `daw-core` is `no_std` DAW logic, covering MIDI tracks,
-transport, patches, presets, the Standard MIDI File parser and the Keleusma script
-runner, which depends on the published `keleusma` 0.2.2 crate. `daw` is the SDL3
-binary, which builds SDL3 and SDL3_ttf from source.
+volaw-daw is the composer for the Vows of Love and War game. It is a Rust workspace in
+three layers, which [`docs/architecture/LAYERS.md`](docs/architecture/LAYERS.md)
+describes. The `no_std` core is `audio`, an 8-channel synthesizer engine with a 25-pedal
+effect chain and the lock-free command queue to it, and `daw-core`, which holds the
+`DawApp` state machine, persistence, presets, the Standard MIDI File parser and the
+Keleusma script runner on the published `keleusma` 0.2.2 crate. The std platform layer
+is `audio-sdl` and `daw-sdl`. The entry layer is the `volaw-audio` library, shared with
+the game, and the `daw` binary. SDL3 and SDL3_ttf build from source. The private volaw
+game repository consumes `audio` by the sibling path `../volaw-daw/crates/audio`.
+
+Keep the layers. Core crates name no platform crate and use no `std`, which the gate
+checks by building them for `thumbv7em-none-eabihf`. Platform crates implement core
+traits. Entry crates only wire.
 
 **Status.** Working and unreleased. The workspace was split out of the volaw
 repository with its history, and adopted `sgeos/project-template` on 2026-10-28. A
-change to the public API of `audio` affects the game client, so check volaw before
-changing it.
+change to the public API of `audio` or `volaw-audio` affects the game client, so check
+volaw before changing it.
 
 ## Development Process
 

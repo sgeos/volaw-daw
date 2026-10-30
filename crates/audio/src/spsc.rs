@@ -137,12 +137,28 @@ impl<T> Consumer<T> {
     }
 }
 
+/// The largest capacity `ring_buffer` accepts. Its slot count, the next power
+/// of two above it, is the largest power of two a `usize` holds.
+pub const MAX_CAPACITY: usize = usize::MAX >> 1;
+
 /// Create a producer-consumer pair with the given capacity.
 ///
 /// The capacity is rounded up to the next power of two. One slot is
 /// reserved internally to distinguish full from empty, so the usable
 /// capacity is `next_power_of_two(capacity + 1) - 1`.
+///
+/// # Panics
+///
+/// Panics if `capacity` exceeds `MAX_CAPACITY`, because the rounded slot
+/// count would not fit in a `usize`. Unchecked, the addition wraps in a
+/// release build and yields a queue that can hold nothing. A capacity at the
+/// limit is still far beyond any allocation that can succeed, so a caller
+/// that takes the capacity from configuration bounds it more tightly first.
 pub fn ring_buffer<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
+    assert!(
+        capacity <= MAX_CAPACITY,
+        "ring buffer capacity {capacity} exceeds {MAX_CAPACITY}"
+    );
     // Add 1 to requested capacity because one slot is sacrificed
     // for full/empty disambiguation.
     let cap = (capacity + 1).next_power_of_two();
@@ -295,5 +311,29 @@ mod tests {
             pushed += 1;
         }
         assert_eq!(pushed, rx.capacity());
+    }
+
+    #[test]
+    fn max_capacity_rounds_without_overflow() {
+        // The limit itself must survive the arithmetic in `ring_buffer`, and
+        // one more must not. Neither allocates.
+        assert!(
+            MAX_CAPACITY
+                .checked_add(1)
+                .and_then(usize::checked_next_power_of_two)
+                .is_some()
+        );
+        assert!(
+            (MAX_CAPACITY + 1)
+                .checked_add(1)
+                .and_then(usize::checked_next_power_of_two)
+                .is_none()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "exceeds")]
+    fn capacity_beyond_the_limit_panics() {
+        let _ = ring_buffer::<u8>(MAX_CAPACITY + 1);
     }
 }

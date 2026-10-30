@@ -17,6 +17,13 @@
 //! `start` initializes the SDL audio subsystem, which SDL reference-counts,
 //! and `stop` releases that reference. A host that has already initialized
 //! SDL, such as a game client, is unaffected.
+//!
+//! ## Shutdown order
+//!
+//! Stop or drop the output before the host calls `SDL_Quit`. `SDL_Quit`
+//! destroys every audio stream, and a later `stop` or drop would destroy the
+//! stream again through a dangling pointer. The output cannot detect this,
+//! because SDL offers no query for whether a stream is still alive.
 
 use core::ffi::{c_int, c_void};
 use core::marker::PhantomData;

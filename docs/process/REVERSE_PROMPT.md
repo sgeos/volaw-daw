@@ -8,57 +8,36 @@ operator needs to decide. Facts, inferences and hypotheses are marked as such.
 
 ## Report on 2026-10-30
 
-**Task.** The operator asked that the workspace follow the operator's preferred Rust
-architecture, a `no_std` core, a platform layer implementing core traits, and entry
-points that wire them, with a library that both volaw and the DAW depend on.
+**Task.** The operator asked that known loose ends be tied up, that the follow-up
+proposed for the `volaw-64` review notes be made, and that all work be committed,
+pushed and merged.
 
 **Done.**
-- `audio` gained the engine command protocol, the lock-free queue, `EngineRunner`, and
-  the `AudioSource`, `AudioOutput` and `CommandSink` traits, all moved or written as
-  `no_std`.
-- `daw-core` gained `DawApp`, the state machine formerly in the binary, and persistence,
-  WAV decoding and engine setup. `Platform` gained `path_exists` and `modified_stamp`,
-  and `MemoryPlatform` implements it for tests.
-- New crates `audio-sdl` and `daw-sdl` hold the SDL3 and std code. New entry library
-  `volaw-audio` wires the engine to SDL3 output. The `daw` binary only wires.
-- The gate and continuous integration build the core for `thumbv7em-none-eabihf`.
-- Records are in `docs/architecture/LAYERS.md` and
-  `docs/decisions/LAYERED_ARCHITECTURE.md`.
+- `spsc::ring_buffer` asserts that its capacity is at most the new `MAX_CAPACITY`.
+  Before, a capacity near `usize::MAX` wrapped in a release build to a queue that held
+  nothing.
+- `AudioSystem::start` rejects a command capacity above `MAX_COMMAND_CAPACITY` and a
+  block above `MAX_BLOCK_SAMPLES`, returning the engine.
+- `SdlAudioOutput` and `AudioSystem` document that audio must stop before `SDL_Quit`.
+- `audio::runtime` and `audio::command` no longer claim that the audio thread never
+  allocates, and record `Bulk` as technical debt. `LAYERS.md` lists both items.
+- The scratch file left in `tmp/` was removed.
 
-**Decided by this line, open to revision.** The crate names `audio-sdl`, `daw-sdl` and
-`volaw-audio`. Keeping `audio` and `daw-core` under their names so volaw's path
-dependency keeps working. Rejecting project file names that escape the project root,
-which changes behaviour for such a project.
+**Decided by this line, open to revision.** The bounds of 65,536 commands and
+1,048,576 block samples. The default configuration of 1,024 and 8,192 is well inside
+them.
 
-**Verified.** Facts, observed on the macOS authoring host.
-- The gate exited zero with 358 tests passed, against 312 on `main` at `aa086d5`. Every
-  former test was moved or replaced, none removed without a successor.
-- `audio` and `daw-core` build for `thumbv7em-none-eabihf`.
-- volaw's `client-core` and `client-sdl` at `969dfbb` pass `cargo check --locked`
-  against this tree, in a scratch copy. With `client-sdl` changed to use `volaw-audio`,
-  the copy also passed `cargo check`.
-- The composer started under SDL's dummy video and audio drivers, opened the audio
-  stream without a warning, reported malformed arguments, and ran its frame loop for
-  five seconds until stopped.
+**Verified.** Facts, observed on the macOS authoring host. The gate exited zero with
+363 tests and 1 doctest passed, and the core built for `thumbv7em-none-eabihf`.
+Continuous integration results are on pull request 5.
 
 **Not verified.**
-- Interactive use with a real display and audio device. Inference: the event loop,
-  drawing and input code moved without change apart from mechanical substitutions, so
-  behaviour should match, but no one has played a note on this tree.
-- Continuous integration on this branch at the time of writing. The operator asked on
-  2026-10-30 for the branch to be pushed, and the pull request reports the result.
-- Running `target/debug/daw` directly fails to find `libSDL3_ttf.0.dylib`, because the
-  binary has no runtime search path. `cargo run` sets the path. Inference, not tested
-  by running `main`. Neither `main` at `aa086d5` nor this branch has a build script or
-  linker setting that adds a search path, and both link the same `sdl3-sys` and
-  `sdl3-ttf-sys` builds, so `main` most likely behaves the same.
-
-**Keleusma status.** `Op55-V0.2.X-keleusma` reported on 2026-10-28 that the host
-struct defect reproduces on keleusma v0.2.3 and that its fix awaits the keleusma
-operator. `daw-core` is unaffected, because its load-time contract check rejects any
-`TickState` declaration that differs from the host layout.
+- Interactive use with a real display and audio device.
+- volaw's pin on `3dd668a`, which `volaw-64` reported and this line did not inspect.
+- `target/debug/daw` run directly cannot find `libSDL3_ttf.0.dylib`. Inference, not
+  tested on `main`. Neither `main` at `aa086d5` nor the merged branch adds a runtime
+  search path, so the behaviour most likely predates the refactor.
 
 **For the operator.**
-- Review the pull request and merge it once continuous integration passes.
 - Run `cargo run -p daw` once and play a few notes.
-- Decide whether the volaw line should adopt `volaw-audio` now.
+- The `Bulk` debt and the shutdown-order requirement are documented but not removed.

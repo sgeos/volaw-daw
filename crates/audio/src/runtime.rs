@@ -4,8 +4,17 @@
 //! The control thread owns a `spsc::Producer<EngineCommand>`. The audio thread
 //! owns an `EngineRunner`, which holds the `AudioEngine` and the matching
 //! consumer. A platform crate implements `AudioOutput` by calling
-//! `AudioSource::render_f32` from its device callback. Nothing here blocks,
-//! locks or allocates on the audio thread after construction.
+//! `AudioSource::render_f32` from its device callback. Nothing here blocks or
+//! locks on the audio thread, and the runner's own buffers are allocated once
+//! at construction.
+//!
+//! One exception to allocation-free rendering is known technical debt. An
+//! `EngineCommand::Bulk` closure runs on the audio thread and may allocate,
+//! and its box is freed there after it runs. The DAW sends `Bulk` only on cold
+//! paths such as applying a patch or rebuilding a pedal chain, where a rare
+//! glitch is accepted. Removing it needs a fixed-size command for each such
+//! change, or a return queue that carries the spent box back to the control
+//! thread to be freed.
 
 use alloc::vec;
 use alloc::vec::Vec;

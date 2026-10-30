@@ -113,6 +113,31 @@ impl SdlRenderer {
         }
     }
 
+    /// Save what has been drawn since the last `present` as a BMP file.
+    ///
+    /// The screenshot example uses this to check page layouts without a
+    /// display. Call it before `present`, after which SDL leaves the back
+    /// buffer undefined.
+    pub fn save_bmp(&mut self, path: &str) -> Result<(), String> {
+        let c_path = CString::new(path).map_err(|e| format!("invalid path: {e}"))?;
+        // Safety: `renderer` is valid from construction until drop, a null
+        // rectangle means the whole target, and the surface SDL returns is
+        // destroyed exactly once.
+        unsafe {
+            let surface = SDL_RenderReadPixels(self.renderer, std::ptr::null());
+            if surface.is_null() {
+                return Err(sdl_error("SDL_RenderReadPixels"));
+            }
+            let saved = sdl3_sys::surface::SDL_SaveBMP(surface, c_path.as_ptr());
+            sdl3_sys::surface::SDL_DestroySurface(surface);
+            if saved {
+                Ok(())
+            } else {
+                Err(sdl_error("SDL_SaveBMP"))
+            }
+        }
+    }
+
     fn font_size_index(size: FontSize) -> usize {
         match size {
             FontSize::Small => 0,

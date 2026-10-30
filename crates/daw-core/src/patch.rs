@@ -312,19 +312,67 @@ pub struct PedalParam {
 pub const PEDAL_TYPES: &[(&str, &[&str])] = &[
     (
         "Distortion",
-        &["Overdrive", "Distortion", "Fuzz", "TapeSaturation"],
+        &[
+            "Overdrive",
+            "Distortion",
+            "Fuzz",
+            "TapeSaturation",
+            "Wavefolder",
+        ],
     ),
+    ("Filter", &["Filter"]),
     ("Wah", &["AutoWah", "WahManual"]),
-    ("Modulation", &["Chorus", "Flanger", "Phaser", "Tremolo"]),
+    (
+        "Modulation",
+        &["Chorus", "Flanger", "Phaser", "Tremolo", "Vibrato"],
+    ),
     ("Delay", &["DigitalDelay", "AnalogDelay", "PingPongDelay"]),
     ("Reverb", &["PlateReverb", "HallReverb", "RoomReverb"]),
     (
         "Special",
         &["Bitcrusher", "RingModulator", "PitchShifter", "AutoPan"],
     ),
+    ("Pitch", &["PitchCorrector"]),
     ("Dynamics", &["NoiseGate", "Compressor"]),
     ("Utility", &["Eq", "Volume", "Buffer"]),
 ];
+
+/// A short description of a pedal type for the effect browser and picker,
+/// or `None` for an unknown type.
+pub fn pedal_description(pedal_type: &str) -> Option<&'static str> {
+    Some(match pedal_type {
+        "Overdrive" => "Warm, smooth drive",
+        "Distortion" => "Hard clipped crunch",
+        "Fuzz" => "Buzzy, extreme clipping",
+        "TapeSaturation" => "Soft tape warmth",
+        "Wavefolder" => "Metallic folded tones",
+        "Filter" => "Sweepable resonant filter",
+        "AutoWah" => "Wah that follows volume",
+        "WahManual" => "Fixed wah position",
+        "Chorus" => "Thick, doubled sound",
+        "Flanger" => "Jet-plane sweep",
+        "Phaser" => "Swirling phase sweep",
+        "Tremolo" => "Volume wobble",
+        "Vibrato" => "Pitch wobble",
+        "DigitalDelay" => "Clean echoes",
+        "AnalogDelay" => "Dark, warm echoes",
+        "PingPongDelay" => "Bouncing echoes",
+        "PlateReverb" => "Bright studio plate",
+        "HallReverb" => "Big concert hall",
+        "RoomReverb" => "Small room ambience",
+        "Bitcrusher" => "Lo-fi bits and rate",
+        "RingModulator" => "Metallic bell tones",
+        "PitchShifter" => "Shift pitch up or down",
+        "AutoPan" => "Rhythmic level pulse",
+        "PitchCorrector" => "Snap pitch to a scale",
+        "NoiseGate" => "Silences quiet noise",
+        "Compressor" => "Evens out loudness",
+        "Eq" => "Bass, mid and treble",
+        "Volume" => "Level control",
+        "Buffer" => "Clean gain stage",
+        _ => return None,
+    })
+}
 
 /// Create a `PedalConfig` with default parameter values for the given pedal type.
 ///
@@ -673,6 +721,74 @@ pub fn default_pedal_config(pedal_type: &str) -> Option<PedalConfig> {
             name: String::from("gain"),
             value: 1.0
         },],
+        "Wavefolder" => alloc::vec![
+            PedalParam {
+                name: String::from("fold"),
+                value: 3.0
+            },
+            PedalParam {
+                name: String::from("mix"),
+                value: 1.0
+            },
+        ],
+        "Filter" => alloc::vec![
+            PedalParam {
+                name: String::from("mode"),
+                value: 0.0
+            },
+            PedalParam {
+                name: String::from("cutoff_hz"),
+                value: 1200.0
+            },
+            PedalParam {
+                name: String::from("q"),
+                value: 2.0
+            },
+            PedalParam {
+                name: String::from("lfo_rate_hz"),
+                value: 0.5
+            },
+            PedalParam {
+                name: String::from("lfo_depth"),
+                value: 0.0
+            },
+            PedalParam {
+                name: String::from("mix"),
+                value: 1.0
+            },
+        ],
+        "Vibrato" => alloc::vec![
+            PedalParam {
+                name: String::from("rate_hz"),
+                value: 5.0
+            },
+            PedalParam {
+                name: String::from("depth_ms"),
+                value: 2.0
+            },
+            PedalParam {
+                name: String::from("mix"),
+                value: 1.0
+            },
+        ],
+        "PitchCorrector" => alloc::vec![
+            PedalParam {
+                name: String::from("speed"),
+                value: 0.1
+            },
+            PedalParam {
+                name: String::from("scale"),
+                value: 0.0
+            },
+            PedalParam {
+                name: String::from("key"),
+                value: 0.0
+            },
+            PedalParam {
+                name: String::from("mix"),
+                value: 1.0
+            },
+        ],
         _ => return None,
     };
     Some(PedalConfig {
@@ -798,13 +914,47 @@ mod tests {
     }
 
     #[test]
+    fn every_listed_pedal_has_a_short_description() {
+        for (_category, types) in PEDAL_TYPES {
+            for pedal_type in *types {
+                let text = pedal_description(pedal_type)
+                    .unwrap_or_else(|| panic!("{pedal_type} has no description"));
+                // The picker column fits about 26 characters.
+                assert!(text.len() <= 26, "{pedal_type}: {text}");
+            }
+        }
+        assert_eq!(pedal_description("Unknown"), None);
+    }
+
+    #[test]
     fn default_pedal_config_unknown() {
         assert!(default_pedal_config("Unknown").is_none());
     }
 
     #[test]
-    fn pedal_types_covers_25() {
+    fn pedal_types_covers_29() {
         let count: usize = PEDAL_TYPES.iter().map(|(_, types)| types.len()).sum();
-        assert_eq!(count, 25);
+        assert_eq!(count, 29);
+    }
+
+    #[test]
+    fn every_listed_pedal_exists_in_the_engine_with_its_params() {
+        // The picker list and defaults here and the engine's pedals are
+        // maintained separately, so check that they agree.
+        for (_category, types) in PEDAL_TYPES {
+            for pedal_type in *types {
+                let mut pedal = audio::effects::Pedal::from_name(pedal_type, 48000.0)
+                    .unwrap_or_else(|| panic!("engine lacks {pedal_type}"));
+                assert_eq!(pedal.type_name(), *pedal_type);
+                let config = default_pedal_config(pedal_type).unwrap();
+                for param in &config.params {
+                    assert!(
+                        pedal.set_param(&param.name, param.value),
+                        "{pedal_type} rejects {}",
+                        param.name
+                    );
+                }
+            }
+        }
     }
 }

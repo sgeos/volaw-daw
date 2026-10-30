@@ -9,3 +9,4 @@ with what replaced it. Start each one from [`TEMPLATE.md`](TEMPLATE.md).
 | Decision | Status |
 |----------|--------|
 | [`LAYERED_ARCHITECTURE.md`](LAYERED_ARCHITECTURE.md) | Decided on 2026-10-28 |
+| [`STUDIO_PAGE.md`](STUDIO_PAGE.md) | Decided on 2026-10-30 |

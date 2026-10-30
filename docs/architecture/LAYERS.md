@@ -68,8 +68,11 @@ binary configures the engine from the loaded project before starting it, and kee
 - **Playback of composed songs is not shared.** `volaw-audio` exposes the engine and its
   command queue. Scheduling a saved project's notes lives in `DawApp`, so the game
   cannot yet play a DAW project without reimplementing it.
-- **`app.rs` is large.** `DawApp` was moved whole, about 5,800 lines, so that the move
-  stayed reviewable. Splitting it into input, playback and drawing modules is
+- **`DawApp` is split by concern, but two modules are still large.** On 2026-10-30 the
+  former `app.rs` became the `app` module, with `mod.rs` for state and playback,
+  `handlers.rs` for input and editing, `render.rs` for drawing, `widgets.rs` for shared
+  drawing and layout helpers, and `studio.rs` for the Studio page. `handlers.rs` holds
+  about 2,500 lines and `render.rs` about 1,600, and splitting them per page is
   technical debt.
 - **The layout assumes a 1440 by 900 window.** `WINDOW_WIDTH` and `WINDOW_HEIGHT` are
   constants in `daw-core`, as they were in the binary.

@@ -7,25 +7,31 @@
 //!
 //! | Category | Effects |
 //! |----------|---------|
-//! | Distortion / Saturation | Overdrive, Distortion, Fuzz, Tape Saturation |
-//! | Dynamic / Modulation | Auto-Wah, Manual Wah, Chorus, Flanger, Phaser, Tremolo |
+//! | Distortion / Saturation | Overdrive, Distortion, Fuzz, Tape Saturation, Wavefolder |
+//! | Filter | Filter |
+//! | Dynamic / Modulation | Auto-Wah, Manual Wah, Chorus, Flanger, Phaser, Tremolo, Vibrato |
 //! | Time-Based | Digital Delay, Analog Delay, Ping-Pong Delay, Plate/Hall/Room Reverb |
 //! | Special FX | Bitcrusher, Ring Modulator, Pitch Shifter, Auto-Pan |
+//! | Pitch | Pitch Corrector |
 //! | Utility | Noise Gate, Compressor, EQ, Volume, Buffer |
 
 pub mod delay;
 pub mod distortion;
 pub mod dynamics;
+pub mod filter;
 pub mod modulation;
+pub mod pitch;
 pub mod reverb;
 pub mod special;
 pub mod utility;
 pub mod wah;
 
 pub use delay::{AnalogDelay, DigitalDelay, PingPongDelay};
-pub use distortion::{Distortion, Fuzz, Overdrive, TapeSaturation};
+pub use distortion::{Distortion, Fuzz, Overdrive, TapeSaturation, Wavefolder};
 pub use dynamics::{Compressor, NoiseGate};
-pub use modulation::{Chorus, Flanger, Phaser, Tremolo};
+pub use filter::Filter;
+pub use modulation::{Chorus, Flanger, Phaser, Tremolo, Vibrato};
+pub use pitch::PitchCorrector;
 pub use reverb::{HallReverb, PlateReverb, RoomReverb};
 pub use special::{AutoPan, Bitcrusher, PitchShifter, RingModulator};
 pub use utility::{Buffer, Eq, Volume};
@@ -33,7 +39,7 @@ pub use wah::{AutoWah, WahManual};
 
 /// A single effect pedal in the signal chain.
 ///
-/// This enum avoids dynamic dispatch by encoding all 25 effect types
+/// This enum avoids dynamic dispatch by encoding all 29 effect types
 /// as variants. Each variant holds its own parameters and DSP state.
 #[derive(Debug, Clone)]
 pub enum Pedal {
@@ -62,6 +68,10 @@ pub enum Pedal {
     Eq(Eq),
     Volume(Volume),
     Buffer(Buffer),
+    Wavefolder(Wavefolder),
+    Filter(Filter),
+    Vibrato(Vibrato),
+    PitchCorrector(PitchCorrector),
 }
 
 impl Pedal {
@@ -94,6 +104,10 @@ impl Pedal {
             Pedal::Eq(p) => p.process(buffer, sr),
             Pedal::Volume(p) => p.process(buffer, sr),
             Pedal::Buffer(p) => p.process(buffer, sr),
+            Pedal::Wavefolder(p) => p.process(buffer, sr),
+            Pedal::Filter(p) => p.process(buffer, sr),
+            Pedal::Vibrato(p) => p.process(buffer, sr),
+            Pedal::PitchCorrector(p) => p.process(buffer, sr),
         }
     }
 
@@ -504,6 +518,78 @@ impl Pedal {
                 }
                 _ => false,
             },
+            Pedal::Wavefolder(p) => match name {
+                "fold" => {
+                    p.fold = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
+                _ => false,
+            },
+            Pedal::Filter(p) => match name {
+                "mode" => {
+                    p.mode = value;
+                    true
+                }
+                "cutoff_hz" => {
+                    p.cutoff_hz = value;
+                    true
+                }
+                "q" => {
+                    p.q = value;
+                    true
+                }
+                "lfo_rate_hz" => {
+                    p.lfo_rate_hz = value;
+                    true
+                }
+                "lfo_depth" => {
+                    p.lfo_depth = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
+                _ => false,
+            },
+            Pedal::Vibrato(p) => match name {
+                "rate_hz" => {
+                    p.rate_hz = value;
+                    true
+                }
+                "depth_ms" => {
+                    p.depth_ms = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
+                _ => false,
+            },
+            Pedal::PitchCorrector(p) => match name {
+                "speed" => {
+                    p.speed = value;
+                    true
+                }
+                "scale" => {
+                    p.scale = value;
+                    true
+                }
+                "key" => {
+                    p.key = value;
+                    true
+                }
+                "mix" => {
+                    p.mix = value;
+                    true
+                }
+                _ => false,
+            },
         }
     }
 
@@ -553,6 +639,12 @@ impl Pedal {
             "eq" => Some(Pedal::Eq(Eq::new(sample_rate))),
             "volume" => Some(Pedal::Volume(Volume::new(sample_rate))),
             "buffer" => Some(Pedal::Buffer(Buffer::new(sample_rate))),
+            "wavefolder" => Some(Pedal::Wavefolder(Wavefolder::new(sample_rate))),
+            "filter" => Some(Pedal::Filter(Filter::new(sample_rate))),
+            "vibrato" => Some(Pedal::Vibrato(Vibrato::new(sample_rate))),
+            "pitchcorrector" | "pitch_corrector" => {
+                Some(Pedal::PitchCorrector(PitchCorrector::new(sample_rate)))
+            }
             _ => None,
         }
     }
@@ -585,6 +677,10 @@ impl Pedal {
             Pedal::Eq(_) => "Eq",
             Pedal::Volume(_) => "Volume",
             Pedal::Buffer(_) => "Buffer",
+            Pedal::Wavefolder(_) => "Wavefolder",
+            Pedal::Filter(_) => "Filter",
+            Pedal::Vibrato(_) => "Vibrato",
+            Pedal::PitchCorrector(_) => "PitchCorrector",
         }
     }
 
@@ -616,6 +712,10 @@ impl Pedal {
             Pedal::Eq(p) => p.reset(),
             Pedal::Volume(p) => p.reset(),
             Pedal::Buffer(p) => p.reset(),
+            Pedal::Wavefolder(p) => p.reset(),
+            Pedal::Filter(p) => p.reset(),
+            Pedal::Vibrato(p) => p.reset(),
+            Pedal::PitchCorrector(p) => p.reset(),
         }
     }
 }
@@ -625,7 +725,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn from_name_all_25_types() {
+    fn from_name_all_29_types() {
         let names = [
             "Overdrive",
             "Distortion",
@@ -652,6 +752,10 @@ mod tests {
             "Eq",
             "Volume",
             "Buffer",
+            "Wavefolder",
+            "Filter",
+            "Vibrato",
+            "PitchCorrector",
         ];
         for name in &names {
             let pedal = Pedal::from_name(name, 48000.0);
@@ -671,6 +775,29 @@ mod tests {
         assert!(Pedal::from_name("tape_saturation", 48000.0).is_some());
         assert!(Pedal::from_name("digital_delay", 48000.0).is_some());
         assert!(Pedal::from_name("noise_gate", 48000.0).is_some());
+    }
+
+    #[test]
+    fn new_pedals_accept_their_parameters() {
+        let cases: [(&str, &[&str]); 4] = [
+            ("Wavefolder", &["fold", "mix"]),
+            (
+                "Filter",
+                &["mode", "cutoff_hz", "q", "lfo_rate_hz", "lfo_depth", "mix"],
+            ),
+            ("Vibrato", &["rate_hz", "depth_ms", "mix"]),
+            ("PitchCorrector", &["speed", "scale", "key", "mix"]),
+        ];
+        for (name, params) in cases {
+            let mut pedal = Pedal::from_name(name, 48000.0).unwrap();
+            for param in params {
+                assert!(pedal.set_param(param, 0.5), "{name} rejected {param}");
+            }
+            assert!(!pedal.set_param("no_such_param", 0.5));
+            let mut buf = [0.25f64; 512];
+            pedal.process(&mut buf, 48000);
+            assert!(buf.iter().all(|s| s.is_finite()), "{name} output");
+        }
     }
 
     #[test]

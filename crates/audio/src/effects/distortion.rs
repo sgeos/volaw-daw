@@ -229,9 +229,69 @@ impl TapeSaturation {
     }
 }
 
+/// Wavefolder: a sine folding stage, as on west-coast synthesizers.
+///
+/// The driven signal is passed through `sin`, so that peaks beyond the fold
+/// point fold back instead of clipping. Higher `fold` adds more folds and a
+/// brighter, more metallic tone than clipping produces. The output stays
+/// within `[-1, 1]` for any input, so the stage cannot run away.
+#[derive(Debug, Clone)]
+pub struct Wavefolder {
+    /// Fold amount (1.0 to 10.0). At 1.0 the curve is a gentle saturation.
+    pub fold: f64,
+    /// Wet/dry mix.
+    pub mix: f64,
+}
+
+impl Wavefolder {
+    pub fn new(_sample_rate: f64) -> Self {
+        Self {
+            fold: 3.0,
+            mix: 1.0,
+        }
+    }
+
+    pub fn process(&mut self, buffer: &mut [f64], _sample_rate: f64) {
+        let fold = self.fold.clamp(1.0, 10.0);
+        let mix = self.mix.clamp(0.0, 1.0);
+        for sample in buffer.iter_mut() {
+            let dry = *sample;
+            let wet = libm::sin(fold * dry * core::f64::consts::FRAC_PI_2);
+            *sample = dry * (1.0 - mix) + wet * mix;
+        }
+    }
+
+    pub fn reset(&mut self) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wavefolder_output_is_bounded_and_folds() {
+        let mut wf = Wavefolder::new(48000.0);
+        wf.fold = 4.0;
+        // A ramp well past full scale must stay in [-1, 1] and change
+        // direction, which plain clipping never does.
+        let mut buf: [f64; 200] = core::array::from_fn(|i| (i as f64 - 100.0) / 25.0);
+        wf.process(&mut buf, 48000.0);
+        assert!(buf.iter().all(|s| s.abs() <= 1.0));
+        let turns = buf
+            .windows(3)
+            .filter(|w| (w[1] - w[0]) * (w[2] - w[1]) < 0.0)
+            .count();
+        assert!(turns >= 2, "expected folds, saw {turns} turns");
+    }
+
+    #[test]
+    fn wavefolder_dry_mix_passes_input() {
+        let mut wf = Wavefolder::new(48000.0);
+        wf.mix = 0.0;
+        let mut buf = [0.25f64; 8];
+        wf.process(&mut buf, 48000.0);
+        assert!(buf.iter().all(|s| (*s - 0.25).abs() < 1e-12));
+    }
 
     #[test]
     fn overdrive_soft_clips() {

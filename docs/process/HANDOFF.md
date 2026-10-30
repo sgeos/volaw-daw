@@ -9,17 +9,12 @@ completed, moved or abandoned.
 
 ## State on 2026-10-30
 
-- **Layered architecture merged.** Pull request 5 split the workspace into a `no_std`
-  core, a std platform layer and entry points, as `docs/architecture/LAYERS.md`
-  describes. It added `audio-sdl`, `daw-sdl` and the shared entry library
-  `volaw-audio`, and moved the DAW state machine into `daw-core` as `DawApp`. It
-  merged at `3dd668a` as `a9fed20`.
-- **Review follow-up.** Pull request 6 acts on review notes from `volaw-64`, by
-  bounding queue and block sizes and documenting the shutdown order and the `Bulk`
-  allocation debt. It reuses the branch name `refactor/layered-architecture`, which
-  GitHub deleted when pull request 5 merged and a push of the follow-up recreated.
-  Delete the branch once pull request 6 merges.
-- Pull requests 1 to 5 are merged.
+- **Studio page and new effects.** Branch `feat/daw-ui-overhaul` adds the Studio home
+  page, mouse controls on every pedal, a grid pedal picker, and the Wavefolder, Filter,
+  Vibrato and Pitch Corrector effects, as `docs/decisions/STUDIO_PAGE.md` records. It
+  also splits the `daw-core` application module by concern. It merges through a pull
+  request.
+- Pull requests 1 to 6 are merged.
 
 ## Next step
 
@@ -31,13 +26,16 @@ None is queued. Wait for the operator's prompt.
   `volaw-audio` by a git dependency on `3dd668a`, a commit of pull request 5, and will
   repin to the merge commit. Keep `3dd668a` reachable, so never rewrite the history
   that contains it. Not verified by this line.
-- **Interactive use unverified.** No one has played the composer on a real display and
-  audio device since the refactor.
+- **Interactive use unverified.** No one has played the composer on a real display,
+  mouse and audio device since the layered refactor or the Studio page. Pages were
+  checked only as offscreen screenshots from the `screenshots` example.
+- **"Tune" reading unconfirmed.** It was built as pitch correction. If the user meant
+  a tuner, that needs a path from the audio thread back to the interface.
 - **`Bulk` allocates on the audio thread.** Recorded in `audio::runtime` as debt.
 - **Shared song playback.** Scheduling a project's notes lives in `DawApp`. The game
   cannot play a DAW project without it. Moving it into a shared module is unscheduled.
-- **`daw-core/src/app.rs` is about 5,800 lines.** It was moved whole. Splitting it is
-  technical debt.
+- **`app/handlers.rs` and `app/render.rs` are large.** About 2,500 and 1,600 lines.
+  Splitting them per page is technical debt.
 - **Keleusma defect.** `keleusma` 0.2.2 does not check a host struct argument against
   the script declaration. `Op55-V0.2.X-keleusma` reported on 2026-10-28 that the defect
   reproduces on v0.2.3, that a module records only a composite's kind and size, and
@@ -87,7 +85,7 @@ git log --oneline "$(git log -1 --format=%H -- docs/process/HANDOFF.md)"..HEAD
 gh pr list --state all --limit 5   # needs an authenticated gh
 ```
 
-1. The gate reports 239 `audio`, 5 `audio-sdl`, 4 `daw`, 106 `daw-core`, 4 `daw-sdl`
+1. The gate reports 253 `audio`, 5 `audio-sdl`, 4 `daw`, 126 `daw-core`, 4 `daw-sdl`
    and 5 `volaw-audio` tests passed, and 1 doctest, with none failed or ignored, and reports that the
    core crates build for `thumbv7em-none-eabihf`.
 2. Every commit after the one that wrote this file is reported, since this file does

@@ -49,6 +49,24 @@ cargo run -p daw -- --root my_music --import-midi track.mid --import-channel 3
 
 ## Controls
 
+Everything on the Studio page works with the mouse alone. The keys below are
+shortcuts.
+
+### Studio Page
+
+The composer opens on the Studio page, which is laid out after browser-based
+workstations such as Audiotool and Soundtrap.
+
+| Area | What it does |
+|------|--------------|
+| Page tabs | Switch between Studio, Piano Roll, Overview, Synth Setup, Mono Chain and Stereo Chain |
+| Play, Stop, Save | Transport and saving, at the right of the page tabs |
+| Browser, Instruments | Click a preset to play it on the selected track |
+| Browser, Effects | Every effect by category with a short description. Click one to add it to the selected track |
+| Track rows | Click to select a track. M mutes, S solos, drag Vol to set the volume, Notes opens the piano roll |
+| Effects rack | The selected track's effects, in signal order. Drag a bar to adjust a setting, ON/OFF bypasses, < and > reorder, Remove deletes, and + Add effect opens the effect picker |
+| Scroll wheel | Scrolls the browser or a long rack, adjusts a setting under the pointer, or nudges a track's volume |
+
 ### Global
 
 | Key | Action |
@@ -57,7 +75,7 @@ cargo run -p daw -- --root my_music --import-midi track.mid --import-channel 3
 | S | Stop playback |
 | 0 / Home | Reset to beginning |
 | 1-8 | Select channel |
-| Tab | Next page (Piano Roll, Overview, Synth, Mono Chain, Stereo Chain) |
+| Tab | Next page (Studio, Piano Roll, Overview, Synth, Mono Chain, Stereo Chain) |
 | Shift+Tab | Previous page |
 | P | Next preset |
 | Shift+P | Previous preset |
@@ -106,8 +124,12 @@ cargo run -p daw -- --root my_music --import-midi track.mid --import-channel 3
 
 ### Setup Pages
 
+Every pedal box has its own ON/OFF, <, > and Remove buttons, and each chain
+ends with a + Add effect card, so the keys are optional.
+
 | Key | Action |
 |-----|--------|
+| Escape | Return to the Studio page |
 | A | Add pedal to chain |
 | B | Toggle pedal bypass |
 | Delete | Remove selected pedal |
@@ -125,11 +147,12 @@ cargo run -p daw -- --root my_music --import-midi track.mid --import-channel 3
 - **Time signature support** with Shift+T cycling (4/4, 3/4, 6/4, 5/4, 7/4)
 - **Note preview** with 200ms audition on placement and piano key click
 - **Per-channel note counts** displayed on the channel bar
-- **16 built-in presets**: bass, lead, pad, strings, organ, brass, pluck, bell, flute, piano, kick, snare, hihat, synth_lead, synth_bass, choir
+- **Studio page** with an instrument and effect browser, track list and per-track effects rack, all driven by the mouse
+- **40 built-in presets**, including drums, NES and Game Boy chiptune voices, and classic synthesizer sounds
 - **Real-time audio playback** at 48 kHz through the MS-20 synthesizer engine
 - **Synth setup page** with VCO, filter, envelope, LFO, and modulation parameters
-- **25-pedal DSP effect chain** with mono and stereo chain setup pages
-- **Pedal picker** with scrollable category list
+- **29-pedal DSP effect chain** with mono and stereo chain setup pages. Drive and distortion are Overdrive, Distortion, Fuzz, Tape Saturation and Wavefolder. Bitcrusher, a resonant Filter with an LFO sweep, Vibrato and a Pitch Corrector that snaps pitch to a chromatic, major or minor scale are also included
+- **Pedal picker** showing every effect at once in a category grid with descriptions
 - **Metronome click** with distinct downbeat and beat sounds (N key toggle)
 - **Loop region** with auto-sizing to bar boundaries
 - **Playback auto-scroll** following the playhead
@@ -211,4 +234,4 @@ cargo test -p daw
 cargo test -p daw-core
 ```
 
-The DAW binary has 4 unit tests, for argument parsing and the README script example. The daw-core library has 106 tests covering the application, MIDI track operations, transport logic, project persistence, preset loading, rendering calculations, WAV decoding, Standard MIDI File parsing, and Keleusma script integration.
+The DAW binary has 4 unit tests, for argument parsing and the README script example. The daw-core library has 126 tests covering the application and its Studio page, MIDI track operations, transport logic, project persistence, preset loading, rendering calculations, WAV decoding, Standard MIDI File parsing, and Keleusma script integration.

@@ -29,7 +29,9 @@ them.
 
 **Verified.** Facts, observed on the macOS authoring host. The gate exited zero with
 363 tests and 1 doctest passed, and the core built for `thumbv7em-none-eabihf`.
-Continuous integration results are on pull request 5.
+Pull request 5 had already merged at `3dd668a` before the
+follow-up was pushed, so the follow-up goes through pull request 6, whose continuous
+integration results are reported there.
 
 **Not verified.**
 - Interactive use with a real display and audio device.

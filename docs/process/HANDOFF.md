@@ -12,9 +12,13 @@ completed, moved or abandoned.
 - **Layered architecture merged.** Pull request 5 split the workspace into a `no_std`
   core, a std platform layer and entry points, as `docs/architecture/LAYERS.md`
   describes. It added `audio-sdl`, `daw-sdl` and the shared entry library
-  `volaw-audio`, and moved the DAW state machine into `daw-core` as `DawApp`. Its last
-  commit acted on review notes from `volaw-64`, by bounding queue and block sizes and
-  documenting the shutdown order and the `Bulk` allocation debt.
+  `volaw-audio`, and moved the DAW state machine into `daw-core` as `DawApp`. It
+  merged at `3dd668a` as `a9fed20`.
+- **Review follow-up.** Pull request 6 acts on review notes from `volaw-64`, by
+  bounding queue and block sizes and documenting the shutdown order and the `Bulk`
+  allocation debt. It reuses the branch name `refactor/layered-architecture`, which
+  GitHub deleted when pull request 5 merged and a push of the follow-up recreated.
+  Delete the branch once pull request 6 merges.
 - Pull requests 1 to 5 are merged.
 
 ## Next step

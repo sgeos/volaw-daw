@@ -228,9 +228,85 @@ impl Tremolo {
     }
 }
 
+/// Vibrato: pitch wobble from a delay line modulated by a sine LFO.
+///
+/// Unlike chorus it outputs only the delayed signal by default, so the pitch
+/// itself bends rather than a copy being layered over the dry signal.
+#[derive(Debug, Clone)]
+pub struct Vibrato {
+    /// LFO rate in Hz (0.1 to 20.0).
+    pub rate_hz: f64,
+    /// Modulation depth in milliseconds (0.0 to 5.0).
+    pub depth_ms: f64,
+    /// Wet/dry mix. 1.0 is pure vibrato.
+    pub mix: f64,
+    lfo: Lfo,
+    delay: DelayLine,
+}
+
+impl Vibrato {
+    /// The largest depth `process` honours, in milliseconds.
+    const MAX_DEPTH_MS: f64 = 5.0;
+
+    pub fn new(sample_rate: f64) -> Self {
+        Self {
+            rate_hz: 5.0,
+            depth_ms: 2.0,
+            mix: 1.0,
+            lfo: Lfo::new(LfoWaveform::Sine),
+            // The delay swings between 0 and twice the depth around its centre.
+            delay: DelayLine::from_time(2.0 * Self::MAX_DEPTH_MS + 2.0, sample_rate),
+        }
+    }
+
+    pub fn process(&mut self, buffer: &mut [f64], sample_rate: f64) {
+        let samples_per_ms = sample_rate * 0.001;
+        let depth = self.depth_ms.clamp(0.0, Self::MAX_DEPTH_MS);
+        let mix = self.mix.clamp(0.0, 1.0);
+        for sample in buffer.iter_mut() {
+            let lfo_val = self.lfo.tick(self.rate_hz, sample_rate);
+            let delay_samples = (depth + depth * lfo_val) * samples_per_ms;
+            self.delay.write(*sample);
+            let delayed = self.delay.read(delay_samples);
+            *sample = *sample * (1.0 - mix) + delayed * mix;
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.lfo.reset();
+        self.delay.reset();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vibrato_zero_depth_is_transparent() {
+        let sr = 48000.0;
+        let mut v = Vibrato::new(sr);
+        v.depth_ms = 0.0;
+        let input: [f64; 256] = core::array::from_fn(|i| libm::sin(i as f64 * 0.05));
+        let mut buf = input;
+        v.process(&mut buf, sr);
+        for (a, b) in input.iter().zip(&buf) {
+            assert!((a - b).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn vibrato_bends_the_signal() {
+        let sr = 48000.0;
+        let mut v = Vibrato::new(sr);
+        v.depth_ms = 3.0;
+        let input: [f64; 4800] = core::array::from_fn(|i| libm::sin(i as f64 * 0.05));
+        let mut buf = input;
+        v.process(&mut buf, sr);
+        let diff: f64 = input.iter().zip(&buf).map(|(a, b)| (a - b).abs()).sum();
+        assert!(diff > 1.0, "vibrato changed nothing");
+        assert!(buf.iter().all(|s| s.is_finite() && s.abs() <= 1.0 + 1e-9));
+    }
 
     fn sine_buffer(freq: f64, sample_rate: f64, len: usize) -> alloc::vec::Vec<f64> {
         let mut buf = alloc::vec![0.0f64; len];

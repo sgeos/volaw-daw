@@ -17,7 +17,7 @@ describes them.
 
 | Crate | Layer | Purpose |
 |-------|-------|---------|
-| `audio` | Core (no_std) | 8-channel audio engine with a 25-pedal DSP effects chain, the engine command queue and the audio output traits. The volaw game client depends on this crate. |
+| `audio` | Core (no_std) | 8-channel audio engine with a 29-pedal DSP effects chain, the engine command queue and the audio output traits. The volaw game client depends on this crate. |
 | `daw-core` | Core (no_std) | The DAW application state machine, MIDI, transport, patches, presets, project persistence, the SMF parser and Keleusma scripting. |
 | `audio-sdl` | Platform (std) | SDL3 audio output for the engine. |
 | `daw-sdl` | Platform (std) | SDL3 rendering and input, and file system access, for the DAW. |

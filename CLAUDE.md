@@ -8,7 +8,7 @@ only what applies broadly. History lives in git and in `CHANGELOG.md`.
 
 volaw-daw is the composer for the Vows of Love and War game. It is a Rust workspace in
 three layers, which [`docs/architecture/LAYERS.md`](docs/architecture/LAYERS.md)
-describes. The `no_std` core is `audio`, an 8-channel synthesizer engine with a 25-pedal
+describes. The `no_std` core is `audio`, an 8-channel synthesizer engine with a 29-pedal
 effect chain and the lock-free command queue to it, and `daw-core`, which holds the
 `DawApp` state machine, persistence, presets, the Standard MIDI File parser and the
 Keleusma script runner on the published `keleusma` 0.2.2 crate. The std platform layer

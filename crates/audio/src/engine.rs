@@ -59,7 +59,7 @@ pub const NUM_CHANNELS: usize = 8;
 ///   the entire synth and pedal chain.
 /// - **MS-20 Voice**: Virtual Korg MS-20 synthesizer with VCOs, VCFs,
 ///   envelope generators, and VCA.
-/// - **Pedal Chain**: Virtual guitar pedal effects chain with 25 effect
+/// - **Pedal Chain**: Virtual guitar pedal effects chain with 29 effect
 ///   types across 5 categories (distortion, modulation, delay, special, utility).
 ///
 /// ## Default Configuration

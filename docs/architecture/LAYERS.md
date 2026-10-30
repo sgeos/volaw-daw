@@ -54,10 +54,17 @@ binary configures the engine from the loaded project before starting it, and kee
 
 ## Open
 
-- **volaw has not adopted `volaw-audio`.** volaw still depends on `audio` directly and
-  keeps its own SDL bridge, which locks a mutex in the audio callback. A trial in a
-  scratch copy of volaw at its `HEAD` replaced that bridge with `volaw-audio` and passed
-  `cargo check`. The change belongs to the volaw repository.
+- **volaw pins an unmerged commit.** The volaw line reported on 2026-10-30 that volaw
+  now depends on `volaw-audio` through a git dependency on `3dd668a`, the head of this
+  repository's pull request 5, and will repin to the merge commit. This line has not
+  inspected volaw's tree. Until the repin, that commit must stay reachable, so the
+  branch is not rebased or force-pushed.
+- **`Bulk` commands allocate on the audio thread.** An `EngineCommand::Bulk` closure
+  runs on the audio thread and its box is freed there, as `audio::runtime` records. The
+  DAW sends `Bulk` only on cold paths. Removing it is technical debt.
+- **Audio must stop before `SDL_Quit`.** `SDL_Quit` destroys every audio stream, so an
+  `SdlAudioOutput` or `AudioSystem` dropped afterwards destroys its stream twice. The
+  requirement is documented on both types but cannot be checked at run time.
 - **Playback of composed songs is not shared.** `volaw-audio` exposes the engine and its
   command queue. Scheduling a saved project's notes lives in `DawApp`, so the game
   cannot yet play a DAW project without reimplementing it.

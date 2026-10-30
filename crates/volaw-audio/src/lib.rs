@@ -27,6 +27,15 @@ use audio::spsc::{Producer, ring_buffer};
 use audio::{AudioEngine, AudioOutput, CommandSink, EngineCommand, EngineRunner};
 use audio_sdl::SdlAudioOutput;
 
+/// The largest `AudioConfig::command_capacity` that `start` accepts. A deeper
+/// queue only delays commands, and a bound keeps a configuration value from
+/// requesting an allocation that cannot succeed.
+pub const MAX_COMMAND_CAPACITY: usize = 1 << 16;
+
+/// The largest `AudioConfig::block_samples` that `start` accepts, for the same
+/// reason. It is far above any device buffer seen in practice.
+pub const MAX_BLOCK_SAMPLES: usize = 1 << 20;
+
 /// Playback parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioConfig {
@@ -69,6 +78,11 @@ impl core::fmt::Debug for StartFailure {
 ///
 /// Dropping it stops the device first and then frees the engine, because
 /// the output field is declared before the producer.
+///
+/// Drop or `stop` it before the host calls `SDL_Quit`. `SDL_Quit` destroys
+/// every audio stream, and the drop would then destroy this one a second
+/// time. The `daw` binary takes its `AudioSystem` out of the application and
+/// drops it before the renderer shuts SDL down.
 pub struct AudioSystem {
     output: SdlAudioOutput<EngineRunner>,
     producer: Producer<EngineCommand>,
@@ -87,9 +101,21 @@ impl AudioSystem {
                 engine: Box::new(engine),
             });
         }
-        if config.command_capacity == 0 {
+        if config.command_capacity == 0 || config.command_capacity > MAX_COMMAND_CAPACITY {
             return Err(StartFailure {
-                message: "command capacity must be nonzero".to_string(),
+                message: format!(
+                    "command capacity {} is outside 1..={MAX_COMMAND_CAPACITY}",
+                    config.command_capacity
+                ),
+                engine: Box::new(engine),
+            });
+        }
+        if config.block_samples > MAX_BLOCK_SAMPLES {
+            return Err(StartFailure {
+                message: format!(
+                    "block of {} samples exceeds {MAX_BLOCK_SAMPLES}",
+                    config.block_samples
+                ),
                 engine: Box::new(engine),
             });
         }
@@ -157,5 +183,35 @@ mod tests {
         let failure =
             AudioSystem::start(AudioEngine::new(config.sample_rate), &config).unwrap_err();
         assert!(failure.message.contains("capacity"), "{}", failure.message);
+    }
+
+    #[test]
+    fn oversized_capacity_returns_the_engine() {
+        let config = AudioConfig {
+            command_capacity: MAX_COMMAND_CAPACITY + 1,
+            ..AudioConfig::default()
+        };
+        let failure =
+            AudioSystem::start(AudioEngine::new(config.sample_rate), &config).unwrap_err();
+        assert!(failure.message.contains("capacity"), "{}", failure.message);
+        assert_eq!(failure.engine.sample_rate, config.sample_rate);
+    }
+
+    #[test]
+    fn oversized_block_returns_the_engine() {
+        let config = AudioConfig {
+            block_samples: MAX_BLOCK_SAMPLES + 1,
+            ..AudioConfig::default()
+        };
+        let failure =
+            AudioSystem::start(AudioEngine::new(config.sample_rate), &config).unwrap_err();
+        assert!(failure.message.contains("block"), "{}", failure.message);
+    }
+
+    #[test]
+    fn default_config_is_within_bounds() {
+        let config = AudioConfig::default();
+        assert!((1..=MAX_COMMAND_CAPACITY).contains(&config.command_capacity));
+        assert!(config.block_samples <= MAX_BLOCK_SAMPLES);
     }
 }

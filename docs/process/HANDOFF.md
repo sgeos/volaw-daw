@@ -7,26 +7,33 @@ flight, why, what is owed and the next step, within a budget of 8 KB. History li
 git. A rewrite that drops an open item says in its commit message whether the item was
 completed, moved or abandoned.
 
-## State on 2026-10-28
+## State on 2026-10-30
 
-- **Layered architecture in review.** The branch `refactor/layered-architecture` splits
-  the workspace into a `no_std` core, a std platform layer and entry points, as
-  `docs/architecture/LAYERS.md` describes. It adds `audio-sdl`, `daw-sdl` and the
-  shared entry library `volaw-audio`, and moves the DAW state machine into `daw-core`
-  as `DawApp`. It awaits the operator's push and review.
-- Pull requests 1 to 4 are merged, including Dependabot's `toml` 1.1 bump.
+- **Layered architecture merged.** Pull request 5 split the workspace into a `no_std`
+  core, a std platform layer and entry points, as `docs/architecture/LAYERS.md`
+  describes. It added `audio-sdl`, `daw-sdl` and the shared entry library
+  `volaw-audio`, and moved the DAW state machine into `daw-core` as `DawApp`. It
+  merged at `3dd668a` as `a9fed20`.
+- **Review follow-up.** Pull request 6 acts on review notes from `volaw-64`, by
+  bounding queue and block sizes and documenting the shutdown order and the `Bulk`
+  allocation debt. It reuses the branch name `refactor/layered-architecture`, which
+  GitHub deleted when pull request 5 merged and a push of the follow-up recreated.
+  Delete the branch once pull request 6 merges.
+- Pull requests 1 to 5 are merged.
 
 ## Next step
 
-The operator reviews the branch, confirms a push, and merges the pull request. Then
-volaw can move from its own SDL audio bridge to `volaw-audio`, which is a change in the
-volaw repository and needs its line.
+None is queued. Wait for the operator's prompt.
 
 ## Open
 
-- **volaw adoption of `volaw-audio`.** A trial in a scratch copy of volaw at `969dfbb`
-  replaced `client-sdl`'s bridge with `volaw-audio` and passed `cargo check`. Nothing
-  was written to the volaw checkout. The volaw line decides when to adopt it.
+- **volaw pins `3dd668a`.** `volaw-64` reported on 2026-10-30 that volaw depends on
+  `volaw-audio` by a git dependency on `3dd668a`, a commit of pull request 5, and will
+  repin to the merge commit. Keep `3dd668a` reachable, so never rewrite the history
+  that contains it. Not verified by this line.
+- **Interactive use unverified.** No one has played the composer on a real display and
+  audio device since the refactor.
+- **`Bulk` allocates on the audio thread.** Recorded in `audio::runtime` as debt.
 - **Shared song playback.** Scheduling a project's notes lives in `DawApp`. The game
   cannot play a DAW project without it. Moving it into a shared module is unscheduled.
 - **`daw-core/src/app.rs` is about 5,800 lines.** It was moved whole. Splitting it is
@@ -70,8 +77,7 @@ Observed on 2026-10-28 on the macOS authoring host.
 
 ## Validity
 
-Run from the checkout under test, on `refactor/layered-architecture` or on `main`
-after it merges.
+Run from the checkout under test, on `main`.
 
 ```sh
 git status --short          # clean, apart from ignored files
@@ -81,8 +87,8 @@ git log --oneline "$(git log -1 --format=%H -- docs/process/HANDOFF.md)"..HEAD
 gh pr list --state all --limit 5   # needs an authenticated gh
 ```
 
-1. The gate reports 237 `audio`, 5 `audio-sdl`, 4 `daw`, 106 `daw-core`, 4 `daw-sdl`
-   and 2 `volaw-audio` tests passed, with none failed or ignored, and reports that the
+1. The gate reports 239 `audio`, 5 `audio-sdl`, 4 `daw`, 106 `daw-core`, 4 `daw-sdl`
+   and 5 `volaw-audio` tests passed, and 1 doctest, with none failed or ignored, and reports that the
    core crates build for `thumbv7em-none-eabihf`.
 2. Every commit after the one that wrote this file is reported, since this file does
    not describe them.

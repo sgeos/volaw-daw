@@ -33,6 +33,10 @@ All notable changes are recorded here. The format follows
   reallocates its staging buffer on the audio thread.
 - A project, patch, effect, MIDI or script file name that is absolute or contains `..`
   is rejected, so a project file cannot read or write outside its root.
+- `spsc::ring_buffer` panics with a message for a capacity above `MAX_CAPACITY`,
+  instead of wrapping in a release build to a queue that holds nothing.
+  `AudioConfig` capacities and block sizes are bounded and checked by
+  `AudioSystem::start`, which returns the engine on failure.
 - A WAV chunk size near `u32::MAX` cannot overflow the offset arithmetic on a 32-bit
   target.
 

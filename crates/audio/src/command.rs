@@ -5,7 +5,9 @@
 //! updates, script parameters) are fixed-size data with no heap
 //! allocation. Cold-path operations (patch application, pedal chain
 //! rebuild) use the `Bulk` variant, which carries a boxed closure
-//! allocated on the UI thread.
+//! allocated on the UI thread. The closure runs, and its box is freed, on the
+//! audio thread, so `Bulk` is not allocation-free. `runtime` records this as
+//! technical debt.
 
 use alloc::boxed::Box;
 

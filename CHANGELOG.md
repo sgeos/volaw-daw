@@ -29,13 +29,18 @@ All notable changes are recorded here. The format follows
 - `scripts/scratch.sh`, which keeps build output on a scratch volume named by
   `SCRATCH_BASE`, and scratch linking in `scripts/worktree.sh new` and `rm`, synced from
   `sgeos/project-template` at commit `3954eba`, released as `v1.0.8`.
+- A `--window-size WxH` option of the `daw` binary, from 1280x800 to 7680x4320 with
+  1440x900 as the default, and a `WindowSize` type in `daw-core` that the layout follows.
 - Repository conventions adopted from `sgeos/project-template`, including the local
   gate `scripts/check.sh`, the worktree helper, the process documents and the 0BSD
   license.
 
 ### Changed
 
-- The `daw-core` application module is split into files by concern.
+- The `daw-core` application module is split into files by concern, and the page code
+  further into `piano_roll`, `overview`, `synth_setup` and `chains`.
+- The Stereo and Mono Chain pages wrap a long chain into rows instead of running off
+  the page. `WINDOW_WIDTH` and `WINDOW_HEIGHT` are replaced by `WindowSize`.
 - The chorus, flanger and vibrato depth slider spans 0 to 10 ms instead of 0 to 2000 ms.
 - Escape on a setup or overview page returns to the Studio page.
 - The workspace is layered into a `no_std` core, a std platform layer and entry points.
@@ -58,6 +63,10 @@ All notable changes are recorded here. The format follows
 
 ### Fixed
 
+- On the Synth Setup page, the GLIDE row overlapped the LPF panel, so a click on GLIDE
+  Enabled dragged LPF Saturation instead of toggling glide.
+- On the Stereo Chain page in orbital mode, parameter lookup searched above where the
+  pedal bars were drawn.
 - The Phaser `stages` slider spanned 0 to 1, so dragging it set one stage. It now spans
   1 to 8.
 - Moving a pedal after switching to a track with fewer pedals could panic on an

@@ -35,6 +35,13 @@ All notable changes are recorded here. The format follows
 
 ### Changed
 
+- Importing a Type 0 Standard MIDI File places each MIDI channel it uses on its own
+  channel, offset from the chosen first channel, instead of merging every note into
+  that one channel. A file with MIDI channels 1 and 3 imported at channel 2 now fills
+  channels 2 and 4. Notes that would land past channel 8 are dropped with a warning.
+- Exporting a Standard MIDI File refuses a track with notes whose ticks per beat
+  differs from the project's, with the reason in the status bar, instead of writing
+  its note times at the wrong resolution.
 - The `daw-core` application module is split into files by concern.
 - The chorus, flanger and vibrato depth slider spans 0 to 10 ms instead of 0 to 2000 ms.
 - Escape on a setup or overview page returns to the Studio page.
@@ -58,6 +65,36 @@ All notable changes are recorded here. The format follows
 
 ### Fixed
 
+- Running `target/debug/daw` directly, outside `cargo run`, failed because the loader
+  could not find `libSDL3_ttf.0.dylib`. The `daw` binary and its examples now carry a
+  run path to the directory beside them, where the SDL3 libraries are copied, on macOS
+  and on Linux.
+- A project exported to a Standard MIDI File and imported again came back with
+  every note on one channel, because the parser ignored the MIDI channel. The parser
+  now splits each track chunk by channel, and import places a Type 0 file by MIDI
+  channel from the chosen first channel. A Type 1 file still fills consecutive
+  channels.
+- Exporting a Standard MIDI File panicked on a gap of 2^28 ticks or more between
+  events. `build_smf` now returns an error for that and for a pitch, velocity, duration,
+  tempo or resolution the format cannot carry, and the export shows it in the status bar.
+- A note event with a data byte above 127 on MIDI channel 16 made the parser index
+  past its pending-note table and panic. Such a file is now rejected as invalid.
+- The Standard MIDI File parser read each track chunk against the whole file, so an
+  event or a meta or SysEx length could run past the stated end of its chunk into the
+  next one, and the bound arithmetic could overflow. Every chunk is now read within its
+  stated length with checked arithmetic, and a chunk that runs past the end of the file,
+  a header length below six and a division of zero ticks per beat are rejected.
+- Importing a Standard MIDI File into a project with notes on other channels set the
+  project's ticks per beat to the file's without converting those notes, so they
+  played and exported at the wrong speed. The imported notes are now converted to the
+  project's resolution, with each start and end rounded half up, by the new
+  `MidiTrack::rescale`. A project with no other notes still adopts the file's.
+- A channel script could freeze the composer with a long bounded loop, such as
+  `for i in 0..10000000`, which held one tick for 34 seconds in a debug build. Keleusma
+  0.2.2 admits such a loop, and its cost estimate leaves out `fn main` and loops inside
+  helper functions. `ScriptRunner` now counts loop iterations and calls through VM
+  breakpoints, native calls included, and stops a script that runs more than
+  `MAX_STEPS_PER_TICK`, 4,096, in one tick.
 - The Phaser `stages` slider spanned 0 to 1, so dragging it set one stage. It now spans
   1 to 8.
 - Moving a pedal after switching to a track with fewer pedals could panic on an

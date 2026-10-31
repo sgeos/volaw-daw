@@ -24,6 +24,11 @@ cargo run -p daw
 
 Opens a 1440x900 window titled "Vows of Love and War - Composer" with an empty 8-channel project.
 
+The built binary also runs directly, as `target/debug/daw`. SDL3 and SDL3_ttf are
+built as shared libraries and copied beside it, and `build.rs` sets a run path to that
+directory on macOS and Linux. Copying the binary elsewhere needs the two libraries
+copied with it.
+
 ### Command Line Arguments
 
 | Argument | Description |
@@ -31,7 +36,7 @@ Opens a 1440x900 window titled "Vows of Love and War - Composer" with an empty 8
 | `--root <dir>` | Project root directory (default: `daw_projects`) |
 | `--project <name>` | Load a saved project on startup |
 | `--import-midi <path>` | Import a Standard MIDI File (.mid) |
-| `--import-channel <n>` | Channel index to import into (0-based, default: 0) |
+| `--import-channel <n>` | First channel to import into (0-based, default: 0) |
 | `--script <n> <file>` | Assign a Keleusma script from `scripts/` to channel `n` (0-based) |
 
 Examples:
@@ -165,6 +170,28 @@ ends with a + Add effect card, so the keys are optional.
 - **Undo/redo system** with 64-level stack and inverse capture pattern
 - **Zoom and scroll** for navigating large compositions
 
+## Standard MIDI Files
+
+Ctrl+E writes a Type 0 file with channel `n` of the project on MIDI channel
+`n`, so importing it at channel 0 gives back every note on the channel it
+came from. Import places a Type 0 file by MIDI channel, from the channel that
+`--import-channel` names. A Type 1 file fills consecutive channels from that
+channel, one for each MIDI channel used in each track chunk, in file order.
+Notes that would land past channel 8 are dropped with a warning in the log.
+If a channel that the import leaves alone has notes, the project keeps its
+ticks per beat and the imported notes are converted to it, with each start
+and end rounded half up. Otherwise the project adopts the file's ticks per
+beat, and the notes arrive exactly.
+
+Export refuses, with a message in the status bar, a note with a pitch above
+127, a velocity of 0 or above 127, or a duration of 0, a gap of more than
+268,435,455 ticks between two events, and a channel with notes whose ticks per
+beat differs from the project's, because the file would read back differently
+or not at all. Two overlapping notes of the same pitch on one
+channel are written, but read back with the first one ending where the second
+starts, because the format pairs each note off with the open note of its
+pitch.
+
 ## Project File Format
 
 Projects are saved under the project root directory (default: `daw_projects/`). Each project consists of:
@@ -210,6 +237,8 @@ loop main(state: TickState) -> () {
 
 A script that never reads the transport state may omit the declaration. The composer rejects a script with a different entry signature or a different `TickState` declaration at load, because Keleusma 0.2.2 would otherwise read the wrong values without reporting an error. Arguments to the `audio::` functions must be finite numbers, so a NaN or an infinity stops the script with an error. Load errors and runtime errors both appear in the status bar.
 
+Each tick may run at most 4,096 loop iterations, function calls and native calls such as `audio::set_volume`, counted together. Keleusma rejects a loop body that can skip its yield, an unbounded loop and recursion at load, but it admits a bounded loop of any length, which would otherwise freeze the composer. A script that exceeds the budget is stopped with an error in the status bar, and reloading it starts it again. A loop whose bound is so large that Keleusma's cost estimate overflows, such as one billion iterations, makes Keleusma 0.2.2 panic at load in a debug build.
+
 ## Architecture
 
 The composer is the entry point of a layered workspace, described in
@@ -234,4 +263,4 @@ cargo test -p daw
 cargo test -p daw-core
 ```
 
-The DAW binary has 4 unit tests, for argument parsing and the README script example. The daw-core library has 126 tests covering the application and its Studio page, MIDI track operations, transport logic, project persistence, preset loading, rendering calculations, WAV decoding, Standard MIDI File parsing, and Keleusma script integration.
+The DAW binary has 4 unit tests, for argument parsing and the README script example, and 1 integration test, which starts the built binary with an empty environment to check its run path. The daw-core library has 162 tests covering the application and its Studio page, MIDI track operations, transport logic, project persistence, preset loading, rendering calculations, WAV decoding, Standard MIDI File parsing, and Keleusma script integration.

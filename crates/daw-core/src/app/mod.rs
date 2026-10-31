@@ -625,23 +625,26 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
     /// Export all tracks as a Standard MIDI File (.mid).
     fn export_midi(&mut self) {
         let filename = self.project.name.replace(' ', "_").to_lowercase();
-        let midi_data = crate::smf::build_smf(
-            &self.tracks,
-            self.project.ticks_per_beat,
-            self.project.tempo,
-            self.project.beats_per_bar,
-            self.project.beat_denominator,
-        );
         let export_dir = join_path(&self.project_root, "exports");
         let path = join_path(&export_dir, &format!("{filename}.mid"));
-        let written = persistence::validate_file_name(&filename)
-            .and_then(|()| self.platform.write_file(&path, &midi_data));
+        let written = persistence::validate_file_name(&filename).and_then(|()| {
+            let midi_data = crate::smf::build_smf(
+                &self.tracks,
+                self.project.ticks_per_beat,
+                self.project.tempo,
+                self.project.beats_per_bar,
+                self.project.beat_denominator,
+            )
+            .map_err(|e| e.to_string())?;
+            self.platform.write_file(&path, &midi_data)?;
+            Ok(midi_data.len())
+        });
         match written {
-            Ok(()) => {
+            Ok(bytes) => {
                 self.status_message = Some(format!("Exported: {path}"));
                 self.platform.log(
                     LogLevel::Info,
-                    &format!("MIDI exported to {path} ({} bytes)", midi_data.len()),
+                    &format!("MIDI exported to {path} ({bytes} bytes)"),
                 );
             }
             Err(e) => {
@@ -1129,21 +1132,83 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
         Ok(())
     }
 
-    /// Import a Standard MIDI File into consecutive channels from
-    /// `first_channel`, skipping tracks without notes. Returns the number of
-    /// channels filled. Tracks beyond the last channel are dropped.
+    /// Import a Standard MIDI File, replacing the notes of each channel it
+    /// fills. Returns the number of channels filled.
+    ///
+    /// A Type 0 file, such as the composer's own export, tells its parts
+    /// apart only by MIDI channel, so MIDI channel `c` goes to channel
+    /// `first_channel + c`. An export imported at channel 0 therefore comes
+    /// back on the channels it left, gaps included. A Type 1 file keeps its
+    /// parts in separate track chunks, so its tracks fill consecutive
+    /// channels from `first_channel` in file order. Either way, a track that
+    /// would land past the last channel is dropped with a warning.
+    ///
+    /// Resolution. If a channel that the import leaves alone has notes, the
+    /// project keeps its ticks per beat and the imported notes are converted
+    /// to it, rounded as [`MidiTrack::rescale`] describes, because those notes
+    /// are counted in it. Otherwise no note of the old resolution remains, and
+    /// the project adopts the file's ticks per beat, so the notes arrive
+    /// exactly as written.
     pub fn import_midi(&mut self, data: &[u8], first_channel: usize) -> Result<usize, String> {
         let smf = crate::smf::parse_smf(data).map_err(|e| format!("MIDI import failed: {e}"))?;
         self.platform.log(
             LogLevel::Info,
             &format!("MIDI import: {}", crate::smf::describe_import(&smf)),
         );
-        let mut ch = first_channel;
-        for smf_track in smf.tracks.iter().filter(|t| !t.notes.is_empty()) {
-            if ch >= NUM_CHANNELS {
-                break;
+        // Each track's destination, or None past the last channel, decided
+        // before anything changes so that the resolution can be chosen first.
+        let mut next = first_channel;
+        let dests: Vec<Option<usize>> = smf
+            .tracks
+            .iter()
+            .map(|smf_track| {
+                let dest = if smf.format == 0 {
+                    first_channel.checked_add(usize::from(smf_track.channel))
+                } else {
+                    let dest = next;
+                    next = next.saturating_add(1);
+                    Some(dest)
+                };
+                dest.filter(|&d| d < NUM_CHANNELS)
+            })
+            .collect();
+        let replaced = |ch: usize| dests.contains(&Some(ch));
+        let keeps_notes =
+            (0..NUM_CHANNELS).any(|ch| !replaced(ch) && !self.tracks[ch].notes.is_empty());
+        let ticks_per_beat = if keeps_notes {
+            self.project.ticks_per_beat
+        } else {
+            smf.ticks_per_beat
+        };
+
+        // Converted in full before any channel changes, so that a failure,
+        // possible only for a project at 0 ticks per beat, changes nothing.
+        let mut placed = Vec::with_capacity(smf.tracks.len());
+        let mut dropped_notes = 0usize;
+        for (smf_track, dest) in smf.tracks.iter().zip(dests.iter().copied()) {
+            let Some(d) = dest else {
+                dropped_notes += smf_track.track.notes.len();
+                continue;
+            };
+            let mut track = smf_track.track.clone();
+            track
+                .rescale(ticks_per_beat)
+                .map_err(|e| format!("MIDI import failed: {e}"))?;
+            placed.push((d, track));
+        }
+        let mut filled = [false; NUM_CHANNELS];
+        for (d, track) in placed {
+            if filled[d] {
+                // Only a Type 0 file with more than one chunk, which the
+                // format forbids but some writers emit, can repeat a channel.
+                self.tracks[d].notes.extend_from_slice(&track.notes);
+                self.tracks[d].sort();
+            } else {
+                self.tracks[d] = track;
+                filled[d] = true;
             }
-            self.tracks[ch] = smf_track.clone();
+        }
+        for (ch, _) in filled.iter().enumerate().filter(|(_, f)| **f) {
             self.platform.log(
                 LogLevel::Info,
                 &format!(
@@ -1152,19 +1217,32 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
                     self.tracks[ch].notes.len()
                 ),
             );
-            ch += 1;
         }
-        if smf.ticks_per_beat != self.project.ticks_per_beat {
+        if dropped_notes > 0 {
+            self.platform.log(
+                LogLevel::Warn,
+                &format!("MIDI import: dropped {dropped_notes} notes past channel {NUM_CHANNELS}"),
+            );
+        }
+        if smf.ticks_per_beat != ticks_per_beat {
             self.platform.log(
                 LogLevel::Info,
                 &format!(
-                    "Adjusting ticks per beat: {} -> {}",
-                    self.project.ticks_per_beat, smf.ticks_per_beat
+                    "MIDI import: converted notes from {} to the project's {ticks_per_beat} ticks per beat",
+                    smf.ticks_per_beat
                 ),
             );
-            self.project.ticks_per_beat = smf.ticks_per_beat;
+        } else if ticks_per_beat != self.project.ticks_per_beat {
+            self.platform.log(
+                LogLevel::Info,
+                &format!(
+                    "Adjusting ticks per beat: {} -> {ticks_per_beat}",
+                    self.project.ticks_per_beat
+                ),
+            );
+            self.project.ticks_per_beat = ticks_per_beat;
         }
-        Ok(ch.saturating_sub(first_channel))
+        Ok(filled.iter().filter(|f| **f).count())
     }
 
     /// Assign a script file to a channel. The script loads on the next

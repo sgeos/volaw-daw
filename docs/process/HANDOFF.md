@@ -9,16 +9,21 @@ completed, moved or abandoned.
 
 ## State on 2026-10-30
 
-- Pull requests 1 to 7 are merged. Pull request 7 added the Studio page, mouse controls
-  on every pedal and four effects.
-- **Local specification draft.** The operator keeps a specification of the composer
-  under `openspec/`, which `.gitignore` excludes at the operator's instruction. Its
-  notes live beside it. Branch `chore/ignore-spec-draft` adds only the ignore rule and these
-  process files, and merges through a pull request.
+- Pull requests 1 to 8 are merged. Pull request 8 added `/openspec/` to `.gitignore`,
+  which holds the operator's local specification draft.
+- **Scratch-volume trial.** Branch `chore/scratch-volume` syncs `scripts/scratch.sh`
+  and the scratch linking in `scripts/worktree.sh` from `sgeos/project-template` at
+  `3954eba`, and adds the matching section to `CLAUDE.md`. The operator merges it. In
+  the main checkout `target` is a link to `/Volumes/Scratch/volaw-daw/volaw-daw/target`,
+  about 1.0 GB. The trial runs for the next couple of rounds.
 
 ## Next step
 
-None is queued. Wait for the operator's prompt.
+During the trial, report any of these to the operator. `target` stops being a link
+after `cargo clean`. A tool resolves `target` to its real path or refuses a path outside
+the project. Build or test times change clearly. This session predates `SCRATCH_BASE`
+in the shell profile, so it passes `SCRATCH_BASE=/Volumes/Scratch` on each command. Undo
+with `SCRATCH_BASE=/Volumes/Scratch scripts/scratch.sh unlink`.
 
 ## Open
 

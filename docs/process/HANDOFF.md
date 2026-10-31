@@ -9,24 +9,29 @@ completed, moved or abandoned.
 
 ## State on 2026-10-31
 
-- Pull requests 1 to 11 are merged. A PyDromon team of three writing lines, `audio`,
-  `app` and `fixes`, and one review line, `luna`, fixed the known bugs and open items
-  while trialling the scratch volume. Pull request 10 split the page code and added
-  `--window-size`. Pull request 11 took allocation off the audio thread and made
-  `SdlAudioOutput` survive `SDL_Quit` before stop, which changed the public API of
-  `audio`. The `fixes` branch adds the run path, the hardened MIDI file parser, the
-  script step budget and the transport resolution fixes.
+**Holding.** Nothing is in flight. `main` is green, pull requests 1 to 13 are merged, no
+pull request is open, and no worktree or feature branch remains. The Dromon daemon is
+stopped. Its configuration in `.dromon/` is local and excluded through
+`.git/info/exclude`.
+
+- **Last round.** A PyDromon team fixed the known bugs and open items while trialling
+  the scratch volume. Pull request 10 split the page code and added `--window-size`.
+  Pull request 11 took allocation off the audio thread, a breaking change to `audio`,
+  and survives `SDL_Quit` before stop. Pull request 12 added the run path, hardened the
+  MIDI file parser, bounded script ticks and fixed the transport resolution. Pull
+  request 13 recorded this holding state and the shared playback proposal.
 - **Scratch-volume trial.** Every worktree kept `target` as a link to
   `/Volumes/Scratch` with no sandbox denial. Cold gates took about 106 seconds and warm
   gates 6 to 26 seconds. A `cargo clean` was not exercised.
-- **Local only.** The lines' harness reports and the operator session's report are in
-  `tmp/harness-reports/`, for the pydromon implementation line. The `audio` line's
-  design proposal for shared song playback is `tmp/proposal-shared-playback.md`.
+- **Local only.** The harness experience reports are in `tmp/harness-reports/`, for the
+  pydromon implementation line.
 
 ## Next step
 
-Decide the five questions in section 7 of the playback proposal. Then schedule shared
-song playback, which also fixes the playback defects listed under Open.
+Wait for the operator. The decisions that block further work are listed in
+`REVERSE_PROMPT.md`, each with its obvious choices. The largest is the shared song
+playback design in
+[`../architecture/SHARED_PLAYBACK.md`](../architecture/SHARED_PLAYBACK.md).
 
 ## Open
 
@@ -37,10 +42,11 @@ song playback, which also fixes the playback defects listed under Open.
 - **Interactive use unverified.** No one has played the composer on a real display,
   mouse and audio device since the layered refactor. Pages were checked only offscreen.
 - **"Tune" reading unconfirmed.** It was built as pitch correction.
-- **Playback defects, from the proposal.** Facts read from the code, not fixed. Tempo
-  follows the interface frame rate. Every note of every channel is scanned each frame.
-  Commands are dropped when the queue is full. `FeedSample` timed events never play.
-  Note onsets are quantized to the frame. The dropped fraction of a tick is fixed.
+- **Playback defects.** Listed in section 2 of `SHARED_PLAYBACK.md`, as facts read from
+  the code. Tempo follows the interface frame rate. Every note of every channel is
+  scanned each frame. Commands are dropped when the queue is full. `FeedSample` timed
+  events never play. Note onsets are quantized to the frame. Only the dropped fraction
+  of a tick is fixed.
 - **Layout.** The window cannot be resized while running, and the chain pages do not
   scroll, so a very long chain runs off the bottom.
 - **Resolution.** Loaded tracks whose own ticks per beat differs from the project's are
@@ -97,7 +103,7 @@ gh pr list --state all --limit 5   # needs an authenticated gh
 1. The gate reports `audio` 262 and 4, `audio-sdl` 5 and 5, `daw` 7 and 1, `daw-core`
    195 and 6, `daw-sdl` 4 and `volaw-audio` 5 tests passed, unit then integration, and
    1 doctest, with none failed or ignored, and reports that the core crates build for
-   `thumbv7em-none-eabihf`.
+   `thumbv7em-none-eabihf`, and that the disclosure scan found no listed term.
 2. Every commit after the one that wrote this file is reported, since this file does
    not describe them.
 3. Without an authenticated `gh` or network access, report the pull request states as

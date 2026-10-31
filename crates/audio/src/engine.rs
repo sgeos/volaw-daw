@@ -39,6 +39,11 @@ use crate::metronome::Metronome;
 /// | 7 | Secondary SFX | 0.8 | 0.8 |
 pub const NUM_CHANNELS: usize = 8;
 
+/// Frames the engine's scratch buffers hold from construction. A render of
+/// more frames grows them, which allocates, so `EngineRunner` never asks the
+/// engine for more than this many frames at once.
+pub(crate) const SCRATCH_FRAMES: usize = 1024;
+
 /// 8-channel audio engine with per-channel Korg MS-20 synthesis.
 ///
 /// The audio engine runs as pure `no_std` DSP math. The platform wrapper
@@ -106,9 +111,9 @@ impl AudioEngine {
             sample_rate,
             metronome: Metronome::new(),
             limiter: LookaheadLimiter::new(sample_rate as f64),
-            mono_buffer: vec![0.0f64; 1024],
-            left_buffer: vec![0.0f64; 1024],
-            right_buffer: vec![0.0f64; 1024],
+            mono_buffer: vec![0.0f64; SCRATCH_FRAMES],
+            left_buffer: vec![0.0f64; SCRATCH_FRAMES],
+            right_buffer: vec![0.0f64; SCRATCH_FRAMES],
         }
     }
 
@@ -220,8 +225,9 @@ impl AudioEngine {
     /// Fill a stereo interleaved f32 buffer for SDL3 interoperability.
     ///
     /// Renders internally at f64 precision and converts to f32 on output.
-    /// This is the primary entry point for platform audio callbacks that
-    /// require f32 output (such as SDL3).
+    /// It allocates a staging buffer on every call, so it is unfit for an
+    /// audio callback. A real-time host renders through `EngineRunner`,
+    /// whose staging buffer is allocated once.
     pub fn render_samples_f32(&mut self, buffer: &mut [f32]) {
         let num_frames = buffer.len() / 2;
         if num_frames == 0 {

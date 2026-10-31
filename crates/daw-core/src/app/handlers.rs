@@ -757,7 +757,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
         }
     }
 
-    /// Apply all channel patches to the audio engine. Sends Bulk closures
+    /// Apply all channel patches to the audio engine. Sends a Bulk edit
     /// for each channel with pre-loaded PCM samples.
     #[allow(dead_code)]
     pub(super) fn apply_all_patches(&mut self) {
@@ -766,27 +766,14 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
         }
     }
 
-    /// Apply all channel effect chains to the audio engine. Sends Bulk
-    /// closures for each channel to rebuild pedal chains and positions.
+    /// Apply all channel effect chains to the audio engine. Sends a Bulk
+    /// edit for each channel to replace pedal chains and positions.
     #[allow(dead_code)]
     pub(super) fn apply_all_effects(&mut self) {
         let sr = self.sample_rate as f64;
         for ch in 0..8 {
-            let config = self.effects[ch].clone();
-            self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
-                apply_chain_to_engine(&mut engine.channels[ch].pre_pedals, &config.pre_pedals, sr);
-                apply_chain_to_engine(
-                    &mut engine.channels[ch].post_pedals_left,
-                    &config.post_pedals_left,
-                    sr,
-                );
-                apply_chain_to_engine(
-                    &mut engine.channels[ch].post_pedals_right,
-                    &config.post_pedals_right,
-                    sr,
-                );
-                apply_position_to_engine(engine, ch, &config);
-            })));
+            let cmd = engine_setup::effects_command(ch, &self.effects[ch], sr);
+            self.send_command(cmd);
         }
     }
 

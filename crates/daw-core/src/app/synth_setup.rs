@@ -1015,14 +1015,12 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
                     SynthParam::OrbitalPeriod => self.effects[ch].orbital_period = value,
                     _ => unreachable!(),
                 }
-                let config = self.effects[ch].clone();
-                self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
-                    apply_position_to_engine(engine, ch, &config);
-                })));
+                let cmd = engine_setup::position_command(ch, &self.effects[ch]);
+                self.send_command(cmd);
                 return;
             }
         }
-        // Sync the full patch to the engine via Bulk closure.
+        // Sync the full patch to the engine via a Bulk edit.
         self.send_patch(ch);
     }
 }

@@ -138,6 +138,14 @@ impl Vco {
         self.pcm_samples = Some(samples);
     }
 
+    /// Replace the PCM wavetable, or clear it with `None`, and return the
+    /// previous one. Unlike `set_pcm_samples`, it never drops a table, so an
+    /// edit on the audio thread can carry the old table back to the control
+    /// thread instead of freeing it there when it held the last reference.
+    pub fn replace_pcm_samples(&mut self, samples: Option<Arc<Vec<f64>>>) -> Option<Arc<Vec<f64>>> {
+        core::mem::replace(&mut self.pcm_samples, samples)
+    }
+
     /// Compute a single sample at the given frequency.
     ///
     /// Returns the generated sample in the range [-1.0, 1.0] scaled
@@ -603,5 +611,22 @@ mod tests {
                 "PCM output should be in [-1, 1]: {s}"
             );
         }
+    }
+
+    #[test]
+    fn replace_pcm_samples_returns_the_previous_table() {
+        let mut vco = Vco::new();
+        let first = Arc::new(alloc::vec![0.5; 4]);
+        let second = Arc::new(alloc::vec![-0.5; 4]);
+        assert!(vco.replace_pcm_samples(Some(Arc::clone(&first))).is_none());
+        let old = vco.replace_pcm_samples(Some(Arc::clone(&second)));
+        assert!(old.is_some_and(|old| Arc::ptr_eq(&old, &first)));
+        assert_eq!(
+            Arc::strong_count(&first),
+            1,
+            "the caller holds the only one"
+        );
+        let old = vco.replace_pcm_samples(None);
+        assert!(old.is_some_and(|old| Arc::ptr_eq(&old, &second)));
     }
 }

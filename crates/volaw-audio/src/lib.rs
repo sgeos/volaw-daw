@@ -23,7 +23,7 @@
 
 pub use audio;
 
-use audio::spsc::{Producer, ring_buffer};
+use audio::runtime::{CommandSender, command_queue};
 use audio::{AudioEngine, AudioOutput, CommandSink, EngineCommand, EngineRunner};
 use audio_sdl::SdlAudioOutput;
 
@@ -77,15 +77,18 @@ impl core::fmt::Debug for StartFailure {
 /// A running engine on the default playback device.
 ///
 /// Dropping it stops the device first and then frees the engine, because
-/// the output field is declared before the producer.
+/// the output field is declared before the sender. `send` also frees the
+/// `Bulk` edits that the audio thread has handed back.
 ///
-/// Drop or `stop` it before the host calls `SDL_Quit`. `SDL_Quit` destroys
-/// every audio stream, and the drop would then destroy this one a second
-/// time. The `daw` binary takes its `AudioSystem` out of the application and
-/// drops it before the renderer shuts SDL down.
+/// Drop or `stop` it before the host calls `SDL_Quit`, which destroys every
+/// audio stream and so silences this one. The output detects the wrong order
+/// at run time and then skips its own destruction of the stream, so a late
+/// drop or `stop` is safe and still returns or frees the engine once. The
+/// `daw` binary takes its `AudioSystem` out of the application and drops it
+/// before the renderer shuts SDL down.
 pub struct AudioSystem {
     output: SdlAudioOutput<EngineRunner>,
-    producer: Producer<EngineCommand>,
+    sender: CommandSender,
     sample_rate: u32,
 }
 
@@ -119,13 +122,13 @@ impl AudioSystem {
                 engine: Box::new(engine),
             });
         }
-        let (producer, consumer) = ring_buffer(config.command_capacity);
-        let runner = EngineRunner::new(engine, consumer, config.block_samples);
+        let (sender, receiver) = command_queue(config.command_capacity);
+        let runner = EngineRunner::new(engine, receiver, config.block_samples);
         let mut output = SdlAudioOutput::new();
         match output.start(config.sample_rate, runner) {
             Ok(()) => Ok(Self {
                 output,
-                producer,
+                sender,
                 sample_rate: config.sample_rate,
             }),
             Err((message, runner)) => Err(StartFailure {
@@ -158,7 +161,7 @@ impl core::fmt::Debug for AudioSystem {
 
 impl CommandSink for AudioSystem {
     fn send(&mut self, cmd: EngineCommand) -> Result<(), EngineCommand> {
-        self.producer.push(cmd)
+        self.sender.send(cmd)
     }
 }
 

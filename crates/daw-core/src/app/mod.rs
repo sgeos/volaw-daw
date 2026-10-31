@@ -13,7 +13,6 @@
 #![allow(clippy::collapsible_match)]
 #![allow(clippy::manual_checked_ops)]
 
-use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -21,10 +20,7 @@ use alloc::vec::Vec;
 use audio::position::compute_orbital_position;
 use audio::{AudioEngine, CommandSink, EngineCommand};
 
-use crate::engine_setup::{
-    self, apply_chain_to_engine, apply_patch_to_engine, apply_position_to_engine,
-    audio_command_to_engine_command, join_path, load_pcm_samples,
-};
+use crate::engine_setup::{self, audio_command_to_engine_command, join_path, load_pcm_samples};
 use crate::input::DawInput;
 use crate::midi::{MidiNote, MidiTrack};
 use crate::patch::{
@@ -464,15 +460,13 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
         }
     }
 
-    /// Load PCM samples on the UI thread, then send a Bulk closure to
-    /// apply the full patch to the engine on the audio thread.
+    /// Load PCM samples on the UI thread, then send a Bulk edit that
+    /// applies the full patch to the engine on the audio thread.
     fn send_patch(&mut self, ch: usize) {
         let samples_dir = join_path(&self.project_root, "samples");
         let (s1, s2) = load_pcm_samples(&self.platform, &self.patches[ch], &samples_dir);
-        let patch = self.patches[ch].clone();
-        self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
-            apply_patch_to_engine(engine, ch, &patch, s1, s2);
-        })));
+        let cmd = engine_setup::patch_command(ch, &self.patches[ch], s1, s2);
+        self.send_command(cmd);
     }
 
     /// Get the primary (last) selected note index, if any.

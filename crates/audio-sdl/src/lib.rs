@@ -21,19 +21,42 @@
 //! ## Shutdown order
 //!
 //! Stop or drop the output before the host calls `SDL_Quit`. `SDL_Quit`
-//! destroys every audio stream, and a later `stop` or drop would destroy the
-//! stream again through a dangling pointer. The output cannot detect this,
-//! because SDL offers no query for whether a stream is still alive.
+//! destroys every audio stream, so a later `stop` or drop that destroyed the
+//! stream again would pass SDL a dangling pointer.
+//!
+//! The output checks the order at run time instead of trusting it. SDL offers
+//! no query for whether a stream is alive, but it destroys a stream's
+//! properties whenever it destroys the stream, through `SDL_DestroyAudioStream`
+//! or `SDL_Quit` alike, and runs the cleanup callback of each pointer property.
+//! `start` registers such a property, whose cleanup clears a flag that the
+//! output owns. `stop` then destroys the stream and releases the audio
+//! subsystem only while the flag is set. When the host has called `SDL_Quit`
+//! first, `stop` skips both, because `SDL_Quit` has already done them, and
+//! still returns the source, because SDL runs no callback on a destroyed
+//! stream. `stream_lost` reports that state to a host that wants to log it.
+//!
+//! The order could not be enforced through ownership or types without
+//! changing `volaw_audio::AudioSystem::start`, which the game calls, because
+//! `SDL_Quit` is a free function that any code in the process may call.
+//!
+//! The check assumes that `SDL_Quit` and `stop` do not run at the same time
+//! on two threads, which SDL does not support in any case.
 
 use core::ffi::{c_int, c_void};
 use core::marker::PhantomData;
 use core::ptr::{self, NonNull};
+use core::sync::atomic::{AtomicBool, Ordering};
 use std::ffi::CStr;
 
 use audio::{AudioOutput, AudioSource};
 use sdl3_sys::audio::*;
 use sdl3_sys::error::SDL_GetError;
 use sdl3_sys::init::{SDL_INIT_AUDIO, SDL_InitSubSystem, SDL_QuitSubSystem};
+use sdl3_sys::properties::SDL_SetPointerPropertyWithCleanup;
+
+/// The stream property whose cleanup tells the output that SDL destroyed
+/// the stream.
+const ALIVE_PROPERTY: &CStr = c"volaw.audio_sdl.stream_alive";
 
 /// The stack chunk the callback renders into, in `f32` samples. Larger
 /// requests are served in several chunks, so the callback never allocates.
@@ -46,6 +69,11 @@ const CHUNK_SAMPLES: usize = 4096;
 pub struct SdlAudioOutput<S: AudioSource> {
     stream: *mut SDL_AudioStream,
     source: Option<NonNull<S>>,
+    /// Set by `start` and cleared by the stream's property cleanup when SDL
+    /// destroys the stream. Boxed so that its address, which SDL holds as
+    /// cleanup userdata, survives a move of the output. Dropped only after
+    /// `Drop` has destroyed the stream, so the cleanup never sees it freed.
+    stream_alive: Box<AtomicBool>,
     _source: PhantomData<S>,
 }
 
@@ -60,8 +88,17 @@ impl<S: AudioSource> SdlAudioOutput<S> {
         Self {
             stream: ptr::null_mut(),
             source: None,
+            stream_alive: Box::new(AtomicBool::new(false)),
             _source: PhantomData,
         }
+    }
+
+    /// Whether SDL destroyed the stream while the output still holds the
+    /// source, which means that the host called `SDL_Quit` before `stop`.
+    /// No sound plays in that state. `stop` still returns the source, and
+    /// the output is ready to start again afterwards.
+    pub fn stream_lost(&self) -> bool {
+        self.source.is_some() && !self.stream_alive.load(Ordering::Acquire)
     }
 }
 
@@ -109,6 +146,29 @@ impl<S: AudioSource> AudioOutput<S> for SdlAudioOutput<S> {
         }
         self.stream = stream;
         self.source = Some(boxed);
+        self.stream_alive.store(true, Ordering::Release);
+
+        // Safety: `stream` is live, the name is a static C string, and the
+        // flag outlives the stream, as its field documents. On failure SDL
+        // runs the cleanup at once, which clears the flag, so the error path
+        // below must destroy the stream without consulting it.
+        let watched = unsafe {
+            SDL_SetPointerPropertyWithCleanup(
+                SDL_GetAudioStreamProperties(stream),
+                ALIVE_PROPERTY.as_ptr(),
+                ptr::from_ref::<AtomicBool>(&self.stream_alive)
+                    .cast_mut()
+                    .cast::<c_void>(),
+                Some(stream_destroyed),
+                ptr::null_mut(),
+            )
+        };
+        if !watched {
+            let error = format!("failed to watch the audio stream: {}", sdl_error());
+            self.stream_alive.store(true, Ordering::Release);
+            let source = self.stop().expect("the source was stored just above");
+            return Err((error, source));
+        }
 
         // Safety: `stream` is a live stream returned above.
         if !unsafe { SDL_ResumeAudioStreamDevice(stream) } {
@@ -121,11 +181,19 @@ impl<S: AudioSource> AudioOutput<S> for SdlAudioOutput<S> {
 
     fn stop(&mut self) -> Option<S> {
         let boxed = self.source.take()?;
-        // Safety: `stream` was created in `start` and is destroyed once. After
-        // this returns no callback runs, so the box below is exclusively ours.
-        unsafe {
-            SDL_DestroyAudioStream(self.stream);
-            SDL_QuitSubSystem(SDL_INIT_AUDIO);
+        // A cleared flag means that `SDL_Quit` destroyed the stream and reset
+        // the subsystem's reference count already. Destroying the stream again
+        // would use freed memory, and releasing the subsystem could take a
+        // reference that the host acquired after `SDL_Quit`.
+        if self.stream_alive.swap(false, Ordering::AcqRel) {
+            // Safety: the stream is alive, as the flag shows, and was created
+            // in `start`. Destroying it runs the cleanup, which only clears
+            // the flag again. After this returns no callback runs, so the box
+            // below is exclusively ours.
+            unsafe {
+                SDL_DestroyAudioStream(self.stream);
+                SDL_QuitSubSystem(SDL_INIT_AUDIO);
+            }
         }
         self.stream = ptr::null_mut();
         // Safety: `boxed` came from `Box::leak` in `start` and is reclaimed once.
@@ -148,6 +216,21 @@ fn sdl_error() -> String {
     unsafe { CStr::from_ptr(SDL_GetError()) }
         .to_string_lossy()
         .into_owned()
+}
+
+/// Cleanup of the stream property set in `start`. SDL calls it once, when it
+/// destroys the stream's properties together with the stream.
+///
+/// # Safety
+///
+/// `value` is the output's `stream_alive` flag, which outlives the stream.
+unsafe extern "C" fn stream_destroyed(_userdata: *mut c_void, value: *mut c_void) {
+    if value.is_null() {
+        return;
+    }
+    // Safety: see the function contract.
+    let alive = unsafe { &*value.cast::<AtomicBool>() };
+    alive.store(false, Ordering::Release);
 }
 
 /// SDL3 stream callback. Renders whole stereo frames in stack chunks and

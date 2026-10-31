@@ -979,7 +979,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
         }
     }
 
-    /// Apply all channel patches to the audio engine. Sends Bulk closures
+    /// Apply all channel patches to the audio engine. Sends a Bulk edit
     /// for each channel with pre-loaded PCM samples.
     #[allow(dead_code)]
     pub(super) fn apply_all_patches(&mut self) {
@@ -988,27 +988,14 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
         }
     }
 
-    /// Apply all channel effect chains to the audio engine. Sends Bulk
-    /// closures for each channel to rebuild pedal chains and positions.
+    /// Apply all channel effect chains to the audio engine. Sends a Bulk
+    /// edit for each channel to replace pedal chains and positions.
     #[allow(dead_code)]
     pub(super) fn apply_all_effects(&mut self) {
         let sr = self.sample_rate as f64;
         for ch in 0..8 {
-            let config = self.effects[ch].clone();
-            self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
-                apply_chain_to_engine(&mut engine.channels[ch].pre_pedals, &config.pre_pedals, sr);
-                apply_chain_to_engine(
-                    &mut engine.channels[ch].post_pedals_left,
-                    &config.post_pedals_left,
-                    sr,
-                );
-                apply_chain_to_engine(
-                    &mut engine.channels[ch].post_pedals_right,
-                    &config.post_pedals_right,
-                    sr,
-                );
-                apply_position_to_engine(engine, ch, &config);
-            })));
+            let cmd = engine_setup::effects_command(ch, &self.effects[ch], sr);
+            self.send_command(cmd);
         }
     }
 
@@ -1432,10 +1419,8 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
                     self.effects[ch].position_3d_enabled = false;
                     self.effects[ch].orbital_enabled = false;
                 }
-                let config = self.effects[ch].clone();
-                self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
-                    apply_position_to_engine(engine, ch, &config);
-                })));
+                let cmd = engine_setup::position_command(ch, &self.effects[ch]);
+                self.send_command(cmd);
                 return;
             }
             py += PARAM_ROW_H;
@@ -2296,21 +2281,12 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
     /// Rebuild one engine pedal chain from its config.
     pub(super) fn rebuild_engine_chain(&mut self, ch: usize, chain_id: u8) {
         let sr = self.sample_rate as f64;
-        let configs = match chain_id {
-            0 => self.effects[ch].pre_pedals.clone(),
-            1 => self.effects[ch].post_pedals_left.clone(),
-            2 => self.effects[ch].post_pedals_right.clone(),
-            _ => return,
+        let Some(configs) = self.effects[ch].get_chain_pedals(chain_id) else {
+            return;
         };
-        self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
-            let engine_chain = match chain_id {
-                0 => &mut engine.channels[ch].pre_pedals,
-                1 => &mut engine.channels[ch].post_pedals_left,
-                2 => &mut engine.channels[ch].post_pedals_right,
-                _ => return,
-            };
-            apply_chain_to_engine(engine_chain, &configs, sr);
-        })));
+        if let Some(cmd) = engine_setup::chain_command(ch, chain_id, configs, sr) {
+            self.send_command(cmd);
+        }
     }
 
     /// Handle a click on the pedal type picker overlay.
@@ -2426,14 +2402,12 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
                     SynthParam::OrbitalPeriod => self.effects[ch].orbital_period = value,
                     _ => unreachable!(),
                 }
-                let config = self.effects[ch].clone();
-                self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
-                    apply_position_to_engine(engine, ch, &config);
-                })));
+                let cmd = engine_setup::position_command(ch, &self.effects[ch]);
+                self.send_command(cmd);
                 return;
             }
         }
-        // Sync the full patch to the engine via Bulk closure.
+        // Sync the full patch to the engine via a Bulk edit.
         self.send_patch(ch);
     }
 
@@ -2464,17 +2438,8 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
         } else {
             return;
         };
-        // Sync the specific parameter to the engine's live pedal via Bulk closure.
-        self.send_command(EngineCommand::Bulk(Box::new(move |engine| {
-            let engine_chain = match chain {
-                0 => &mut engine.channels[ch].pre_pedals,
-                1 => &mut engine.channels[ch].post_pedals_left,
-                2 => &mut engine.channels[ch].post_pedals_right,
-                _ => return,
-            };
-            if let Some(pedal) = engine_chain.pedals.get_mut(pedal_idx) {
-                pedal.set_param(&param_name, value);
-            }
-        })));
+        // Sync the specific parameter to the engine's live pedal.
+        let cmd = engine_setup::pedal_param_command(ch, chain, pedal_idx, param_name, value);
+        self.send_command(cmd);
     }
 }

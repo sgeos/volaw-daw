@@ -110,6 +110,22 @@ All notable changes are recorded here. The format follows
   played and exported at the wrong speed. The imported notes are now converted to the
   project's resolution, with each start and end rounded half up, by the new
   `MidiTrack::rescale`. A project with no other notes still adopts the file's.
+- A project loaded or imported at a resolution other than 480 ticks per beat
+  played at the wrong speed, five times too fast at 96, because the transport
+  stayed at 480. The transport now follows the project's ticks per beat
+  through `Transport::set_ticks_per_beat`, which converts the playhead and the
+  loop points as `MidiTrack::rescale` converts notes. The snap grid, and with
+  it the length of a new note, follows too, and a grid subdivision stays the
+  same subdivision.
+- Playback ran slow at any resolution and tempo whose ticks per frame are not
+  a whole number, such as 3.2 at 96 ticks per beat and 120 beats per minute,
+  or 13.3 at 480 and 100, because each frame dropped its fraction of a tick.
+  `Transport::advance_samples` now carries the fraction to the next frame.
+- At a resolution below 24 ticks per beat, the grid key could set a snap of 0
+  ticks, which a click on the piano roll then divided by, and could cycle
+  between two values without reaching the others. Each subdivision is now at
+  least one tick, and the key visits each distinct value once.
+- A project file with 0 ticks per beat is refused at load.
 - A channel script could freeze the composer with a long bounded loop, such as
   `for i in 0..10000000`, which held one tick for 34 seconds in a debug build. Keleusma
   0.2.2 admits such a loop, and its cost estimate leaves out `fn main` and loops inside

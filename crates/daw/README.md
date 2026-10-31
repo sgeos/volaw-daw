@@ -191,7 +191,9 @@ Notes that would land past channel 8 are dropped with a warning in the log.
 If a channel that the import leaves alone has notes, the project keeps its
 ticks per beat and the imported notes are converted to it, with each start
 and end rounded half up. Otherwise the project adopts the file's ticks per
-beat, and the notes arrive exactly.
+beat, and the notes arrive exactly. Playback, the loop region, the snap
+grid and the length of a new note follow the project's ticks per beat after
+a load or an import, so a project at any resolution plays at its tempo.
 
 Export refuses, with a message in the status bar, a note with a pitch above
 127, a velocity of 0 or above 127, or a duration of 0, a gap of more than
@@ -273,4 +275,4 @@ cargo test -p daw
 cargo test -p daw-core
 ```
 
-The DAW binary has 4 unit tests, for argument parsing and the README script example, and 1 integration test, which starts the built binary with an empty environment to check its run path. The daw-core library has 162 tests covering the application and its Studio page, MIDI track operations, transport logic, project persistence, preset loading, rendering calculations, WAV decoding, Standard MIDI File parsing, and Keleusma script integration.
+The DAW binary has 7 unit tests, for argument parsing, the window size bounds and script example in this README, and 1 integration test, which starts the built binary with an empty environment to check its run path. The daw-core library has 195 tests covering the application and its Studio page, MIDI track operations, transport logic, project persistence, preset loading, rendering calculations, WAV decoding, Standard MIDI File parsing, and Keleusma script integration.

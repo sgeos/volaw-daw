@@ -1,3 +1,12 @@
+use core::num::NonZeroU16;
+
+use crate::midi::rescale_tick;
+
+/// Below the smallest fraction of a tick that one advance can add, and far
+/// above the rounding error of the floating point sum, so that a count that
+/// should be whole is not held back a tick by that error.
+const TICK_EPSILON: f64 = 1e-9;
+
 /// Playback transport state.
 ///
 /// Tracks the current playback position, tempo, and play/stop state.
@@ -25,6 +34,11 @@ pub struct Transport {
     pub beats_per_bar: u8,
     /// Time signature denominator (power of 2: 1, 2, 4, 8, 16, 32). Default is 4.
     pub beat_denominator: u8,
+    /// The fraction of a tick that advances covered but have not counted,
+    /// in `0.0..1.0`. Carried so that an advance shorter than a whole number
+    /// of ticks, such as a frame at 96 ticks per beat, does not slow
+    /// playback by dropping it.
+    tick_remainder: f64,
 }
 
 impl Transport {
@@ -41,7 +55,38 @@ impl Transport {
             sample_rate,
             beats_per_bar: 4,
             beat_denominator: 4,
+            tick_remainder: 0.0,
         }
+    }
+
+    /// Count ticks at `ticks_per_beat` from now on, converting the position
+    /// and the loop points so that they stay on the same beats. Each is
+    /// rounded half up, as `MidiTrack::rescale` rounds a note, so a loop
+    /// point and a note at the same time before stay at the same time after.
+    /// A conversion to a coarser resolution can bring a short loop's ends
+    /// together, and the loop then no longer wraps. The fraction of a tick
+    /// carried between advances is dropped, which delays playback by less
+    /// than one tick once. From a transport at 0 ticks per beat, which counts
+    /// nothing, the new resolution is adopted without conversion.
+    ///
+    /// # Errors
+    ///
+    /// If `ticks_per_beat` is 0, which counts no time. The transport is then
+    /// unchanged.
+    pub fn set_ticks_per_beat(&mut self, ticks_per_beat: u16) -> Result<(), &'static str> {
+        let Some(to) = NonZeroU16::new(ticks_per_beat) else {
+            return Err("a transport cannot count 0 ticks per beat");
+        };
+        if let Some(from) = NonZeroU16::new(self.ticks_per_beat)
+            && from != to
+        {
+            self.position_ticks = rescale_tick(self.position_ticks, from, to);
+            self.loop_start = rescale_tick(self.loop_start, from, to);
+            self.loop_end = rescale_tick(self.loop_end, from, to);
+            self.tick_remainder = 0.0;
+        }
+        self.ticks_per_beat = ticks_per_beat;
+        Ok(())
     }
 
     /// Convert ticks to seconds at the current tempo.
@@ -93,8 +138,18 @@ impl Transport {
         }
 
         let seconds = num_samples as f64 / self.sample_rate as f64;
-        let ticks = self.seconds_to_ticks(seconds);
-        self.position_ticks += ticks;
+        let exact = seconds * self.tempo / 60.0 * self.ticks_per_beat as f64 + self.tick_remainder;
+        if !exact.is_finite() || exact <= 0.0 {
+            // A sample rate of 0 or a tempo that is not positive counts no
+            // time rather than an unbounded amount.
+            self.tick_remainder = 0.0;
+            return 0;
+        }
+        let whole = libm::floor(exact + TICK_EPSILON);
+        self.tick_remainder = (exact - whole).max(0.0);
+        // Saturates for a count past u64::MAX, which no real advance reaches.
+        let ticks = whole as u64;
+        self.position_ticks = self.position_ticks.saturating_add(ticks);
 
         // Handle looping.
         if self.loop_enabled
@@ -123,6 +178,7 @@ impl Transport {
     pub fn reset(&mut self) {
         self.playing = false;
         self.position_ticks = 0;
+        self.tick_remainder = 0.0;
     }
 
     /// Number of audio samples per tick at the current tempo and sample rate.
@@ -267,5 +323,75 @@ mod tests {
         transport.position_ticks = 1440;
         let (bar, beat, tick) = transport.position_bbt();
         assert_eq!((bar, beat, tick), (2, 1, 0));
+    }
+
+    /// Frames of one sixtieth of a second, as the composer advances, cover
+    /// exactly the beats their time holds, whatever the resolution and
+    /// tempo. Without the carried remainder, a frame at 96 ticks per beat
+    /// and 120 beats per minute counts 3 ticks instead of 3.2, and plays
+    /// 6 percent slow. The expected count is the exact one, rounded down.
+    #[test]
+    fn frames_keep_time_at_any_resolution() {
+        const RATE: u32 = 48_000;
+        const FRAME: u32 = RATE / 60;
+        for ticks_per_beat in [1u16, 96, 100, 480, 960] {
+            for tempo in [97u32, 100, 120, 300] {
+                let mut transport = Transport::new(RATE, ticks_per_beat);
+                transport.tempo = f64::from(tempo);
+                transport.play();
+                for frames in 1..=600u64 {
+                    transport.advance_samples(FRAME);
+                    let exact =
+                        frames * u64::from(FRAME) * u64::from(tempo) * u64::from(ticks_per_beat)
+                            / (60 * u64::from(RATE));
+                    assert_eq!(
+                        transport.position_ticks, exact,
+                        "{ticks_per_beat} ticks per beat at {tempo} after {frames} frames"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn advance_without_a_sample_rate_counts_nothing() {
+        let mut transport = Transport::new(0, 480);
+        transport.play();
+        assert_eq!(transport.advance_samples(800), 0);
+        assert_eq!(transport.position_ticks, 0);
+    }
+
+    /// The position and the loop points keep their beats, rounded half up as
+    /// a note is, and 0 ticks per beat is refused.
+    #[test]
+    fn a_new_resolution_converts_the_position_and_the_loop() {
+        let mut transport = Transport::new(48_000, 480);
+        transport.position_ticks = 962;
+        transport.loop_start = 1920;
+        transport.loop_end = 1920 * 3;
+        transport.set_ticks_per_beat(96).unwrap();
+        assert_eq!(transport.ticks_per_beat, 96);
+        // 962 / 5 is 192.4, which rounds down.
+        assert_eq!(
+            (
+                transport.position_ticks,
+                transport.loop_start,
+                transport.loop_end
+            ),
+            (192, 384, 1152)
+        );
+        assert_eq!(transport.ticks_per_bar(), 384);
+
+        let before = (transport.ticks_per_beat, transport.position_ticks);
+        assert!(transport.set_ticks_per_beat(0).is_err());
+        assert_eq!((transport.ticks_per_beat, transport.position_ticks), before);
+
+        let mut uncounted = Transport::new(48_000, 0);
+        uncounted.position_ticks = 7;
+        uncounted.set_ticks_per_beat(96).unwrap();
+        assert_eq!(
+            (uncounted.ticks_per_beat, uncounted.position_ticks),
+            (96, 7)
+        );
     }
 }

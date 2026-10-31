@@ -1,5 +1,6 @@
 extern crate alloc;
 use alloc::vec::Vec;
+use core::num::NonZeroU16;
 use serde::{Deserialize, Serialize};
 
 /// Default ticks per beat (MIDI resolution).
@@ -55,6 +56,16 @@ pub enum AutofixStrategy {
     LowestNote,
 }
 
+/// Convert a tick count from `from` to `to` ticks per beat, rounded half up,
+/// saturating at `u64::MAX`. The notes, the transport and the grid all
+/// convert through it, so that a note and a loop point at the same time
+/// before a conversion stay at the same time after it.
+pub(crate) fn rescale_tick(tick: u64, from: NonZeroU16, to: NonZeroU16) -> u64 {
+    let (from, to) = (u128::from(from.get()), u128::from(to.get()));
+    // Below 2^64 * 2^16 + 2^16, so the product fits in a u128.
+    u64::try_from((u128::from(tick) * to + from / 2) / from).unwrap_or(u64::MAX)
+}
+
 impl MidiTrack {
     /// Create an empty track.
     pub fn new() -> Self {
@@ -79,16 +90,16 @@ impl MidiTrack {
     /// If either resolution is 0, which cannot be converted from or to. The
     /// track is then unchanged.
     pub fn rescale(&mut self, ticks_per_beat: u16) -> Result<(), &'static str> {
-        let (from, to) = (u128::from(self.ticks_per_beat), u128::from(ticks_per_beat));
-        if from == 0 || to == 0 {
+        let (Some(from), Some(to)) = (
+            NonZeroU16::new(self.ticks_per_beat),
+            NonZeroU16::new(ticks_per_beat),
+        ) else {
             return Err("cannot rescale a track to or from 0 ticks per beat");
-        }
+        };
         if from == to {
             return Ok(());
         }
-        // Below 2^64 * 2^16 + 2^16, so the product fits in a u128.
-        let convert =
-            |t: u64| u64::try_from((u128::from(t) * to + from / 2) / from).unwrap_or(u64::MAX);
+        let convert = |t: u64| rescale_tick(t, from, to);
         for note in &mut self.notes {
             let start = convert(note.tick);
             let end = convert(note.tick.saturating_add(note.duration));

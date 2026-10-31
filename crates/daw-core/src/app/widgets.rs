@@ -83,6 +83,25 @@ pub(super) fn grid_label(snap_ticks: u64, ticks_per_beat: u64, ticks_per_bar: u6
     "Custom"
 }
 
+/// Every snap grid subdivision at a resolution, in the order the grid key
+/// cycles through them. Each base division from a bar down to a 1/32 note
+/// comes straight, then as a triplet at 2/3, then dotted at 3/2. A value is
+/// at least one tick, so that snapping never divides by 0. Below 24 ticks
+/// per beat some subdivisions therefore coincide.
+pub(super) fn grid_subdivisions(ticks_per_beat: u64, ticks_per_bar: u64) -> [u64; 18] {
+    let tpb = ticks_per_beat;
+    let bases: [u64; 6] = [ticks_per_bar, tpb * 2, tpb, tpb / 2, tpb / 4, tpb / 8];
+    core::array::from_fn(|i| {
+        let b = bases[i / 3];
+        match i % 3 {
+            0 => b,
+            1 => b * 2 / 3,
+            _ => b * 3 / 2,
+        }
+        .max(1)
+    })
+}
+
 pub(super) fn is_log_label(label: &str) -> bool {
     let lower = label.to_lowercase();
     lower == "cutoff"

@@ -567,18 +567,18 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
     pub(super) fn cycle_grid(&mut self) {
         let tpb = self.project.ticks_per_beat as u64;
         let tpbar = self.transport.ticks_per_bar();
-        // Base values: bar, half, quarter, eighth, sixteenth, thirty-second.
-        let bases: [u64; 6] = [tpbar, tpb * 2, tpb, tpb / 2, tpb / 4, tpb / 8];
-        // Build full list: for each base, straight then triplet (2/3) then dotted (3/2).
-        let mut subdivisions = Vec::with_capacity(18);
-        for &b in &bases {
-            subdivisions.push(b);
-            subdivisions.push(b * 2 / 3);
-            subdivisions.push(b * 3 / 2);
-        }
+        let subdivisions = grid_subdivisions(tpb, tpbar);
         let current_idx = subdivisions.iter().position(|&s| s == self.snap_ticks);
+        // Subdivisions coincide at a coarse resolution, and `position` finds
+        // only the first of equal values, so the cycle steps between first
+        // occurrences to visit each distinct value once. At 24 ticks per beat
+        // or more every value is distinct and every index is visited.
+        let first_of_its_value = |j: usize| subdivisions[..j].iter().all(|&s| s != subdivisions[j]);
         let next_idx = match current_idx {
-            Some(i) => (i + 1) % subdivisions.len(),
+            Some(i) => (1..=subdivisions.len())
+                .map(|step| (i + step) % subdivisions.len())
+                .find(|&j| first_of_its_value(j))
+                .unwrap_or(i),
             None => 6, // Default to quarter note (index 6 = 1/4 straight).
         };
         self.snap_ticks = subdivisions[next_idx];

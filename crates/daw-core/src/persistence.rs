@@ -120,6 +120,11 @@ pub fn load_project<P: Platform + ?Sized>(
     validate_file_name(filename)?;
     let project_path = join_path(&join_path(root, SAVES_DIR), &format!("{filename}.toml"));
     let project: DawProject = read_toml(platform, &project_path, "project")?;
+    // Every tick count in the project is measured in it, and the transport
+    // cannot count time at 0.
+    if project.ticks_per_beat == 0 {
+        return Err(format!("{project_path}: ticks_per_beat must be at least 1"));
+    }
 
     let patches_dir = join_path(root, PATCHES_DIR);
     let effects_dir = join_path(root, EFFECTS_DIR);
@@ -246,6 +251,26 @@ mod tests {
             .unwrap();
         let (_, _, patches, _) = load_project(&platform, "r", "p").expect("load");
         assert_eq!(patches[2].name, PatchConfig::default().name);
+    }
+
+    #[test]
+    fn a_project_at_zero_ticks_per_beat_is_refused() {
+        let platform = MemoryPlatform::new();
+        for (ticks_per_beat, loads) in [(0, false), (1, true)] {
+            let project = DawProject {
+                ticks_per_beat,
+                ..DawProject::default()
+            };
+            let text = toml::to_string_pretty(&project).unwrap();
+            platform
+                .write_file("r/saves/p.toml", text.as_bytes())
+                .unwrap();
+            let result = load_project(&platform, "r", "p");
+            assert_eq!(result.is_ok(), loads, "at {ticks_per_beat}");
+            if let Err(e) = result {
+                assert!(e.ends_with("ticks_per_beat must be at least 1"), "{e}");
+            }
+        }
     }
 
     #[test]

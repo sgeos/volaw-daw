@@ -21,13 +21,14 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::num::NonZeroU16;
 
 use audio::position::compute_orbital_position;
 use audio::{AudioEngine, CommandSink, EngineCommand};
 
 use crate::engine_setup::{self, audio_command_to_engine_command, join_path, load_pcm_samples};
 use crate::input::DawInput;
-use crate::midi::{MidiNote, MidiTrack};
+use crate::midi::{MidiNote, MidiTrack, rescale_tick};
 use crate::patch::{
     EffectChainConfig, PEDAL_TYPES, PatchConfig, PedalConfig, default_pedal_config,
     pedal_description,
@@ -88,9 +89,6 @@ const LOWEST_NOTE: u8 = 0; // C-2
 
 /// Pixels per beat at zoom level 1.0.
 const BASE_PIXELS_PER_BEAT: f32 = 80.0;
-
-/// Default note duration in ticks (one beat).
-const DEFAULT_NOTE_DURATION: u64 = 480;
 
 /// Default note velocity.
 const DEFAULT_VELOCITY: u8 = 100;
@@ -335,7 +333,8 @@ pub struct DawApp<P: Platform, S: CommandSink> {
     selected_notes: Vec<usize>,
     /// Clipboard for note copy/paste. Tick values are relative to the earliest note.
     clipboard: Vec<MidiNote>,
-    /// Snap quantization in ticks. Notes snap to this grid. Default is one beat (480).
+    /// Snap quantization in ticks, at the project's resolution. Notes snap
+    /// to this grid, and a new note is this long. Default is one beat.
     snap_ticks: u64,
     /// Project root directory for save/load.
     project_root: String,
@@ -413,11 +412,13 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
     /// A new, empty project at the default root.
     pub fn new(platform: P, sink: S, sample_rate: u32) -> Self {
         let last_script_check = platform.elapsed_ms();
+        let project = DawProject::default();
+        let ticks_per_beat = project.ticks_per_beat;
         Self {
             platform,
             sample_rate,
-            project: DawProject::default(),
-            transport: Transport::new(sample_rate, 480),
+            project,
+            transport: Transport::new(sample_rate, ticks_per_beat),
             sink,
             selected_channel: 0,
             solo_channel: None,
@@ -432,7 +433,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
             current_page: DawPage::Studio,
             selected_notes: Vec::new(),
             clipboard: Vec::new(),
-            snap_ticks: DEFAULT_NOTE_DURATION,
+            snap_ticks: u64::from(ticks_per_beat),
             project_root: String::from(PROJECT_ROOT),
             status_message: None,
             active_notes: core::array::from_fn(|_| Vec::new()),
@@ -1266,6 +1267,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
                 ),
             );
             self.project.ticks_per_beat = ticks_per_beat;
+            self.follow_project_resolution();
         }
         Ok(filled.iter().filter(|f| **f).count())
     }
@@ -1302,9 +1304,44 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
     }
 
     fn sync_transport_to_project(&mut self) {
+        // First, so that the grid converts under the time signature it was
+        // chosen in.
+        self.follow_project_resolution();
         self.transport.tempo = self.project.tempo;
         self.transport.beats_per_bar = self.project.beats_per_bar;
         self.transport.beat_denominator = self.project.beat_denominator;
+    }
+
+    /// Bring the transport, and the tick counts kept beside it, to the
+    /// project's ticks per beat, wherever that changes. The transport then
+    /// plays the notes at the project's tempo, and the playhead, the loop
+    /// and the snap grid stay on the same beats, rounded as
+    /// [`Transport::set_ticks_per_beat`] describes. A snap value that is one
+    /// of the grid's subdivisions becomes the same subdivision at the new
+    /// resolution, and any other is converted like a tick. A project at 0
+    /// ticks per beat, which [`persistence::load_project`] refuses and an
+    /// import cannot produce, leaves everything as it was.
+    fn follow_project_resolution(&mut self) {
+        let (Some(from), Some(to)) = (
+            NonZeroU16::new(self.transport.ticks_per_beat),
+            NonZeroU16::new(self.project.ticks_per_beat),
+        ) else {
+            return;
+        };
+        if from == to {
+            return;
+        }
+        let old_grid = grid_subdivisions(u64::from(from.get()), self.transport.ticks_per_bar());
+        let grid_index = old_grid.iter().position(|&s| s == self.snap_ticks);
+        if self.transport.set_ticks_per_beat(to.get()).is_err() {
+            return;
+        }
+        self.prev_ticks = rescale_tick(self.prev_ticks, from, to);
+        let new_grid = grid_subdivisions(u64::from(to.get()), self.transport.ticks_per_bar());
+        self.snap_ticks = match grid_index {
+            Some(i) => new_grid[i],
+            None => rescale_tick(self.snap_ticks, from, to).max(1),
+        };
     }
 }
 

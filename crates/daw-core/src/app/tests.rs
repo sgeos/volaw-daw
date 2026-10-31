@@ -451,6 +451,173 @@ mod midi_round_trip {
     }
 }
 
+/// The transport, the loop and the snap grid follow the project's ticks per
+/// beat after a load and after an import. Every check is made at 96 ticks per
+/// beat, where a transport left at 480 runs five times too fast and lays a
+/// bar out five times too long.
+mod resolution {
+    use super::*;
+
+    const TPB: u16 = 96;
+
+    /// A beat, the second one, at the project's resolution.
+    fn on_beat_two() -> MidiNote {
+        MidiNote {
+            tick: u64::from(TPB),
+            duration: u64::from(TPB),
+            pitch: 60,
+            velocity: 100,
+        }
+    }
+
+    /// Save a project at `TPB` with one note on beat two, and load it into a
+    /// fresh app whose loop and snap were set at the default resolution.
+    fn loaded(snap_ticks: u64) -> DawApp<MemoryPlatform, NullSink> {
+        let mut source = app();
+        source.project.name = String::from("coarse");
+        source.project.ticks_per_beat = TPB;
+        source.tracks[0].ticks_per_beat = TPB;
+        source.tracks[0].notes.push(on_beat_two());
+        source.save();
+
+        let mut target = app();
+        for dir in ["proj/saves", "proj/patches", "proj/effects", "proj/midi"] {
+            for path in source.platform().list_files(dir, "toml").unwrap() {
+                let bytes = source.platform().read_file(&path).unwrap();
+                target.platform().write_file(&path, &bytes).unwrap();
+            }
+        }
+        target.transport.loop_start = 1920;
+        target.transport.loop_end = 1920 * 2;
+        target.snap_ticks = snap_ticks;
+        target.load_project("coarse").expect("load");
+        target
+    }
+
+    /// Import a file at `TPB` with one note on beat two into a fresh app.
+    fn imported() -> DawApp<MemoryPlatform, NullSink> {
+        let track = MidiTrack {
+            notes: alloc::vec![on_beat_two()],
+            ticks_per_beat: TPB,
+        };
+        let data = crate::smf::build_smf(&[track], TPB, 120.0, 4, 4).expect("build");
+        let mut target = app();
+        target.import_midi(&data, 0).expect("import");
+        target
+    }
+
+    /// At 120 beats per minute a beat lasts 30 frames of 1/60 s. The note on
+    /// beat two must not sound before frame 31, the first past its start,
+    /// and must sound then. Looping the track wraps after one bar of 4
+    /// beats, 120 frames, which end exactly on the loop end.
+    fn assert_plays_in_time(mut state: DawApp<MemoryPlatform, NullSink>, case: &str) {
+        assert_eq!(state.transport.ticks_per_beat, TPB, "{case}");
+        assert_eq!(state.project.tempo, 120.0, "{case}");
+        state.transport.play();
+        for _ in 0..30 {
+            state.advance_playback();
+        }
+        assert_eq!(state.transport.position_ticks, u64::from(TPB), "{case}");
+        assert!(state.active_notes[0].is_empty(), "{case}: early");
+        state.advance_playback();
+        assert_eq!(state.active_notes[0], alloc::vec![0], "{case}: late");
+
+        state.transport.reset();
+        state.prev_ticks = 0;
+        state.toggle_loop();
+        let bar = 4 * u64::from(TPB);
+        assert_eq!(
+            (state.transport.loop_start, state.transport.loop_end),
+            (0, bar),
+            "{case}"
+        );
+        state.transport.play();
+        for _ in 0..119 {
+            state.advance_playback();
+        }
+        // 119 frames of 3.2 ticks are 380.8 ticks.
+        assert_eq!(
+            state.transport.position_ticks,
+            bar - 4,
+            "{case}: before the wrap"
+        );
+        state.advance_playback();
+        assert_eq!(state.transport.position_ticks, 0, "{case}: the loop wraps");
+    }
+
+    #[test]
+    fn a_loaded_project_plays_at_its_own_resolution() {
+        assert_plays_in_time(
+            loaded(u64::from(DawProject::default().ticks_per_beat)),
+            "load",
+        );
+    }
+
+    #[test]
+    fn an_imported_resolution_plays_in_time() {
+        let state = imported();
+        assert_eq!(state.project.ticks_per_beat, TPB);
+        assert_plays_in_time(state, "import");
+    }
+
+    /// The loop set before the load keeps its bars, and the default snap and
+    /// note length become one beat at the new resolution.
+    #[test]
+    fn a_load_converts_the_loop_and_the_snap() {
+        let state = loaded(480);
+        assert_eq!(
+            (state.transport.loop_start, state.transport.loop_end),
+            (384, 768)
+        );
+        assert_eq!(state.snap_ticks, u64::from(TPB));
+        let imported = imported();
+        assert_eq!(imported.snap_ticks, u64::from(TPB));
+    }
+
+    /// A grid subdivision stays that subdivision. At 100 ticks per beat a
+    /// dotted 1/32 note is 18 ticks, where converting its 90 ticks at 480
+    /// would round to 19, a value the grid key does not offer. A snap that is
+    /// no subdivision converts like a tick.
+    #[test]
+    fn a_new_resolution_keeps_the_grid_subdivision() {
+        for (snap, expected) in [(90, 18), (7, 1), (1000, 208)] {
+            let mut state = app();
+            state.snap_ticks = snap;
+            state.project.ticks_per_beat = 100;
+            state.follow_project_resolution();
+            assert_eq!(state.snap_ticks, expected, "snap of {snap}");
+        }
+        let mut state = app();
+        state.snap_ticks = 90;
+        state.project.ticks_per_beat = 100;
+        state.follow_project_resolution();
+        assert_eq!(
+            grid_label(state.snap_ticks, 100, state.transport.ticks_per_bar()),
+            "1/32D"
+        );
+    }
+
+    /// At a resolution so coarse that subdivisions coincide, the grid key
+    /// still visits every distinct value and never snaps to 0 ticks.
+    #[test]
+    fn the_grid_cycles_at_a_coarse_resolution() {
+        let mut state = app();
+        state.project.ticks_per_beat = 4;
+        state.follow_project_resolution();
+        let mut seen = alloc::collections::BTreeSet::new();
+        for _ in 0..18 {
+            state.cycle_grid();
+            assert!(state.snap_ticks >= 1);
+            seen.insert(state.snap_ticks);
+        }
+        let distinct: alloc::collections::BTreeSet<u64> =
+            grid_subdivisions(4, state.transport.ticks_per_bar())
+                .into_iter()
+                .collect();
+        assert_eq!(seen, distinct);
+    }
+}
+
 /// One thing drawn, as a box. Text is recorded at its origin with no size,
 /// because its true size depends on the platform's font.
 #[derive(Debug, Clone, PartialEq)]

@@ -73,6 +73,7 @@ dependencies = [
  "daw-core",
  "daw-sdl",
  "sdl3-sys",
+ "sdl3-ttf-sys",
  "volaw-audio",
 ]
 

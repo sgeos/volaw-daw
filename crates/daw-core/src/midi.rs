@@ -1,5 +1,6 @@
 extern crate alloc;
 use alloc::vec::Vec;
+use core::num::NonZeroU16;
 use serde::{Deserialize, Serialize};
 
 /// Default ticks per beat (MIDI resolution).
@@ -55,10 +56,59 @@ pub enum AutofixStrategy {
     LowestNote,
 }
 
+/// Convert a tick count from `from` to `to` ticks per beat, rounded half up,
+/// saturating at `u64::MAX`. The notes, the transport and the grid all
+/// convert through it, so that a note and a loop point at the same time
+/// before a conversion stay at the same time after it.
+pub(crate) fn rescale_tick(tick: u64, from: NonZeroU16, to: NonZeroU16) -> u64 {
+    let (from, to) = (u128::from(from.get()), u128::from(to.get()));
+    // Below 2^64 * 2^16 + 2^16, so the product fits in a u128.
+    u64::try_from((u128::from(tick) * to + from / 2) / from).unwrap_or(u64::MAX)
+}
+
 impl MidiTrack {
     /// Create an empty track.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Convert every note from the track's own ticks per beat to
+    /// `ticks_per_beat`, and adopt it.
+    ///
+    /// Rounding. A tick `t` becomes `t * to / from` rounded half up. The
+    /// start and the end of each note are converted, and the duration is
+    /// their difference, so that notes that met end to end still meet and
+    /// the rounding errors do not add up along a phrase. A note that would
+    /// shrink to nothing keeps a duration of one tick. A conversion to a finer
+    /// resolution whose ratio divides evenly is exact. A conversion to a
+    /// coarser one moves each time by at most half a target tick, and can
+    /// give two notes the same start. A time that would pass `u64::MAX`
+    /// saturates there.
+    ///
+    /// # Errors
+    ///
+    /// If either resolution is 0, which cannot be converted from or to. The
+    /// track is then unchanged.
+    pub fn rescale(&mut self, ticks_per_beat: u16) -> Result<(), &'static str> {
+        let (Some(from), Some(to)) = (
+            NonZeroU16::new(self.ticks_per_beat),
+            NonZeroU16::new(ticks_per_beat),
+        ) else {
+            return Err("cannot rescale a track to or from 0 ticks per beat");
+        };
+        if from == to {
+            return Ok(());
+        }
+        let convert = |t: u64| rescale_tick(t, from, to);
+        for note in &mut self.notes {
+            let start = convert(note.tick);
+            let end = convert(note.tick.saturating_add(note.duration));
+            note.tick = start;
+            note.duration = end.saturating_sub(start).max(1);
+        }
+        self.ticks_per_beat = ticks_per_beat;
+        self.sort();
+        Ok(())
     }
 
     /// Sort notes by start tick, then by pitch (ascending).
@@ -433,5 +483,76 @@ mod tests {
         assert_eq!(track.notes[0].tick, 0);
         assert_eq!(track.notes[1].tick, 480);
         assert_eq!(track.notes[2].tick, 960);
+    }
+
+    fn at(tick: u64, duration: u64, pitch: u8) -> MidiNote {
+        MidiNote {
+            tick,
+            duration,
+            pitch,
+            velocity: 100,
+        }
+    }
+
+    fn track_at(ticks_per_beat: u16, notes: &[MidiNote]) -> MidiTrack {
+        MidiTrack {
+            notes: notes.to_vec(),
+            ticks_per_beat,
+        }
+    }
+
+    #[test]
+    fn rescale_to_a_finer_resolution_is_exact() {
+        let notes = [at(0, 96, 60), at(96, 48, 62), at(1_000_000, 1, 64)];
+        let mut track = track_at(96, &notes);
+        track.rescale(480).unwrap();
+        assert_eq!(track.ticks_per_beat, 480);
+        let scaled: Vec<MidiNote> = notes
+            .iter()
+            .map(|n| at(n.tick * 5, n.duration * 5, n.pitch))
+            .collect();
+        assert_eq!(track.notes, scaled);
+        // And back again, since every time is a multiple of the ratio.
+        track.rescale(96).unwrap();
+        assert_eq!(track.notes, notes);
+    }
+
+    /// 480 to 96 divides by 5. The first note ends at 3, which rounds to 1,
+    /// where the second note now starts, so the two still meet. The second and
+    /// third notes would shrink to nothing, and keep one tick each.
+    #[test]
+    fn rescale_to_a_coarser_resolution_rounds_ends() {
+        let mut track = track_at(480, &[at(0, 3, 60), at(3, 4, 62), at(10, 2, 64)]);
+        track.rescale(96).unwrap();
+        assert_eq!(
+            track.notes,
+            alloc::vec![at(0, 1, 60), at(1, 1, 62), at(2, 1, 64)]
+        );
+        let first_end = track.notes[0].tick + track.notes[0].duration;
+        assert_eq!(first_end, track.notes[1].tick);
+    }
+
+    #[test]
+    fn rescale_saturates_instead_of_overflowing() {
+        let mut track = track_at(1, &[at(u64::MAX / 2, u64::MAX, 60)]);
+        track.rescale(u16::MAX).unwrap();
+        assert_eq!(track.notes, alloc::vec![at(u64::MAX, 1, 60)]);
+    }
+
+    #[test]
+    fn rescale_refuses_zero_ticks_per_beat() {
+        let notes = [at(10, 10, 60)];
+        let mut track = track_at(480, &notes);
+        assert!(track.rescale(0).is_err());
+        let mut zero = track_at(0, &notes);
+        assert!(zero.rescale(480).is_err());
+        assert_eq!(
+            (track.ticks_per_beat, track.notes.as_slice()),
+            (480, &notes[..])
+        );
+        assert_eq!(
+            (zero.ticks_per_beat, zero.notes.as_slice()),
+            (0, &notes[..])
+        );
     }
 }

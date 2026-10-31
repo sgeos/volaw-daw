@@ -35,6 +35,39 @@
 //! command natives. Each argument must be a finite number. A NaN or an
 //! infinity is rejected as a script error, because a non-finite value
 //! survives the engine's clamps and could persist in filter state.
+//!
+//! # Execution budget
+//!
+//! `ScriptRunner::tick` runs on the interface thread once per frame, so a
+//! script that runs long between two yields freezes the composer. Keleusma
+//! 0.2.2 rejects a loop function whose body can reach the next iteration
+//! without a yield, a loop without a bound and a recursive call. It still
+//! admits a bounded loop of any length whose estimated cost fits in a
+//! `u32`, such as `for i in 0..10000000`, which was measured to hold one
+//! tick for 34 seconds in a debug build. Its cost estimate is also not a
+//! safe limit to check against. A `fn main` or `yield main` reports no
+//! estimate, and a loop moved into a helper function was reported as 19
+//! cycles while it held each tick for 450 milliseconds.
+//!
+//! The runner therefore counts steps itself. It arms a VM breakpoint on
+//! every loop back edge, on the first op of every function and on every
+//! native call, and one `tick` may pass at most [`MAX_STEPS_PER_TICK`] of
+//! them. Loop back edges and the return to the top of a loop function are
+//! the only backward jumps in the bytecode, and the latter is capped
+//! separately, so between two steps the VM runs at most one function's
+//! straight-line code without a call of any kind. The count therefore
+//! bounds the work of a tick, and the number of commands it queues,
+//! whatever the cost estimate says. A script that exceeds the budget is stopped for good, with an
+//! error in `last_error`, because the VM cannot be rewound to the start of
+//! the interrupted iteration. Reloading the script starts it again.
+//!
+//! Known defect, not mitigated. For a loop whose estimated cost overflows,
+//! such as `for i in 0..1000000000`, `Vm::new` in Keleusma 0.2.2 panics in
+//! a build with overflow checks, at an unchecked addition in its WCET pass,
+//! so loading such a script aborts a debug build of the composer. A
+//! `no_std` crate cannot catch the panic. A release build does not check
+//! the overflow, so the wrapped estimate admits the script, and the step
+//! budget was observed to stop it within 3 milliseconds.
 
 extern crate alloc;
 use alloc::format;
@@ -46,7 +79,7 @@ use core::cell::RefCell;
 use audio::AudioEngine;
 use keleusma::Arena;
 use keleusma::ast::{PrimType, Program, StructDef, TypeDef, TypeExpr};
-use keleusma::bytecode::Value;
+use keleusma::bytecode::{Module, Op, Value};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
@@ -123,6 +156,43 @@ const TICK_STATE_FIELDS: [(&str, PrimType); 3] = [
     ("tempo", PrimType::Float),
     ("beat", PrimType::Float),
 ];
+
+/// The most steps, loop iterations, function calls and native calls, that
+/// one `ScriptRunner::tick` may run. See the module documentation.
+///
+/// A tick of an empty loop just under the budget was measured on the
+/// authoring host at 12 milliseconds in a debug build and 0.5 milliseconds
+/// in a release build, against a frame of about 16 milliseconds. That is
+/// far more than a script that sets parameters or walks a short pattern
+/// needs. A script that needs more would have to spread its work over
+/// several ticks.
+pub const MAX_STEPS_PER_TICK: u32 = 4096;
+
+/// The most `Reset` states one `tick` resumes through. A loop function
+/// reaches `Reset` at the end of each iteration, and its productivity check
+/// guarantees a yield in each, so a well-formed script stops well short.
+const MAX_RESETS_PER_TICK: u32 = 16;
+
+/// The positions where a breakpoint counts one step. These are the first
+/// op of every chunk, which each call enters, every loop back edge, and
+/// every native call. A native call runs host code and, for the `audio::`
+/// functions, queues a command, so a straight-line body of many native
+/// calls is counted as well, though it has no loop and no script call.
+fn step_positions(module: &Module) -> Vec<(usize, usize)> {
+    let mut positions = Vec::new();
+    for (chunk_idx, chunk) in module.chunks.iter().enumerate() {
+        positions.push((chunk_idx, 0));
+        for (op_idx, op) in chunk.ops.iter().enumerate() {
+            if matches!(
+                op,
+                Op::EndLoop(_) | Op::CallVerifiedNative(..) | Op::CallExternalNative(..)
+            ) {
+                positions.push((chunk_idx, op_idx));
+            }
+        }
+    }
+    positions
+}
 
 /// Build a contract violation error with a common prefix.
 fn contract_error(detail: &str) -> ScriptError {
@@ -479,6 +549,14 @@ fn register_audio_command_natives(vm: &mut Vm<'_, '_>, commands: &Rc<RefCell<Vec
     });
 }
 
+/// Why one `ScriptRunner::tick` ended without a yield or a finish.
+enum TickFailure {
+    /// The VM reported an error.
+    Vm(String),
+    /// The script exceeded [`MAX_STEPS_PER_TICK`].
+    OverBudget,
+}
+
 /// Error from script compilation or loading.
 #[derive(Debug, Clone)]
 pub struct ScriptError(pub String);
@@ -515,6 +593,9 @@ pub struct ScriptRunner {
     vm: ScriptVmCell,
     commands: Rc<RefCell<Vec<AudioCommand>>>,
     started: bool,
+    /// Set once the script exceeds [`MAX_STEPS_PER_TICK`]. A stopped
+    /// runner never runs the VM again.
+    stopped: bool,
     /// Last error from script execution, if any.
     pub last_error: Option<String>,
 }
@@ -543,9 +624,13 @@ impl ScriptRunner {
             .map_err(|e| ScriptError(format!("arena error: {:?}", e)))?;
 
         let commands: Rc<RefCell<Vec<AudioCommand>>> = Rc::new(RefCell::new(Vec::new()));
+        let steps = step_positions(&module);
         let vm = ScriptVmCell::try_new(arena, |arena| {
             let mut vm = Vm::new(module, arena)
                 .map_err(|e| ScriptError(format!("verify error: {:?}", e)))?;
+            for (chunk, op) in steps {
+                vm.set_breakpoint(chunk, op);
+            }
             // Register pure utility natives.
             keleusma::audio_natives::register_audio_natives(&mut vm);
             // Register command-producing natives.
@@ -557,6 +642,7 @@ impl ScriptRunner {
             vm,
             commands,
             started: false,
+            stopped: false,
             last_error: None,
         })
     }
@@ -569,7 +655,15 @@ impl ScriptRunner {
     ///
     /// A `Word` is a signed 64-bit integer, so a position above `i64::MAX`
     /// saturates rather than wrapping to a negative tick count.
+    ///
+    /// A tick runs at most [`MAX_STEPS_PER_TICK`] steps. A script that needs
+    /// more is stopped, keeps its error in `last_error`, and returns no
+    /// commands from then on, including any it produced in the tick that
+    /// stopped it, because those come from an iteration that did not finish.
     pub fn tick(&mut self, position_ticks: u64, tempo: f64, beat: f64) -> Vec<AudioCommand> {
+        if self.stopped {
+            return Vec::new();
+        }
         let ticks = i64::try_from(position_ticks).unwrap_or(i64::MAX);
         let [(ticks_name, _), (tempo_name, _), (beat_name, _)] = TICK_STATE_FIELDS;
         let state = Value::struct_value(
@@ -584,41 +678,62 @@ impl ScriptRunner {
         // Drive the VM until it yields, finishes, or errors. A loop
         // function emits VmState::Reset between iterations to clear its
         // arena. The host resumes with the same input on Reset so that
-        // the next iteration executes within the same host tick.
+        // the next iteration executes within the same host tick. Each
+        // breakpoint is one step, after which the VM continues from it.
         let first_call = !self.started;
         self.started = true;
         // The VM result is reduced to an owned outcome inside the closure
         // because yielded values may reference arena memory.
-        let outcome: Result<(), String> = self.vm.with_dependent_mut(|_, vm| {
+        let outcome: Result<(), TickFailure> = self.vm.with_dependent_mut(|_, vm| {
             let mut result = if first_call {
                 vm.call(core::slice::from_ref(&state))
             } else {
                 vm.resume(state.clone())
             };
-            // Cap the inner resume loop to bound execution per tick. A
-            // pathological script could otherwise spin on Reset forever.
-            let mut budget = 16usize;
-            while let Ok(VmState::Reset) = &result {
-                if budget == 0 {
-                    break;
+            let mut steps = 0u32;
+            let mut resets = 0u32;
+            // Each pass consumes one step or one reset, or ends the loop,
+            // so it ends within MAX_STEPS_PER_TICK + MAX_RESETS_PER_TICK
+            // passes.
+            loop {
+                match result {
+                    Ok(VmState::BreakpointHit { .. }) => {
+                        if steps == MAX_STEPS_PER_TICK {
+                            return Err(TickFailure::OverBudget);
+                        }
+                        steps += 1;
+                        result = vm.resume_from_breakpoint();
+                    }
+                    Ok(VmState::Reset) if resets < MAX_RESETS_PER_TICK => {
+                        resets += 1;
+                        result = vm.resume(state.clone());
+                    }
+                    Ok(VmState::Yielded(_)) | Ok(VmState::Finished(_)) | Ok(VmState::Reset) => {
+                        return Ok(());
+                    }
+                    Err(e) => return Err(TickFailure::Vm(format!("{:?}", e))),
                 }
-                budget -= 1;
-                result = vm.resume(state.clone());
-            }
-
-            match result {
-                Ok(VmState::Yielded(_)) | Ok(VmState::Finished(_)) | Ok(VmState::Reset) => Ok(()),
-                // The runner never registers breakpoints, so reaching one
-                // indicates a VM or host defect rather than a script error.
-                Ok(VmState::BreakpointHit { .. }) => {
-                    Err(String::from("unexpected breakpoint state from VM"))
-                }
-                Err(e) => Err(format!("{:?}", e)),
             }
         });
-        self.last_error = outcome.err();
+        match outcome {
+            Ok(()) => self.last_error = None,
+            Err(TickFailure::Vm(e)) => self.last_error = Some(e),
+            Err(TickFailure::OverBudget) => {
+                self.stopped = true;
+                self.last_error = Some(format!(
+                    "stopped, the script ran more than {MAX_STEPS_PER_TICK} loop iterations \
+                     and calls, native calls included, in one tick"
+                ));
+                self.commands.borrow_mut().clear();
+            }
+        }
 
         self.take_commands()
+    }
+
+    /// Whether the runner was stopped for exceeding [`MAX_STEPS_PER_TICK`].
+    pub fn is_stopped(&self) -> bool {
+        self.stopped
     }
 
     /// Drain and return all pending audio commands.
@@ -1069,5 +1184,184 @@ mod tests {
     fn compile_error_reported() {
         let result = ScriptRunner::from_source("this is not valid keleusma");
         assert!(result.is_err());
+    }
+
+    /// A loop function whose body runs `body` once per tick and then yields.
+    fn loop_script(uses: &str, body: &str) -> String {
+        format!(
+            "{uses}loop main(state: TickState) -> () {{\n  {body}\n  let state = yield ();\n  state\n}}\n"
+        )
+    }
+
+    /// `for i in 0..n` around a call that produces one command per pass.
+    fn volume_loop(n: u32) -> String {
+        loop_script(
+            "use audio::set_volume\n",
+            &format!("for i in 0..{n} {{ audio::set_volume(0.5, 0.5) }}"),
+        )
+    }
+
+    /// Functions `f0` to `f{depth}` where each calls the next twice, so a
+    /// call of `f0` makes 2^(depth + 1) - 1 calls without any loop.
+    fn call_tree(depth: u32) -> String {
+        let mut src = format!("fn f{depth}(x: Word) -> Word {{ x }}\n");
+        for d in (0..depth).rev() {
+            src += &format!(
+                "fn f{d}(x: Word) -> Word {{ f{n}(x) + f{n}(x) }}\n",
+                n = d + 1
+            );
+        }
+        src + &loop_script("", "f0(1);")
+    }
+
+    fn assert_stopped(runner: &ScriptRunner) {
+        assert!(runner.is_stopped());
+        let err = runner.last_error.as_deref().expect("an error is reported");
+        assert!(err.starts_with("stopped"), "{err}");
+    }
+
+    #[test]
+    fn a_loop_within_the_budget_runs_every_tick() {
+        // Each pass costs two steps, its back edge and its native call.
+        let n = MAX_STEPS_PER_TICK / 4;
+        let mut runner = ScriptRunner::from_source(&volume_loop(n)).expect("load");
+        for tick in 0..3 {
+            let cmds = runner.tick(tick, 120.0, 0.0);
+            assert_eq!(cmds.len(), n as usize, "tick {tick}");
+            assert_eq!(runner.last_error, None);
+        }
+        assert!(!runner.is_stopped());
+    }
+
+    /// Keleusma admits a bounded loop of any length whose estimated cost
+    /// fits in a `u32`. Before the step budget, this loop held one tick for
+    /// about 3.4 seconds in a debug build, and one of 10,000,000 for 34.
+    #[test]
+    fn a_long_bounded_loop_is_stopped_instead_of_stalling_the_tick() {
+        let mut runner = ScriptRunner::from_source(&volume_loop(1_000_000)).expect("load");
+        let cmds = runner.tick(0, 120.0, 0.0);
+        // The commands of the unfinished iteration are discarded.
+        assert!(cmds.is_empty());
+        assert_stopped(&runner);
+        // A stopped script does not run again, and keeps its error.
+        assert!(runner.tick(1, 120.0, 0.0).is_empty());
+        assert_stopped(&runner);
+    }
+
+    #[test]
+    fn the_budget_is_counted_per_tick() {
+        // Each tick alone fits, though all ticks together exceed the budget.
+        // Each pass costs two steps, its back edge and its native call.
+        let n = MAX_STEPS_PER_TICK / 4;
+        let mut runner = ScriptRunner::from_source(&volume_loop(n)).expect("load");
+        for tick in 0..4 {
+            assert_eq!(runner.tick(tick, 120.0, 0.0).len(), n as usize);
+        }
+        assert!(!runner.is_stopped());
+        let mut over = ScriptRunner::from_source(&volume_loop(2 * MAX_STEPS_PER_TICK)).unwrap();
+        over.tick(0, 120.0, 0.0);
+        assert_stopped(&over);
+    }
+
+    /// Keleusma reported this script's cost as 19 cycles, because its
+    /// estimate leaves out the loop inside the helper.
+    #[test]
+    fn a_loop_inside_a_helper_function_is_counted() {
+        let src = format!(
+            "fn spin(x: Word) -> Word {{\n  for i in 0..{} {{ () }}\n  x\n}}\n{}",
+            2 * MAX_STEPS_PER_TICK,
+            loop_script("", "spin(1);")
+        );
+        let mut runner = ScriptRunner::from_source(&src).expect("load");
+        runner.tick(0, 120.0, 0.0);
+        assert_stopped(&runner);
+    }
+
+    /// Keleusma reports no cost at all for a `fn main`.
+    #[test]
+    fn a_long_loop_in_fn_main_is_stopped() {
+        let src = format!(
+            "fn main(state: TickState) -> () {{\n  for i in 0..{} {{ () }}\n  ()\n}}\n",
+            2 * MAX_STEPS_PER_TICK
+        );
+        let mut runner = ScriptRunner::from_source(&src).expect("load");
+        runner.tick(0, 120.0, 0.0);
+        assert_stopped(&runner);
+    }
+
+    /// Calls are counted as well as loop passes, because a tree of calls
+    /// grows exponentially with no loop at all.
+    #[test]
+    fn calls_are_counted_as_steps() {
+        let max_depth = MAX_STEPS_PER_TICK.ilog2();
+        let mut within = ScriptRunner::from_source(&call_tree(max_depth - 2)).expect("load");
+        within.tick(0, 120.0, 0.0);
+        assert_eq!(within.last_error, None);
+        assert!(!within.is_stopped());
+
+        let mut over = ScriptRunner::from_source(&call_tree(max_depth)).expect("load");
+        over.tick(0, 120.0, 0.0);
+        assert_stopped(&over);
+    }
+
+    /// A loop body with no yield, one that can skip its yield, an unbounded
+    /// loop and recursion are all rejected at load, so none of them can
+    /// reach `tick`. Each is checked for its own reason, so that a script
+    /// rejected for an unrelated fault, such as a typing error, would fail
+    /// the test. The unbounded loop is rejected because its cost estimate
+    /// overflows, not by a check aimed at unbounded loops.
+    #[test]
+    fn scripts_that_never_yield_are_rejected_at_load() {
+        let cases = [
+            (
+                "loop main(state: TickState) -> () {\n  ()\n}\n",
+                "Stream block must contain at least one Yield",
+            ),
+            (
+                "struct TickState { ticks: Word, tempo: Float, beat: Float }\n\
+                 loop main(state: TickState) -> () {\n  \
+                 if state.ticks > 100 { let s = yield (); () } else { () }\n}\n",
+                "some path from Stream to Reset does not pass through any Yield",
+            ),
+            (
+                "loop main(state: TickState) -> () {\n  loop { () };\n  let state = yield ();\n  state\n}\n",
+                "WCET (cycles) overflowed",
+            ),
+            (
+                "fn f(x: Word) -> Word { f(x) }\n\
+                 loop main(state: TickState) -> () {\n  f(1);\n  let state = yield ();\n  state\n}\n",
+                "recursive call detected",
+            ),
+        ];
+        for (src, reason) in cases {
+            let err = ScriptRunner::from_source(src)
+                .err()
+                .unwrap_or_else(|| panic!("accepted:\n{src}"));
+            assert!(err.0.contains(reason), "{} for\n{src}", err.0);
+        }
+    }
+
+    /// A body of `n` native calls in a row, with no loop and no script call.
+    fn straight_line_natives(n: u32) -> String {
+        let body = "audio::set_volume(0.5, 0.5);\n  ".repeat(n as usize);
+        loop_script("use audio::set_volume\n", &body)
+    }
+
+    /// Native calls are counted as steps, so a long straight-line body of
+    /// them cannot escape the budget the way it did when only loops and
+    /// script calls were counted. The control just under the budget runs,
+    /// counting the entry of `main` as one step.
+    #[test]
+    fn native_calls_are_counted_as_steps() {
+        let fits = MAX_STEPS_PER_TICK - 1;
+        let mut within = ScriptRunner::from_source(&straight_line_natives(fits)).expect("load");
+        assert_eq!(within.tick(0, 120.0, 0.0).len(), fits as usize);
+        assert_eq!(within.last_error, None);
+        assert!(!within.is_stopped());
+
+        let mut over = ScriptRunner::from_source(&straight_line_natives(MAX_STEPS_PER_TICK + 1))
+            .expect("load");
+        assert!(over.tick(0, 120.0, 0.0).is_empty());
+        assert_stopped(&over);
     }
 }

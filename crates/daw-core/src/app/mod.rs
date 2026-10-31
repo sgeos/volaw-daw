@@ -21,13 +21,14 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::num::NonZeroU16;
 
 use audio::position::compute_orbital_position;
 use audio::{AudioEngine, CommandSink, EngineCommand};
 
 use crate::engine_setup::{self, audio_command_to_engine_command, join_path, load_pcm_samples};
 use crate::input::DawInput;
-use crate::midi::{MidiNote, MidiTrack};
+use crate::midi::{MidiNote, MidiTrack, rescale_tick};
 use crate::patch::{
     EffectChainConfig, PEDAL_TYPES, PatchConfig, PedalConfig, default_pedal_config,
     pedal_description,
@@ -88,9 +89,6 @@ const LOWEST_NOTE: u8 = 0; // C-2
 
 /// Pixels per beat at zoom level 1.0.
 const BASE_PIXELS_PER_BEAT: f32 = 80.0;
-
-/// Default note duration in ticks (one beat).
-const DEFAULT_NOTE_DURATION: u64 = 480;
 
 /// Default note velocity.
 const DEFAULT_VELOCITY: u8 = 100;
@@ -335,7 +333,8 @@ pub struct DawApp<P: Platform, S: CommandSink> {
     selected_notes: Vec<usize>,
     /// Clipboard for note copy/paste. Tick values are relative to the earliest note.
     clipboard: Vec<MidiNote>,
-    /// Snap quantization in ticks. Notes snap to this grid. Default is one beat (480).
+    /// Snap quantization in ticks, at the project's resolution. Notes snap
+    /// to this grid, and a new note is this long. Default is one beat.
     snap_ticks: u64,
     /// Project root directory for save/load.
     project_root: String,
@@ -413,11 +412,13 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
     /// A new, empty project at the default root.
     pub fn new(platform: P, sink: S, sample_rate: u32) -> Self {
         let last_script_check = platform.elapsed_ms();
+        let project = DawProject::default();
+        let ticks_per_beat = project.ticks_per_beat;
         Self {
             platform,
             sample_rate,
-            project: DawProject::default(),
-            transport: Transport::new(sample_rate, 480),
+            project,
+            transport: Transport::new(sample_rate, ticks_per_beat),
             sink,
             selected_channel: 0,
             solo_channel: None,
@@ -432,7 +433,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
             current_page: DawPage::Studio,
             selected_notes: Vec::new(),
             clipboard: Vec::new(),
-            snap_ticks: DEFAULT_NOTE_DURATION,
+            snap_ticks: u64::from(ticks_per_beat),
             project_root: String::from(PROJECT_ROOT),
             status_message: None,
             active_notes: core::array::from_fn(|_| Vec::new()),
@@ -637,23 +638,26 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
     /// Export all tracks as a Standard MIDI File (.mid).
     fn export_midi(&mut self) {
         let filename = self.project.name.replace(' ', "_").to_lowercase();
-        let midi_data = crate::smf::build_smf(
-            &self.tracks,
-            self.project.ticks_per_beat,
-            self.project.tempo,
-            self.project.beats_per_bar,
-            self.project.beat_denominator,
-        );
         let export_dir = join_path(&self.project_root, "exports");
         let path = join_path(&export_dir, &format!("{filename}.mid"));
-        let written = persistence::validate_file_name(&filename)
-            .and_then(|()| self.platform.write_file(&path, &midi_data));
+        let written = persistence::validate_file_name(&filename).and_then(|()| {
+            let midi_data = crate::smf::build_smf(
+                &self.tracks,
+                self.project.ticks_per_beat,
+                self.project.tempo,
+                self.project.beats_per_bar,
+                self.project.beat_denominator,
+            )
+            .map_err(|e| e.to_string())?;
+            self.platform.write_file(&path, &midi_data)?;
+            Ok(midi_data.len())
+        });
         match written {
-            Ok(()) => {
+            Ok(bytes) => {
                 self.status_message = Some(format!("Exported: {path}"));
                 self.platform.log(
                     LogLevel::Info,
-                    &format!("MIDI exported to {path} ({} bytes)", midi_data.len()),
+                    &format!("MIDI exported to {path} ({bytes} bytes)"),
                 );
             }
             Err(e) => {
@@ -1154,21 +1158,83 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
         Ok(())
     }
 
-    /// Import a Standard MIDI File into consecutive channels from
-    /// `first_channel`, skipping tracks without notes. Returns the number of
-    /// channels filled. Tracks beyond the last channel are dropped.
+    /// Import a Standard MIDI File, replacing the notes of each channel it
+    /// fills. Returns the number of channels filled.
+    ///
+    /// A Type 0 file, such as the composer's own export, tells its parts
+    /// apart only by MIDI channel, so MIDI channel `c` goes to channel
+    /// `first_channel + c`. An export imported at channel 0 therefore comes
+    /// back on the channels it left, gaps included. A Type 1 file keeps its
+    /// parts in separate track chunks, so its tracks fill consecutive
+    /// channels from `first_channel` in file order. Either way, a track that
+    /// would land past the last channel is dropped with a warning.
+    ///
+    /// Resolution. If a channel that the import leaves alone has notes, the
+    /// project keeps its ticks per beat and the imported notes are converted
+    /// to it, rounded as [`MidiTrack::rescale`] describes, because those notes
+    /// are counted in it. Otherwise no note of the old resolution remains, and
+    /// the project adopts the file's ticks per beat, so the notes arrive
+    /// exactly as written.
     pub fn import_midi(&mut self, data: &[u8], first_channel: usize) -> Result<usize, String> {
         let smf = crate::smf::parse_smf(data).map_err(|e| format!("MIDI import failed: {e}"))?;
         self.platform.log(
             LogLevel::Info,
             &format!("MIDI import: {}", crate::smf::describe_import(&smf)),
         );
-        let mut ch = first_channel;
-        for smf_track in smf.tracks.iter().filter(|t| !t.notes.is_empty()) {
-            if ch >= NUM_CHANNELS {
-                break;
+        // Each track's destination, or None past the last channel, decided
+        // before anything changes so that the resolution can be chosen first.
+        let mut next = first_channel;
+        let dests: Vec<Option<usize>> = smf
+            .tracks
+            .iter()
+            .map(|smf_track| {
+                let dest = if smf.format == 0 {
+                    first_channel.checked_add(usize::from(smf_track.channel))
+                } else {
+                    let dest = next;
+                    next = next.saturating_add(1);
+                    Some(dest)
+                };
+                dest.filter(|&d| d < NUM_CHANNELS)
+            })
+            .collect();
+        let replaced = |ch: usize| dests.contains(&Some(ch));
+        let keeps_notes =
+            (0..NUM_CHANNELS).any(|ch| !replaced(ch) && !self.tracks[ch].notes.is_empty());
+        let ticks_per_beat = if keeps_notes {
+            self.project.ticks_per_beat
+        } else {
+            smf.ticks_per_beat
+        };
+
+        // Converted in full before any channel changes, so that a failure,
+        // possible only for a project at 0 ticks per beat, changes nothing.
+        let mut placed = Vec::with_capacity(smf.tracks.len());
+        let mut dropped_notes = 0usize;
+        for (smf_track, dest) in smf.tracks.iter().zip(dests.iter().copied()) {
+            let Some(d) = dest else {
+                dropped_notes += smf_track.track.notes.len();
+                continue;
+            };
+            let mut track = smf_track.track.clone();
+            track
+                .rescale(ticks_per_beat)
+                .map_err(|e| format!("MIDI import failed: {e}"))?;
+            placed.push((d, track));
+        }
+        let mut filled = [false; NUM_CHANNELS];
+        for (d, track) in placed {
+            if filled[d] {
+                // Only a Type 0 file with more than one chunk, which the
+                // format forbids but some writers emit, can repeat a channel.
+                self.tracks[d].notes.extend_from_slice(&track.notes);
+                self.tracks[d].sort();
+            } else {
+                self.tracks[d] = track;
+                filled[d] = true;
             }
-            self.tracks[ch] = smf_track.clone();
+        }
+        for (ch, _) in filled.iter().enumerate().filter(|(_, f)| **f) {
             self.platform.log(
                 LogLevel::Info,
                 &format!(
@@ -1177,19 +1243,33 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
                     self.tracks[ch].notes.len()
                 ),
             );
-            ch += 1;
         }
-        if smf.ticks_per_beat != self.project.ticks_per_beat {
+        if dropped_notes > 0 {
+            self.platform.log(
+                LogLevel::Warn,
+                &format!("MIDI import: dropped {dropped_notes} notes past channel {NUM_CHANNELS}"),
+            );
+        }
+        if smf.ticks_per_beat != ticks_per_beat {
             self.platform.log(
                 LogLevel::Info,
                 &format!(
-                    "Adjusting ticks per beat: {} -> {}",
-                    self.project.ticks_per_beat, smf.ticks_per_beat
+                    "MIDI import: converted notes from {} to the project's {ticks_per_beat} ticks per beat",
+                    smf.ticks_per_beat
                 ),
             );
-            self.project.ticks_per_beat = smf.ticks_per_beat;
+        } else if ticks_per_beat != self.project.ticks_per_beat {
+            self.platform.log(
+                LogLevel::Info,
+                &format!(
+                    "Adjusting ticks per beat: {} -> {ticks_per_beat}",
+                    self.project.ticks_per_beat
+                ),
+            );
+            self.project.ticks_per_beat = ticks_per_beat;
+            self.follow_project_resolution();
         }
-        Ok(ch.saturating_sub(first_channel))
+        Ok(filled.iter().filter(|f| **f).count())
     }
 
     /// Assign a script file to a channel. The script loads on the next
@@ -1224,9 +1304,44 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
     }
 
     fn sync_transport_to_project(&mut self) {
+        // First, so that the grid converts under the time signature it was
+        // chosen in.
+        self.follow_project_resolution();
         self.transport.tempo = self.project.tempo;
         self.transport.beats_per_bar = self.project.beats_per_bar;
         self.transport.beat_denominator = self.project.beat_denominator;
+    }
+
+    /// Bring the transport, and the tick counts kept beside it, to the
+    /// project's ticks per beat, wherever that changes. The transport then
+    /// plays the notes at the project's tempo, and the playhead, the loop
+    /// and the snap grid stay on the same beats, rounded as
+    /// [`Transport::set_ticks_per_beat`] describes. A snap value that is one
+    /// of the grid's subdivisions becomes the same subdivision at the new
+    /// resolution, and any other is converted like a tick. A project at 0
+    /// ticks per beat, which [`persistence::load_project`] refuses and an
+    /// import cannot produce, leaves everything as it was.
+    fn follow_project_resolution(&mut self) {
+        let (Some(from), Some(to)) = (
+            NonZeroU16::new(self.transport.ticks_per_beat),
+            NonZeroU16::new(self.project.ticks_per_beat),
+        ) else {
+            return;
+        };
+        if from == to {
+            return;
+        }
+        let old_grid = grid_subdivisions(u64::from(from.get()), self.transport.ticks_per_bar());
+        let grid_index = old_grid.iter().position(|&s| s == self.snap_ticks);
+        if self.transport.set_ticks_per_beat(to.get()).is_err() {
+            return;
+        }
+        self.prev_ticks = rescale_tick(self.prev_ticks, from, to);
+        let new_grid = grid_subdivisions(u64::from(to.get()), self.transport.ticks_per_bar());
+        self.snap_ticks = match grid_index {
+            Some(i) => new_grid[i],
+            None => rescale_tick(self.snap_ticks, from, to).max(1),
+        };
     }
 }
 

@@ -205,6 +205,419 @@ fn configure_engine_applies_mute_and_volume() {
     assert!(engine.channels[0].enabled);
 }
 
+/// Standard MIDI File export and import, kept in one module so that it
+/// merges apart from the tests of other lines of work.
+mod midi_round_trip {
+    use super::*;
+
+    /// A project exported to a Standard MIDI File and imported into a fresh
+    /// project gives back every note on the channel it came from. The project
+    /// covers what a composer can make. It has a chord, a pitch repeated with no
+    /// gap, the extreme pitches and velocities, a start that needs a three-byte
+    /// delta time, an empty channel between full ones, the last channel, and a
+    /// resolution other than the default.
+    #[test]
+    fn export_then_import_gives_back_the_same_notes() {
+        fn note(tick: u64, duration: u64, pitch: u8, velocity: u8) -> MidiNote {
+            MidiNote {
+                tick,
+                duration,
+                pitch,
+                velocity,
+            }
+        }
+
+        let mut source = app();
+        source.project.name = String::from("round");
+        source.project.ticks_per_beat = 960;
+        source.tracks[0].notes = alloc::vec![
+            note(0, 960, 60, 1),
+            note(0, 960, 64, 64),
+            note(0, 960, 67, 127),
+            note(960, 480, 60, 100),
+            note(1440, 480, 60, 90),
+        ];
+        source.tracks[2].notes = alloc::vec![note(0, 1, 0, 100), note(2_000_000, 1, 127, 100)];
+        source.tracks[NUM_CHANNELS - 1].notes = alloc::vec![note(480, 7, 72, 50)];
+        for track in &mut source.tracks {
+            track.ticks_per_beat = 960;
+        }
+        source.export_midi();
+        let data = source
+            .platform()
+            .read_file("proj/exports/round.mid")
+            .expect("the export was written");
+
+        let mut target = app();
+        target.import_midi(&data, 0).expect("import");
+        assert_eq!(target.project.ticks_per_beat, source.project.ticks_per_beat);
+        for ch in 0..NUM_CHANNELS {
+            assert_eq!(
+                target.tracks[ch].notes, source.tracks[ch].notes,
+                "channel {ch}"
+            );
+        }
+    }
+
+    fn one_note(pitch: u8) -> MidiNote {
+        MidiNote {
+            tick: 0,
+            duration: 96,
+            pitch,
+            velocity: 90,
+        }
+    }
+
+    /// A Type 0 file keeps the spacing of its MIDI channels from the first
+    /// channel, and a channel pushed past the last one is dropped rather than
+    /// wrapped or merged.
+    #[test]
+    fn import_type0_offsets_by_midi_channel_and_drops_overflow() {
+        let mut source = app();
+        source.project.name = String::from("shift");
+        source.tracks[0].notes.push(one_note(60));
+        source.tracks[2].notes.push(one_note(62));
+        source.export_midi();
+        let data = source
+            .platform()
+            .read_file("proj/exports/shift.mid")
+            .unwrap();
+
+        let first = NUM_CHANNELS - 2;
+        let mut target = app();
+        target.tracks[first + 1].notes.push(one_note(1));
+        let filled = target.import_midi(&data, first).expect("import");
+        assert_eq!(filled, 1);
+        assert_eq!(target.tracks[first].notes, source.tracks[0].notes);
+        // The channel between keeps what it had, because the file had nothing
+        // for it, and MIDI channel 2 would land past the last channel.
+        assert_eq!(target.tracks[first + 1].notes, alloc::vec![one_note(1)]);
+        for ch in 0..first {
+            assert!(target.tracks[ch].notes.is_empty(), "channel {ch}");
+        }
+    }
+
+    /// A Type 1 file fills consecutive channels in chunk order, whatever MIDI
+    /// channel each chunk uses, and its tempo chunk takes no channel.
+    #[test]
+    fn import_type1_packs_tracks_in_file_order() {
+        fn chunk(status: u8, pitch: u8) -> Vec<u8> {
+            alloc::vec![
+                0x00,
+                status,
+                pitch,
+                90,
+                0x60,
+                status & 0xEF,
+                pitch,
+                0,
+                0x00,
+                0xFF,
+                0x2F,
+                0x00
+            ]
+        }
+        let tempo = alloc::vec![0x00, 0xFF, 0x2F, 0x00];
+        let chunks = [tempo, chunk(0x95, 70), chunk(0x90, 50)];
+        let mut data = Vec::new();
+        data.extend_from_slice(b"MThd");
+        data.extend_from_slice(&6u32.to_be_bytes());
+        data.extend_from_slice(&1u16.to_be_bytes());
+        data.extend_from_slice(&(chunks.len() as u16).to_be_bytes());
+        data.extend_from_slice(&480u16.to_be_bytes());
+        for c in &chunks {
+            data.extend_from_slice(b"MTrk");
+            data.extend_from_slice(&(c.len() as u32).to_be_bytes());
+            data.extend_from_slice(c);
+        }
+
+        let mut target = app();
+        let filled = target.import_midi(&data, 1).expect("import");
+        assert_eq!(filled, 2);
+        assert_eq!(target.tracks[1].notes, alloc::vec![one_note(70)]);
+        assert_eq!(target.tracks[2].notes, alloc::vec![one_note(50)]);
+    }
+
+    #[test]
+    fn export_midi_refuses_a_note_it_cannot_write() {
+        let mut state = app();
+        state.project.name = String::from("bad");
+        let mut silent = one_note(60);
+        silent.velocity = 0;
+        state.tracks[3].notes.push(silent);
+        state.export_midi();
+        assert_eq!(state.platform().file_count(), 0);
+        let message = state.status_message().unwrap();
+        assert_eq!(
+            message,
+            "Export failed: channel 4 note at tick 0: velocity 0 is outside 1 to 127"
+        );
+    }
+
+    /// The longest gap a file can hold exports, and one tick more is refused
+    /// with the reason in the status bar and no file written.
+    #[test]
+    fn export_midi_bounds_the_gap_between_events() {
+        let longest = u64::from(crate::smf::MAX_VAR_LEN);
+        let mut state = app();
+        state.project.name = String::from("gap");
+        let mut late = one_note(60);
+        late.tick = longest;
+        state.tracks[0].notes.push(late);
+        state.export_midi();
+        assert!(state.platform().read_file("proj/exports/gap.mid").is_ok());
+
+        let mut state = app();
+        state.project.name = String::from("gap");
+        late.tick = longest + 1;
+        state.tracks[0].notes.push(late);
+        state.export_midi();
+        assert_eq!(state.platform().file_count(), 0);
+        assert_eq!(
+            state.status_message().unwrap(),
+            alloc::format!(
+                "Export failed: the event at tick {} is more than {longest} ticks after the one before",
+                longest + 1
+            )
+        );
+    }
+
+    /// A Type 0 file at `ticks_per_beat` with these notes on MIDI channel 1.
+    fn file_at(ticks_per_beat: u16, notes: &[MidiNote]) -> Vec<u8> {
+        let track = MidiTrack {
+            notes: notes.to_vec(),
+            ticks_per_beat,
+        };
+        crate::smf::build_smf(&[track], ticks_per_beat, 120.0, 4, 4).expect("build")
+    }
+
+    fn timed(tick: u64, duration: u64) -> MidiNote {
+        MidiNote {
+            tick,
+            duration,
+            ..one_note(60)
+        }
+    }
+
+    /// With no note left at the old resolution, the project adopts the
+    /// file's, and the notes arrive exactly. A channel the import replaces
+    /// does not count as keeping notes.
+    #[test]
+    fn import_into_an_empty_project_adopts_the_file_resolution() {
+        let notes = [timed(0, 1), timed(7, 3), timed(95, 97)];
+        let data = file_at(96, &notes);
+        for replaced_has_notes in [false, true] {
+            let mut target = app();
+            if replaced_has_notes {
+                target.tracks[0].notes.push(one_note(70));
+            }
+            target.import_midi(&data, 0).expect("import");
+            assert_eq!(target.project.ticks_per_beat, 96);
+            assert_eq!(target.tracks[0].notes, notes);
+            assert_eq!(target.tracks[0].ticks_per_beat, 96);
+        }
+    }
+
+    /// With notes kept on another channel, the project keeps its resolution
+    /// and the imported notes are converted to it. 96 to 480 is exact, and
+    /// 960 to 480 rounds each start and end half up.
+    #[test]
+    fn import_into_a_project_with_notes_converts_to_its_resolution() {
+        let kept = one_note(40);
+        let cases = [
+            (96, [timed(0, 1), timed(7, 3)], [timed(0, 5), timed(35, 15)]),
+            (960, [timed(1, 2), timed(3, 1)], [timed(1, 1), timed(2, 1)]),
+        ];
+        for (file_tpb, notes, expected) in cases {
+            let mut target = app();
+            target.tracks[5].notes.push(kept);
+            target
+                .import_midi(&file_at(file_tpb, &notes), 0)
+                .expect("import");
+            assert_eq!(target.project.ticks_per_beat, 480, "file at {file_tpb}");
+            assert_eq!(target.tracks[0].notes, expected, "file at {file_tpb}");
+            assert_eq!(target.tracks[0].ticks_per_beat, 480);
+            assert_eq!(target.tracks[5].notes, alloc::vec![kept]);
+            // The project now exports, since every channel agrees.
+            target.project.name = String::from("mixed");
+            target.export_midi();
+            assert!(
+                target
+                    .platform()
+                    .read_file("proj/exports/mixed.mid")
+                    .is_ok()
+            );
+        }
+    }
+}
+
+/// The transport, the loop and the snap grid follow the project's ticks per
+/// beat after a load and after an import. Every check is made at 96 ticks per
+/// beat, where a transport left at 480 runs five times too fast and lays a
+/// bar out five times too long.
+mod resolution {
+    use super::*;
+
+    const TPB: u16 = 96;
+
+    /// A beat, the second one, at the project's resolution.
+    fn on_beat_two() -> MidiNote {
+        MidiNote {
+            tick: u64::from(TPB),
+            duration: u64::from(TPB),
+            pitch: 60,
+            velocity: 100,
+        }
+    }
+
+    /// Save a project at `TPB` with one note on beat two, and load it into a
+    /// fresh app whose loop and snap were set at the default resolution.
+    fn loaded(snap_ticks: u64) -> DawApp<MemoryPlatform, NullSink> {
+        let mut source = app();
+        source.project.name = String::from("coarse");
+        source.project.ticks_per_beat = TPB;
+        source.tracks[0].ticks_per_beat = TPB;
+        source.tracks[0].notes.push(on_beat_two());
+        source.save();
+
+        let mut target = app();
+        for dir in ["proj/saves", "proj/patches", "proj/effects", "proj/midi"] {
+            for path in source.platform().list_files(dir, "toml").unwrap() {
+                let bytes = source.platform().read_file(&path).unwrap();
+                target.platform().write_file(&path, &bytes).unwrap();
+            }
+        }
+        target.transport.loop_start = 1920;
+        target.transport.loop_end = 1920 * 2;
+        target.snap_ticks = snap_ticks;
+        target.load_project("coarse").expect("load");
+        target
+    }
+
+    /// Import a file at `TPB` with one note on beat two into a fresh app.
+    fn imported() -> DawApp<MemoryPlatform, NullSink> {
+        let track = MidiTrack {
+            notes: alloc::vec![on_beat_two()],
+            ticks_per_beat: TPB,
+        };
+        let data = crate::smf::build_smf(&[track], TPB, 120.0, 4, 4).expect("build");
+        let mut target = app();
+        target.import_midi(&data, 0).expect("import");
+        target
+    }
+
+    /// At 120 beats per minute a beat lasts 30 frames of 1/60 s. The note on
+    /// beat two must not sound before frame 31, the first past its start,
+    /// and must sound then. Looping the track wraps after one bar of 4
+    /// beats, 120 frames, which end exactly on the loop end.
+    fn assert_plays_in_time(mut state: DawApp<MemoryPlatform, NullSink>, case: &str) {
+        assert_eq!(state.transport.ticks_per_beat, TPB, "{case}");
+        assert_eq!(state.project.tempo, 120.0, "{case}");
+        state.transport.play();
+        for _ in 0..30 {
+            state.advance_playback();
+        }
+        assert_eq!(state.transport.position_ticks, u64::from(TPB), "{case}");
+        assert!(state.active_notes[0].is_empty(), "{case}: early");
+        state.advance_playback();
+        assert_eq!(state.active_notes[0], alloc::vec![0], "{case}: late");
+
+        state.transport.reset();
+        state.prev_ticks = 0;
+        state.toggle_loop();
+        let bar = 4 * u64::from(TPB);
+        assert_eq!(
+            (state.transport.loop_start, state.transport.loop_end),
+            (0, bar),
+            "{case}"
+        );
+        state.transport.play();
+        for _ in 0..119 {
+            state.advance_playback();
+        }
+        // 119 frames of 3.2 ticks are 380.8 ticks.
+        assert_eq!(
+            state.transport.position_ticks,
+            bar - 4,
+            "{case}: before the wrap"
+        );
+        state.advance_playback();
+        assert_eq!(state.transport.position_ticks, 0, "{case}: the loop wraps");
+    }
+
+    #[test]
+    fn a_loaded_project_plays_at_its_own_resolution() {
+        assert_plays_in_time(
+            loaded(u64::from(DawProject::default().ticks_per_beat)),
+            "load",
+        );
+    }
+
+    #[test]
+    fn an_imported_resolution_plays_in_time() {
+        let state = imported();
+        assert_eq!(state.project.ticks_per_beat, TPB);
+        assert_plays_in_time(state, "import");
+    }
+
+    /// The loop set before the load keeps its bars, and the default snap and
+    /// note length become one beat at the new resolution.
+    #[test]
+    fn a_load_converts_the_loop_and_the_snap() {
+        let state = loaded(480);
+        assert_eq!(
+            (state.transport.loop_start, state.transport.loop_end),
+            (384, 768)
+        );
+        assert_eq!(state.snap_ticks, u64::from(TPB));
+        let imported = imported();
+        assert_eq!(imported.snap_ticks, u64::from(TPB));
+    }
+
+    /// A grid subdivision stays that subdivision. At 100 ticks per beat a
+    /// dotted 1/32 note is 18 ticks, where converting its 90 ticks at 480
+    /// would round to 19, a value the grid key does not offer. A snap that is
+    /// no subdivision converts like a tick.
+    #[test]
+    fn a_new_resolution_keeps_the_grid_subdivision() {
+        for (snap, expected) in [(90, 18), (7, 1), (1000, 208)] {
+            let mut state = app();
+            state.snap_ticks = snap;
+            state.project.ticks_per_beat = 100;
+            state.follow_project_resolution();
+            assert_eq!(state.snap_ticks, expected, "snap of {snap}");
+        }
+        let mut state = app();
+        state.snap_ticks = 90;
+        state.project.ticks_per_beat = 100;
+        state.follow_project_resolution();
+        assert_eq!(
+            grid_label(state.snap_ticks, 100, state.transport.ticks_per_bar()),
+            "1/32D"
+        );
+    }
+
+    /// At a resolution so coarse that subdivisions coincide, the grid key
+    /// still visits every distinct value and never snaps to 0 ticks.
+    #[test]
+    fn the_grid_cycles_at_a_coarse_resolution() {
+        let mut state = app();
+        state.project.ticks_per_beat = 4;
+        state.follow_project_resolution();
+        let mut seen = alloc::collections::BTreeSet::new();
+        for _ in 0..18 {
+            state.cycle_grid();
+            assert!(state.snap_ticks >= 1);
+            seen.insert(state.snap_ticks);
+        }
+        let distinct: alloc::collections::BTreeSet<u64> =
+            grid_subdivisions(4, state.transport.ticks_per_bar())
+                .into_iter()
+                .collect();
+        assert_eq!(seen, distinct);
+    }
+}
+
 /// One thing drawn, as a box. Text is recorded at its origin with no size,
 /// because its true size depends on the platform's font.
 #[derive(Debug, Clone, PartialEq)]

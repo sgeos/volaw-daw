@@ -24,7 +24,10 @@ outside world only through traits it defines. `Platform` supplies files, a modif
 stamp, logging and a monotonic clock. `Renderer` draws. `CommandSink` carries engine
 commands to wherever the engine runs. `AudioSource` is what an audio device pulls
 samples from, and `EngineRunner` implements it by draining queued commands and then
-rendering.
+rendering. Nothing on the audio thread allocates or frees. A `Bulk` edit is built on
+the control thread, applied on the audio thread, and returned through
+`command_queue` so that `CommandSender` frees it on the control thread with whatever it
+swapped out of the engine.
 
 `daw-core` provides `MemoryPlatform`, an in-memory `Platform` with a manual clock. The
 application tests use it, so the save, load, export, script reload and preview timing
@@ -44,6 +47,14 @@ and reclaims it after destroying the stream. Earlier, the binary leaked and recl
 that box itself. `SdlAudioOutput` initializes the SDL audio subsystem itself, which SDL
 reference counts, so a host may start audio before or after its own `SDL_Init`.
 
+Audio should stop before the host calls `SDL_Quit`, which destroys every audio stream.
+`SdlAudioOutput` checks that order at run time, because `SDL_Quit` is a free function
+that no type in the workspace can constrain without a change to
+`AudioSystem::start`. It registers a stream property whose cleanup SDL runs when it
+destroys the stream, and a later `stop` or drop then skips the second destruction and
+the release of the audio subsystem, and returns the source intact.
+`tests/shutdown_order.rs` in `audio-sdl` exercises both orders on SDL's dummy driver.
+
 ## Entry
 
 `volaw-audio` is the one crate a host needs for sound. It re-exports `audio`, and
@@ -59,20 +70,18 @@ binary configures the engine from the loaded project before starting it, and kee
   repository's pull request 5, and will repin to the merge commit. This line has not
   inspected volaw's tree. Until the repin, that commit must stay reachable, so the
   branch is not rebased or force-pushed.
-- **`Bulk` commands allocate on the audio thread.** An `EngineCommand::Bulk` closure
-  runs on the audio thread and its box is freed there, as `audio::runtime` records. The
-  DAW sends `Bulk` only on cold paths. Removing it is technical debt.
-- **Audio must stop before `SDL_Quit`.** `SDL_Quit` destroys every audio stream, so an
-  `SdlAudioOutput` or `AudioSystem` dropped afterwards destroys its stream twice. The
-  requirement is documented on both types but cannot be checked at run time.
 - **Playback of composed songs is not shared.** `volaw-audio` exposes the engine and its
   command queue. Scheduling a saved project's notes lives in `DawApp`, so the game
   cannot yet play a DAW project without reimplementing it.
-- **`DawApp` is split by concern, but two modules are still large.** On 2026-10-30 the
-  former `app.rs` became the `app` module, with `mod.rs` for state and playback,
-  `handlers.rs` for input and editing, `render.rs` for drawing, `widgets.rs` for shared
-  drawing and layout helpers, and `studio.rs` for the Studio page. `handlers.rs` holds
-  about 2,500 lines and `render.rs` about 1,600, and splitting them per page is
-  technical debt.
-- **The layout assumes a 1440 by 900 window.** `WINDOW_WIDTH` and `WINDOW_HEIGHT` are
-  constants in `daw-core`, as they were in the binary.
+- **`DawApp` is split by page.** The `app` module keeps state and playback in `mod.rs`,
+  shared drawing and layout helpers in `widgets.rs`, and one module per page, which
+  holds that page's drawing and input handling. These are `studio.rs`, `piano_roll.rs`,
+  `overview.rs`, `synth_setup.rs` and `chains.rs`, which serves both chain pages.
+  `handlers.rs` and `render.rs` keep only the dispatch and what several pages share.
+  `mod.rs` is still about 1,200 lines.
+- **The layout follows a window size fixed at startup.** `DawApp` holds a `WindowSize`
+  that drawing and hit testing both read, bounded from 1280 by 800 to 7680 by 4320, and
+  the binary takes it from `--window-size`. Resizing a running window is not supported,
+  because the window is created without the resizable flag and no resize event reaches
+  `DawApp`. Many controls sit at fixed offsets from the left, so a wider window adds
+  room on the right rather than scaling the controls.

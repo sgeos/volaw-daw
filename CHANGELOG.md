@@ -8,6 +8,9 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- `audio::command_queue`, `CommandSender`, `CommandReceiver` and `EngineEdit`, and
+  `Vco::replace_pcm_samples`, which returns the replaced table so that it is not freed
+  on the audio thread.
 - A Studio page, now the home page, laid out after browser-based workstations. It has
   an instrument and effect browser, a track list with mute, solo, volume and a note
   preview, and the selected track's effects rack, all usable with the mouse alone.
@@ -29,6 +32,8 @@ All notable changes are recorded here. The format follows
 - `scripts/scratch.sh`, which keeps build output on a scratch volume named by
   `SCRATCH_BASE`, and scratch linking in `scripts/worktree.sh new` and `rm`, synced from
   `sgeos/project-template` at commit `3954eba`, released as `v1.0.8`.
+- A `--window-size WxH` option of the `daw` binary, from 1280x800 to 7680x4320 with
+  1440x900 as the default, and a `WindowSize` type in `daw-core` that the layout follows.
 - Repository conventions adopted from `sgeos/project-template`, including the local
   gate `scripts/check.sh`, the worktree helper, the process documents and the 0BSD
   license.
@@ -42,7 +47,23 @@ All notable changes are recorded here. The format follows
 - Exporting a Standard MIDI File refuses a track with notes whose ticks per beat
   differs from the project's, with the reason in the status bar, instead of writing
   its note times at the wrong resolution.
-- The `daw-core` application module is split into files by concern.
+- **Breaking for `audio`.** `EngineCommand::Bulk` carries a `Box<dyn EngineEdit>`
+  instead of a `Box<dyn FnOnce(&mut AudioEngine) + Send>`. Every `FnMut` closure over
+  the engine is an `EngineEdit`. `EngineRunner::new` takes the `CommandReceiver` half
+  of the new `command_queue` instead of a `spsc::Consumer`. The runner returns each
+  applied edit through the queue, and `CommandSender` frees it on the control thread.
+  `AudioSystem`, `AudioConfig` and `AudioEngine::new` are unchanged.
+- The DAW builds every new pedal chain, voice pool, modulation matrix and PCM table on
+  the UI thread, through edit builders in `daw_core::engine_setup`, and the audio
+  thread only swaps them in.
+- `EngineRunner` renders in chunks no larger than the engine's preallocated scratch
+  buffers, at most 2048 samples.
+- The monophonic held-note stack holds at most 64 notes and forgets the oldest when a
+  65th is held.
+- The `daw-core` application module is split into files by concern, and the page code
+  further into `piano_roll`, `overview`, `synth_setup` and `chains`.
+- The Stereo and Mono Chain pages wrap a long chain into rows instead of running off
+  the page. `WINDOW_WIDTH` and `WINDOW_HEIGHT` are replaced by `WindowSize`.
 - The chorus, flanger and vibrato depth slider spans 0 to 10 ms instead of 0 to 2000 ms.
 - Escape on a setup or overview page returns to the Studio page.
 - The workspace is layered into a `no_std` core, a std platform layer and entry points.
@@ -95,6 +116,10 @@ All notable changes are recorded here. The format follows
   helper functions. `ScriptRunner` now counts loop iterations and calls through VM
   breakpoints, native calls included, and stops a script that runs more than
   `MAX_STEPS_PER_TICK`, 4,096, in one tick.
+- On the Synth Setup page, the GLIDE row overlapped the LPF panel, so a click on GLIDE
+  Enabled dragged LPF Saturation instead of toggling glide.
+- On the Stereo Chain page in orbital mode, parameter lookup searched above where the
+  pedal bars were drawn.
 - The Phaser `stages` slider spanned 0 to 1, so dragging it set one stage. It now spans
   1 to 8.
 - Moving a pedal after switching to a track with fewer pedals could panic on an
@@ -106,6 +131,17 @@ All notable changes are recorded here. The format follows
   a pending boxed closure leaked at shutdown.
 - The audio callback drains at most one queue capacity of commands per block, and never
   reallocates its staging buffer on the audio thread.
+- The audio thread no longer allocates or frees. Before, a `Bulk` closure was freed on
+  the audio thread with whatever it captured, a patch or chain rebuild allocated there,
+  the first held note of a monophonic channel grew a vector there, and the first large
+  callback grew the engine's scratch buffers there. Tests with a counting allocator in
+  `audio` and `daw-core` check it.
+- Stopping or dropping an `SdlAudioOutput`, and so an `AudioSystem`, after the host
+  called `SDL_Quit` destroyed the audio stream a second time through a dangling
+  pointer. The output now detects that `SDL_Quit` destroyed its stream, skips the
+  second destruction and the release of the audio subsystem, and reports the state
+  through the new `SdlAudioOutput::stream_lost`. Tests in `audio-sdl` exercise both
+  orders on SDL's dummy audio driver.
 - A project, patch, effect, MIDI or script file name that is absolute or contains `..`
   is rejected, so a project file cannot read or write outside its root.
 - `spsc::ring_buffer` panics with a message for a capacity above `MAX_CAPACITY`,

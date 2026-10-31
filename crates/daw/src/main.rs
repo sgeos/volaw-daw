@@ -7,7 +7,7 @@
 
 use audio::AudioEngine;
 use daw_core::DawApp;
-use daw_core::app::{PROJECT_ROOT, WINDOW_HEIGHT, WINDOW_WIDTH};
+use daw_core::app::{PROJECT_ROOT, WindowSize};
 use daw_core::platform::{LogLevel, Platform};
 use daw_sdl::{SdlPlatform, SdlRenderer};
 use volaw_audio::{AudioConfig, AudioSystem};
@@ -32,6 +32,8 @@ struct Options {
     import_channel: usize,
     /// (channel, script file) pairs, channel 0-based.
     scripts: Vec<(usize, String)>,
+    /// Window size, already checked against the layout's bounds.
+    window_size: Option<WindowSize>,
     /// Arguments that were not understood, reported as warnings.
     rejected: Vec<String>,
 }
@@ -60,6 +62,13 @@ fn parse_args(args: &[String]) -> Options {
                 match n.parse::<usize>() {
                     Ok(ch) => opts.import_channel = ch,
                     Err(_) => opts.rejected.push(format!("--import-channel {n}")),
+                }
+                2
+            }
+            ("--window-size", [size, ..]) => {
+                match WindowSize::parse(size) {
+                    Ok(size) => opts.window_size = Some(size),
+                    Err(e) => opts.rejected.push(format!("--window-size {size} ({e})")),
                 }
                 2
             }
@@ -100,7 +109,8 @@ fn main() {
         );
         SYSTEM_FONT_PATH
     };
-    let mut renderer = match SdlRenderer::new(WINDOW_TITLE, WINDOW_WIDTH, WINDOW_HEIGHT, font_path)
+    let size = opts.window_size.unwrap_or(WindowSize::DEFAULT);
+    let mut renderer = match SdlRenderer::new(WINDOW_TITLE, size.width(), size.height(), font_path)
     {
         Ok(r) => r,
         Err(e) => {
@@ -114,6 +124,7 @@ fn main() {
     let mut app: DawApp<SdlPlatform, Option<AudioSystem>> =
         DawApp::new(platform, None, config.sample_rate);
     app.set_project_root(opts.project_root.as_deref().unwrap_or(PROJECT_ROOT));
+    app.set_window_size(size);
 
     if let Some(name) = &opts.load_name
         && let Err(e) = app.load_project(name)
@@ -155,7 +166,9 @@ fn main() {
     app.platform().log(
         LogLevel::Info,
         &format!(
-            "DAW started: {WINDOW_WIDTH}x{WINDOW_HEIGHT} @ {}Hz",
+            "DAW started: {}x{} @ {}Hz",
+            size.width(),
+            size.height(),
             config.sample_rate
         ),
     );
@@ -213,6 +226,8 @@ mod tests {
             "--script",
             "2",
             "s.kma",
+            "--window-size",
+            "1600x1000",
         ]));
         assert_eq!(
             opts,
@@ -222,6 +237,7 @@ mod tests {
                 import_midi: Some("m.mid".into()),
                 import_channel: 3,
                 scripts: vec![(2, "s.kma".into())],
+                window_size: Some(WindowSize::new(1600, 1000).unwrap()),
                 rejected: vec![],
             }
         );
@@ -236,10 +252,57 @@ mod tests {
     }
 
     #[test]
+    fn bad_window_sizes_are_rejected_with_the_reason() {
+        let small = format!(
+            "{}x{}",
+            WindowSize::MIN.width() - 1,
+            WindowSize::MIN.height()
+        );
+        let opts = parse_args(&args(&["--window-size", "big", "--window-size", &small]));
+        assert_eq!(opts.window_size, None);
+        assert_eq!(opts.rejected.len(), 2);
+        let malformed = WindowSize::parse("big").unwrap_err();
+        assert_eq!(opts.rejected[0], format!("--window-size big ({malformed})"));
+        let out_of_range = WindowSize::parse(&small).unwrap_err();
+        assert_eq!(
+            opts.rejected[1],
+            format!("--window-size {small} ({out_of_range})")
+        );
+    }
+
+    #[test]
+    fn a_later_window_size_replaces_an_earlier_one() {
+        let opts = parse_args(&args(&[
+            "--window-size",
+            "1600x1000",
+            "--window-size",
+            "1280x800",
+        ]));
+        assert_eq!(opts.window_size, Some(WindowSize::MIN));
+        assert!(opts.rejected.is_empty());
+    }
+
+    #[test]
     fn unknown_and_truncated_arguments_are_rejected() {
         let opts = parse_args(&args(&["--bogus", "--root"]));
         assert_eq!(opts.rejected, ["--bogus", "--root"]);
         assert_eq!(opts.project_root, None);
+    }
+
+    #[test]
+    fn readme_states_the_window_size_bounds() {
+        let readme = include_str!("../README.md");
+        let (min, def, max) = (WindowSize::MIN, WindowSize::DEFAULT, WindowSize::MAX);
+        let row = format!(
+            "from {}x{} to {}x{} (default: {}x{})",
+            min.width(),
+            min.height(),
+            max.width(),
+            max.height(),
+            def.width(),
+            def.height()
+        );
+        assert!(readme.contains(&row), "README does not say {row:?}");
     }
 
     #[test]

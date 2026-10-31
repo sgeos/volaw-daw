@@ -4,14 +4,44 @@
 //! via the SPSC ring buffer. Hot-path variants (note events, position
 //! updates, script parameters) are fixed-size data with no heap
 //! allocation. Cold-path operations (patch application, pedal chain
-//! rebuild) use the `Bulk` variant, which carries a boxed closure
-//! allocated on the UI thread. The closure runs, and its box is freed, on the
-//! audio thread, so `Bulk` is not allocation-free. `runtime` records this as
-//! technical debt.
+//! rebuild) use the `Bulk` variant, which carries a boxed `EngineEdit`
+//! built on the UI thread. The audio thread applies the edit and hands the
+//! box back through `runtime::CommandReceiver`, so that the box and anything
+//! the edit swapped out of the engine are freed on the control thread.
 
 use alloc::boxed::Box;
 
 use crate::engine::{AudioEngine, NUM_CHANNELS};
+
+/// A change to the engine that fixed-size commands cannot express, built on
+/// the control thread and applied on the audio thread.
+///
+/// `apply` runs inside the audio callback, so it must not allocate, free,
+/// block or perform I/O. Build every new value, such as a pedal chain, before
+/// sending the edit, and swap it into the engine in `apply`. Whatever the
+/// swap takes out stays in the edit, which `runtime::EngineRunner` returns to
+/// the control thread to be dropped there. The runner applies each edit once.
+///
+/// Every `FnMut(&mut AudioEngine) + Send` closure is an edit. A closure that
+/// moves a captured value into the engine cannot be `FnMut`, and swapping
+/// through `core::mem::swap` or `core::mem::replace` is the usual remedy.
+///
+/// The rule above is a contract on the implementer, and nothing enforces it.
+/// `apply` runs arbitrary code on the audio thread, and an edit that grows a
+/// vector, drops a value it took out of the engine, or takes a lock does so
+/// in the callback. The runner frees only the edit itself off the audio
+/// thread. The counting allocator tests in `tests/audio_thread_alloc.rs` of
+/// this crate, and in `daw-core`, check the edits this workspace builds, not
+/// edits from other code.
+pub trait EngineEdit: Send {
+    fn apply(&mut self, engine: &mut AudioEngine);
+}
+
+impl<F: FnMut(&mut AudioEngine) + Send> EngineEdit for F {
+    fn apply(&mut self, engine: &mut AudioEngine) {
+        self(engine);
+    }
+}
 
 /// A command sent from the UI thread to the audio thread.
 pub enum EngineCommand {
@@ -125,18 +155,22 @@ pub enum EngineCommand {
     },
 
     // -- Bulk mutation (cold path) --
-    /// Boxed closure for complex operations that cannot be expressed
-    /// as fixed-size commands (patch application, pedal chain rebuild).
-    /// The closure is created on the UI thread and executed on the
-    /// audio thread.
-    Bulk(Box<dyn FnOnce(&mut AudioEngine) + Send>),
+    /// A boxed edit for changes that fixed-size commands cannot express,
+    /// such as applying a patch or replacing a pedal chain. It is built on
+    /// the UI thread, applied on the audio thread, and freed on the UI
+    /// thread once `runtime::CommandSender` reclaims it.
+    Bulk(Box<dyn EngineEdit>),
 }
 
 /// Apply a single engine command to the audio engine.
 ///
-/// Called from the audio callback after draining the ring buffer.
 /// Each command performs a bounded amount of work (no I/O, no
-/// unbounded loops).
+/// unbounded loops). A `Bulk` edit is dropped here once applied, which frees
+/// the box and everything the edit carries on the calling thread.
+/// `EngineRunner` therefore applies the edit itself and returns it instead.
+/// A host that drives an engine on its own audio thread must not pass `Bulk`
+/// to this function there, and should use `EngineRunner` or apply the edit
+/// and send it back to the control thread itself.
 pub fn apply_engine_command(engine: &mut AudioEngine, cmd: EngineCommand) {
     match cmd {
         EngineCommand::NoteOn {
@@ -335,8 +369,8 @@ pub fn apply_engine_command(engine: &mut AudioEngine, cmd: EngineCommand) {
                 }
             }
         }
-        EngineCommand::Bulk(f) => {
-            f(engine);
+        EngineCommand::Bulk(mut edit) => {
+            edit.apply(engine);
         }
     }
 }

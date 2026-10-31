@@ -23,6 +23,7 @@ cargo run -p daw
 ```
 
 Opens a 1440x900 window titled "Vows of Love and War - Composer" with an empty 8-channel project.
+`--window-size` chooses another size.
 
 The built binary also runs directly, as `target/debug/daw`. SDL3 and SDL3_ttf are
 built as shared libraries and copied beside it, and `build.rs` sets a run path to that
@@ -38,6 +39,7 @@ copied with it.
 | `--import-midi <path>` | Import a Standard MIDI File (.mid) |
 | `--import-channel <n>` | First channel to import into (0-based, default: 0) |
 | `--script <n> <file>` | Assign a Keleusma script from `scripts/` to channel `n` (0-based) |
+| `--window-size <w>x<h>` | Window size in pixels, from 1280x800 to 7680x4320 (default: 1440x900) |
 
 Examples:
 
@@ -50,7 +52,15 @@ cargo run -p daw -- --import-midi path/to/file.mid
 
 # Import a MIDI file into channel 3 with a custom project root
 cargo run -p daw -- --root my_music --import-midi track.mid --import-channel 3
+
+# Open a larger window
+cargo run -p daw -- --window-size 1920x1080
 ```
+
+The layout follows the window size. A size outside the bounds is reported as
+a warning and the default is used. The window cannot be resized while the
+composer runs. In a window narrower than 1420 pixels, a long status message in
+the toolbar is cut off at the right edge.
 
 ## Controls
 

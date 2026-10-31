@@ -82,8 +82,8 @@ fn page_tab_rect(i: usize) -> Rect {
 }
 
 /// The transport buttons at the right of the page tab row.
-fn transport_buttons() -> [(TransportButton, Rect); 3] {
-    let right = WINDOW_WIDTH as f32 - 8.0;
+fn transport_buttons(window: WindowSize) -> [(TransportButton, Rect); 3] {
+    let right = window.width_f32() - 8.0;
     let rect = |k: f32| {
         Rect::new(
             right - k * (TRANSPORT_W + 6.0),
@@ -132,9 +132,9 @@ fn browser_entries(tab: BrowserTab) -> Vec<(BrowserEntry, f32)> {
 }
 
 /// The largest browser scroll offset for `tab`.
-fn browser_max_scroll(tab: BrowserTab) -> f32 {
+fn browser_max_scroll(tab: BrowserTab, window: WindowSize) -> f32 {
     let total: f32 = browser_entries(tab).iter().map(|(_, h)| h).sum();
-    let visible = WINDOW_HEIGHT as f32 - BROWSER_LIST_Y;
+    let visible = window.height_f32() - BROWSER_LIST_Y;
     (total - visible).max(0.0)
 }
 
@@ -172,8 +172,8 @@ const VOLUME_W: f32 = 120.0;
 const PREVIEW_X: f32 = MAIN_X + 512.0;
 
 /// Buttons on the rack heading that open the detailed pages.
-fn rack_buttons() -> [(DawPage, &'static str, Rect); 2] {
-    let right = WINDOW_WIDTH as f32 - 10.0;
+fn rack_buttons(window: WindowSize) -> [(DawPage, &'static str, Rect); 2] {
+    let right = window.width_f32() - 10.0;
     [
         (
             DawPage::SynthSetup,
@@ -234,7 +234,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
     fn rack_max_scroll(&self) -> f32 {
         let count = self.effects[self.selected_channel].pre_pedals.len();
         let content = pedal_x(0.0, count) + ADD_CARD_W;
-        let visible = WINDOW_WIDTH as f32 - MAIN_X - 10.0;
+        let visible = self.window.width_f32() - MAIN_X - 10.0;
         (content - visible).max(0.0)
     }
 
@@ -252,7 +252,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
             let active = (*page == self.current_page).then_some(TEXT_ACCENT);
             draw_button(renderer, page_tab_rect(i), page.name(), active);
         }
-        for (button, r) in transport_buttons() {
+        for (button, r) in transport_buttons(self.window) {
             let (label, active) = match button {
                 TransportButton::Play if self.transport.playing => ("Pause", Some(LOOP_MARKER)),
                 TransportButton::Play => ("Play", None),
@@ -269,7 +269,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
             self.current_page = DawPage::ALL[i];
             return;
         }
-        if let Some((button, _)) = transport_buttons()
+        if let Some((button, _)) = transport_buttons(self.window)
             .into_iter()
             .find(|(_, r)| r.contains(mx, my))
         {
@@ -518,7 +518,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
             FontSize::Medium,
             TEXT_PRIMARY,
         );
-        for (_, label, r) in rack_buttons() {
+        for (_, label, r) in rack_buttons(self.window) {
             draw_button(renderer, r, label, None);
         }
 
@@ -530,6 +530,8 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
             renderer,
             start_x,
             pedals_y,
+            // The rack scrolls sideways, so its chain never wraps.
+            f32::INFINITY,
             &self.effects[ch].pre_pedals,
             accent,
             sel,
@@ -542,7 +544,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
             return;
         }
         if my >= RACK_Y {
-            if let Some((page, _, _)) = rack_buttons()
+            if let Some((page, _, _)) = rack_buttons(self.window)
                 .into_iter()
                 .find(|(_, _, r)| r.contains(mx, my))
             {
@@ -551,7 +553,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
             }
             if my >= RACK_Y + RACK_HEADER_H {
                 let (start_x, pedals_y) = self.studio_rack_origin();
-                self.handle_pedal_chain_click(mx, my, pedals_y, 0, start_x);
+                self.handle_pedal_chain_click(mx, my, pedals_y, 0, start_x, f32::INFINITY);
             }
             return;
         }
@@ -629,7 +631,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
     pub(super) fn studio_scroll(&mut self, delta: i32) {
         let (mx, my) = self.last_mouse;
         if mx < BROWSER_W {
-            let max = browser_max_scroll(self.browser_tab);
+            let max = browser_max_scroll(self.browser_tab, self.window);
             self.browser_scroll =
                 (self.browser_scroll - delta as f32 * SCROLL_STEP).clamp(0.0, max);
         } else if my >= RACK_Y {
@@ -650,6 +652,14 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
                     Some(format!("Track {} volume {:.0}%", ch + 1, volume * 100.0));
             }
         }
+    }
+
+    /// Clamp the browser and rack scroll offsets to their current ranges,
+    /// which shrink when the window grows.
+    pub(super) fn clamp_studio_scroll(&mut self) {
+        let max = browser_max_scroll(self.browser_tab, self.window);
+        self.browser_scroll = self.browser_scroll.clamp(0.0, max);
+        self.rack_scroll = self.rack_scroll.clamp(0.0, self.rack_max_scroll());
     }
 }
 
@@ -678,7 +688,8 @@ mod tests {
         let mut y = BROWSER_LIST_Y;
         for (entry, h) in browser_entries(app.browser_tab) {
             if entry == target {
-                let scroll = (y - BROWSER_LIST_Y).min(browser_max_scroll(app.browser_tab));
+                let scroll =
+                    (y - BROWSER_LIST_Y).min(browser_max_scroll(app.browser_tab, app.window));
                 app.browser_scroll = scroll;
                 return Rect::new(20.0, y - scroll, 100.0, h - 4.0);
             }
@@ -716,7 +727,7 @@ mod tests {
     #[test]
     fn play_and_stop_buttons_drive_the_transport() {
         let mut app = app();
-        let [(_, play), (_, stop), _] = transport_buttons();
+        let [(_, play), (_, stop), _] = transport_buttons(app.window);
         click(&mut app, play);
         assert!(app.transport.playing);
         click(&mut app, play);
@@ -791,7 +802,10 @@ mod tests {
     fn add_card_opens_the_picker_and_the_picker_adds() {
         let mut app = app();
         let (start_x, pedals_y) = app.studio_rack_origin();
-        click(&mut app, add_card(start_x, pedals_y, 0));
+        click(
+            &mut app,
+            chain_add_card(start_x, pedals_y, f32::INFINITY, &[]),
+        );
         assert!(app.pedal_picker_open);
         assert_eq!(app.pedal_picker_chain, 0);
         let (cat, item) = PEDAL_TYPES
@@ -803,7 +817,8 @@ mod tests {
                     .map(|i| (c, i))
             })
             .unwrap();
-        click(&mut app, picker_item_rect(cat, item));
+        let item = picker_item_rect(app.window, cat, item);
+        click(&mut app, item);
         assert!(!app.pedal_picker_open);
         assert_eq!(app.effects[0].pre_pedals[0].pedal_type, "PitchCorrector");
     }
@@ -821,21 +836,23 @@ mod tests {
 
     #[test]
     fn every_picker_item_is_inside_the_picker_and_distinct() {
-        let p = picker_rect();
-        let mut seen = Vec::new();
-        for (cat, (_, types)) in PEDAL_TYPES.iter().enumerate() {
-            for (item, name) in types.iter().enumerate() {
-                let r = picker_item_rect(cat, item);
-                assert!(
-                    p.contains(r.x, r.y) && p.contains(r.x + r.w, r.y + r.h),
-                    "{name}"
-                );
-                assert_eq!(picker_item_at(r.x + 1.0, r.y + 1.0), Some(*name));
-                seen.push(*name);
+        for window in [WindowSize::MIN, WindowSize::DEFAULT, WindowSize::MAX] {
+            let p = picker_rect(window);
+            let mut seen = Vec::new();
+            for (cat, (_, types)) in PEDAL_TYPES.iter().enumerate() {
+                for (item, name) in types.iter().enumerate() {
+                    let r = picker_item_rect(window, cat, item);
+                    assert!(
+                        p.contains(r.x, r.y) && p.contains(r.x + r.w, r.y + r.h),
+                        "{name}"
+                    );
+                    assert_eq!(picker_item_at(window, r.x + 1.0, r.y + 1.0), Some(*name));
+                    seen.push(*name);
+                }
             }
+            let total: usize = PEDAL_TYPES.iter().map(|(_, t)| t.len()).sum();
+            assert_eq!(seen.len(), total);
         }
-        let total: usize = PEDAL_TYPES.iter().map(|(_, t)| t.len()).sum();
-        assert_eq!(seen.len(), total);
     }
 
     #[test]
@@ -885,7 +902,7 @@ mod tests {
         }
         assert_eq!(
             app.browser_scroll,
-            browser_max_scroll(BrowserTab::Instruments)
+            browser_max_scroll(BrowserTab::Instruments, app.window)
         );
         for _ in 0..200 {
             app.handle_input(DawInput::Scroll(1));
@@ -895,11 +912,54 @@ mod tests {
         for _ in 0..12 {
             app.add_pedal_to_chain(0, "Volume");
         }
-        app.handle_input(DawInput::MouseMove(WINDOW_WIDTH as f32 - 20.0, 880.0));
+        app.handle_input(DawInput::MouseMove(app.window.width_f32() - 20.0, 880.0));
         for _ in 0..500 {
             app.handle_input(DawInput::Scroll(-1));
         }
         assert!(app.rack_scroll > 0.0);
         assert_eq!(app.rack_scroll, app.rack_max_scroll());
+    }
+
+    #[test]
+    fn growing_the_window_clamps_scroll_offsets() {
+        let mut state = app();
+        state.set_window_size(WindowSize::MIN);
+        for _ in 0..12 {
+            state.add_pedal_to_chain(0, "Chorus");
+        }
+        state.scroll_y = state.max_scroll_y();
+        state.browser_scroll = browser_max_scroll(state.browser_tab, state.window);
+        state.rack_scroll = state.rack_max_scroll();
+        assert!(state.scroll_y > 0.0 && state.browser_scroll > 0.0 && state.rack_scroll > 0.0);
+
+        state.set_window_size(WindowSize::MAX);
+        assert_eq!(state.scroll_y, state.max_scroll_y());
+        assert_eq!(
+            state.browser_scroll,
+            browser_max_scroll(state.browser_tab, state.window)
+        );
+        assert_eq!(state.rack_scroll, state.rack_max_scroll());
+
+        // Shrinking keeps offsets that are still in range.
+        state.set_window_size(WindowSize::MIN);
+        assert!(state.scroll_y <= state.max_scroll_y());
+    }
+
+    #[test]
+    fn transport_buttons_follow_the_right_edge() {
+        let margin = |size: WindowSize| {
+            let [_, _, (_, save)] = transport_buttons(size);
+            size.width_f32() - (save.x + save.w)
+        };
+        let default_margin = margin(WindowSize::DEFAULT);
+        assert!(default_margin > 0.0);
+        for size in [WindowSize::MIN, WindowSize::DEFAULT, WindowSize::MAX] {
+            let mut app = app();
+            app.set_window_size(size);
+            assert_eq!(margin(size), default_margin, "{size:?}");
+            let [(_, play), _, _] = transport_buttons(size);
+            click(&mut app, play);
+            assert!(app.transport.playing, "{size:?}");
+        }
     }
 }

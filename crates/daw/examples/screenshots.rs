@@ -3,6 +3,7 @@
 //!
 //! ```sh
 //! SDL_VIDEO_DRIVER=dummy cargo run -p daw --example screenshots -- tmp/shots
+//! SDL_VIDEO_DRIVER=dummy cargo run -p daw --example screenshots -- tmp/shots 1280x800
 //! ```
 //!
 //! The pages are reached by clicking at the coordinates a user would, so a
@@ -10,7 +11,7 @@
 //! It has no audio and touches no project files, because nothing is saved.
 
 use daw_core::DawApp;
-use daw_core::app::{WINDOW_HEIGHT, WINDOW_WIDTH};
+use daw_core::app::WindowSize;
 use daw_core::input::DawInput;
 use daw_core::platform::{LogLevel, Platform};
 use daw_core::render::{Color, FontSize, Renderer};
@@ -81,6 +82,14 @@ fn main() {
     let dir = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "tmp/shots".into());
+    let size = match std::env::args().nth(2).map(|s| WindowSize::parse(&s)) {
+        None => WindowSize::DEFAULT,
+        Some(Ok(size)) => size,
+        Some(Err(e)) => {
+            eprintln!("window size: {e}");
+            std::process::exit(2);
+        }
+    };
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!("{dir}: {e}");
         std::process::exit(1);
@@ -90,7 +99,7 @@ fn main() {
         eprintln!("no font found");
         std::process::exit(1);
     };
-    let inner = match SdlRenderer::new("screenshots", WINDOW_WIDTH, WINDOW_HEIGHT, font) {
+    let inner = match SdlRenderer::new("screenshots", size.width(), size.height(), font) {
         Ok(r) => r,
         Err(e) => {
             platform.log(LogLevel::Error, &e);
@@ -100,6 +109,7 @@ fn main() {
     let mut renderer = Capture { inner, path: None };
     let mut app: DawApp<SdlPlatform, audio::NullSink> =
         DawApp::new(platform, audio::NullSink, 48_000);
+    app.set_window_size(size);
 
     // A few notes on two tracks, placed on the piano roll by clicking.
     click(&mut app, page_tab(1));

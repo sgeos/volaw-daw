@@ -211,6 +211,69 @@ struct HeldNote {
     velocity: f64,
 }
 
+/// Notes the monophonic stack remembers at once. A player holds far fewer,
+/// and a script or file that never releases notes cannot grow the stack past
+/// this bound, because the oldest entry gives way.
+const MAX_HELD_NOTES: usize = 64;
+
+/// The monophonic note stack, in fixed storage.
+///
+/// `NoteOn` runs on the audio thread, so the stack must not grow a heap
+/// buffer there. A `Vec` would allocate on its first push and again whenever
+/// it doubled, and a clone of the synthesizer would lose any capacity
+/// reserved beforehand. A full stack forgets its oldest note, which changes
+/// which note sounds only after more than `MAX_HELD_NOTES` notes are held.
+#[derive(Debug, Clone)]
+struct HeldNotes {
+    notes: [HeldNote; MAX_HELD_NOTES],
+    len: usize,
+}
+
+impl HeldNotes {
+    const fn new() -> Self {
+        Self {
+            notes: [HeldNote {
+                freq: 0.0,
+                velocity: 0.0,
+            }; MAX_HELD_NOTES],
+            len: 0,
+        }
+    }
+
+    fn as_slice(&self) -> &[HeldNote] {
+        &self.notes[..self.len]
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    fn push(&mut self, note: HeldNote) {
+        if self.len == MAX_HELD_NOTES {
+            self.notes.copy_within(1.., 0);
+            self.len -= 1;
+        }
+        self.notes[self.len] = note;
+        self.len += 1;
+    }
+
+    fn retain(&mut self, keep: impl Fn(&HeldNote) -> bool) {
+        let mut kept = 0;
+        for read in 0..self.len {
+            let note = self.notes[read];
+            if keep(&note) {
+                self.notes[kept] = note;
+                kept += 1;
+            }
+        }
+        self.len = kept;
+    }
+}
+
 /// Per-voice DSP state for the MS-20 synthesizer.
 ///
 /// Each voice contains its own oscillators, envelope generators, filters,
@@ -341,7 +404,7 @@ pub struct Ms20Voice {
     pub velocity_pitch_depth: f64,
 
     /// Held note stack for monophonic note priority.
-    held_notes: Vec<HeldNote>,
+    held_notes: HeldNotes,
 }
 
 impl Ms20Voice {
@@ -368,7 +431,7 @@ impl Ms20Voice {
             velocity_filter_depth: 0.0,
             velocity_envelope_depth: 0.0,
             velocity_pitch_depth: 0.0,
-            held_notes: Vec::new(),
+            held_notes: HeldNotes::new(),
         }
     }
 
@@ -600,12 +663,12 @@ impl Ms20Voice {
     /// lowest note for Low mode. Panics if held_notes is empty.
     fn mono_select_note(&self) -> (f64, f64) {
         let note = match self.voice_mode {
-            VoiceMode::High(_) => self.held_notes.iter().max_by(|a, b| {
+            VoiceMode::High(_) => self.held_notes.as_slice().iter().max_by(|a, b| {
                 a.freq
                     .partial_cmp(&b.freq)
                     .unwrap_or(core::cmp::Ordering::Equal)
             }),
-            VoiceMode::Low(_) => self.held_notes.iter().min_by(|a, b| {
+            VoiceMode::Low(_) => self.held_notes.as_slice().iter().min_by(|a, b| {
                 a.freq
                     .partial_cmp(&b.freq)
                     .unwrap_or(core::cmp::Ordering::Equal)
@@ -1345,5 +1408,52 @@ mod tests {
             "Second note produced NaN/Inf"
         );
         assert!(energy2 > 0.1, "Second note should produce audible output");
+    }
+
+    #[test]
+    fn full_held_stack_forgets_its_oldest_note() {
+        let mut held = HeldNotes::new();
+        for i in 0..=MAX_HELD_NOTES {
+            held.push(HeldNote {
+                freq: i as f64,
+                velocity: 1.0,
+            });
+        }
+        assert_eq!(held.as_slice().len(), MAX_HELD_NOTES);
+        assert_eq!(held.as_slice()[0].freq, 1.0);
+        assert_eq!(
+            held.as_slice()[MAX_HELD_NOTES - 1].freq,
+            MAX_HELD_NOTES as f64
+        );
+    }
+
+    #[test]
+    fn held_stack_retain_keeps_order() {
+        let mut held = HeldNotes::new();
+        for freq in [100.0, 200.0, 100.0, 300.0] {
+            held.push(HeldNote {
+                freq,
+                velocity: 1.0,
+            });
+        }
+        held.retain(|n| n.freq != 100.0);
+        let kept: alloc::vec::Vec<f64> = held.as_slice().iter().map(|n| n.freq).collect();
+        assert_eq!(kept, [200.0, 300.0]);
+        held.retain(|_| false);
+        assert!(held.is_empty());
+    }
+
+    #[test]
+    fn mono_priority_survives_more_notes_than_the_stack_holds() {
+        // Every note is held and none released. After the stack overflows,
+        // the highest note held still sounds in High mode.
+        let mut synth = Ms20Voice::new();
+        for i in 0..(MAX_HELD_NOTES * 2) {
+            synth.note_on(100.0 + i as f64);
+        }
+        let top = 100.0 + (MAX_HELD_NOTES * 2 - 1) as f64;
+        assert_eq!(synth.voices[0].note_freq, top);
+        synth.note_off_freq(top);
+        assert_eq!(synth.voices[0].note_freq, top - 1.0);
     }
 }

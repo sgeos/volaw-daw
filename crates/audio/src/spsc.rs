@@ -40,8 +40,8 @@ struct Shared<T> {
 
 impl<T> Drop for Shared<T> {
     /// Drop every value still queued. Both halves are gone when this runs, so
-    /// access is exclusive. Without this, a pending value such as a boxed
-    /// closure in `EngineCommand::Bulk` would leak at shutdown. The loop visits
+    /// access is exclusive. Without this, a pending value such as the boxed
+    /// edit in `EngineCommand::Bulk` would leak at shutdown. The loop visits
     /// at most `mask` slots, because `tail` reaches `head` within one lap.
     fn drop(&mut self) {
         let head = *self.head.0.get_mut();

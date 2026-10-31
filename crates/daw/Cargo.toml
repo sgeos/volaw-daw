@@ -13,3 +13,6 @@ daw-core = { workspace = true }
 daw-sdl = { workspace = true }
 volaw-audio = { workspace = true }
 sdl3-sys = { workspace = true }
+# Not used in code. It is a direct dependency so that build.rs receives the
+# library location through the crate's `links` metadata.
+sdl3-ttf-sys = { workspace = true }

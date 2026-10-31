@@ -40,14 +40,18 @@ resolutions. Converting imported notes when other channels hold notes.
 - The gate passed on every branch after each merge with `main`. The last run counted
   `audio` 262 and 4, `audio-sdl` 5 and 5, `daw` 7 and 1, `daw-core` 195 and 6, `daw-sdl`
   4 and `volaw-audio` 5, and 1 doctest, none failed or ignored.
-- Continuous integration passed on pull requests 10 and 11 before they merged.
+- Continuous integration passed on pull requests 10 and 11 before they merged. On pull
+  request 12 it first failed the run path test on Linux, because the dependency cache
+  restored the SDL builds without the step that copies their libraries beside the
+  binary. The `daw` build script now copies them, and continuous integration passed.
 - The disclosure scan cannot run in a worktree, which has no `secret/`. The terms were
   checked by hand against each branch's diff, and the lines checked their own files.
 - Each new test was shown by a mutation check to fail without its fix, per the lines.
 
 **Not verified.**
 - Interactive use on a real display and audio device.
-- The run path on Linux, except through continuous integration.
+- Why one local gate run failed clippy once and passed on rerun with no change. The
+  output of that run was not kept.
 - `cargo clean` with the scratch link.
 
 **For the operator.** The five questions in section 7 of

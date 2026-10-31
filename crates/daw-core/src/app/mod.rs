@@ -6,6 +6,11 @@
 //! audio thread. Drawing goes through the `Renderer` trait. An entry point
 //! constructs the platform pieces, configures an engine from the app, starts
 //! audio, and then runs the loop of `handle_input`, `update` and `render`.
+//!
+//! Each page keeps its drawing and its input handling together in one
+//! module. These are `studio`, `piano_roll`, `overview`, `synth_setup` and
+//! `chains`, which holds both chain pages. `handlers` and `render` hold only
+//! the dispatch and the parts that several pages share.
 
 // DAW input/edit dispatch tables use explicit if guards inside match
 // arms rather than collapsing into match guards. Loop boundary
@@ -44,24 +49,33 @@ use crate::render::{Color, FontSize, Renderer};
 use crate::script::ScriptRunner;
 use crate::transport::Transport;
 
+mod chains;
 mod handlers;
+mod overview;
+mod piano_roll;
 mod render;
 mod studio;
+mod synth_setup;
 #[cfg(test)]
 mod tests;
 mod widgets;
+mod window;
 
 use widgets::*;
-
-/// The window size the layout is designed for. The entry point opens a
-/// window of this size.
-pub const WINDOW_WIDTH: u32 = 1440;
-pub const WINDOW_HEIGHT: u32 = 900;
+pub use window::{
+    DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, MAX_WINDOW_HEIGHT, MAX_WINDOW_WIDTH,
+    MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, WindowSize, WindowSizeError,
+};
 
 /// Piano roll constants.
 const PIANO_KEY_WIDTH: f32 = 60.0;
 const NOTE_HEIGHT: f32 = 12.0;
 const TOOLBAR_HEIGHT: f32 = 32.0;
+/// Room kept for the toolbar status text at the right of the toolbar.
+const TOOLBAR_HINT_W: f32 = 430.0;
+/// Leftmost x of the toolbar status text, past the "MET" indicator at 940,
+/// the last of the fixed toolbar fields.
+const TOOLBAR_HINT_MIN_X: f32 = 990.0;
 /// The row of page tabs and transport buttons under the toolbar.
 const PAGE_TAB_HEIGHT: f32 = 28.0;
 const CHANNEL_BAR_HEIGHT: f32 = 28.0;
@@ -391,6 +405,9 @@ pub struct DawApp<P: Platform, S: CommandSink> {
     rack_scroll: f32,
     /// Channel whose Studio volume slider is being dragged.
     dragging_volume: Option<usize>,
+    /// Size of the window, which drawing and hit testing both lay out from,
+    /// so that the two agree whatever the renderer reports.
+    window: WindowSize,
 }
 
 /// Maximum undo history depth.
@@ -449,6 +466,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
             browser_scroll: 0.0,
             rack_scroll: 0.0,
             dragging_volume: None,
+            window: WindowSize::DEFAULT,
         }
     }
 
@@ -552,7 +570,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
         }
 
         // Do not place a note in the velocity lane area.
-        if my >= roll_y + Self::roll_h() {
+        if my >= roll_y + self.roll_h() {
             return;
         }
 
@@ -948,7 +966,7 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
                 PIANO_KEY_WIDTH
             };
             let playhead_x = current_ticks as f32 * tw - self.scroll_x;
-            let roll_w = WINDOW_WIDTH as f32 - label_w;
+            let roll_w = self.window.width_f32() - label_w;
             if playhead_x > roll_w * 0.85 {
                 self.scroll_x = current_ticks as f32 * tw - roll_w * 0.15;
             }
@@ -1052,13 +1070,13 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
     }
 
     /// Height of the piano roll grid area.
-    fn roll_h() -> f32 {
-        WINDOW_HEIGHT as f32 - Self::roll_y() - VELOCITY_LANE_HEIGHT
+    fn roll_h(&self) -> f32 {
+        self.window.height_f32() - Self::roll_y() - VELOCITY_LANE_HEIGHT
     }
 
     /// Maximum scroll_y before the piano roll content runs out.
-    fn max_scroll_y() -> f32 {
-        (VISIBLE_NOTE_RANGE as f32 * NOTE_HEIGHT - Self::roll_h()).max(0.0)
+    fn max_scroll_y(&self) -> f32 {
+        (VISIBLE_NOTE_RANGE as f32 * NOTE_HEIGHT - self.roll_h()).max(0.0)
     }
 
     /// Convert a pixel x-coordinate on the grid to a tick value, snapped to the grid.
@@ -1098,6 +1116,19 @@ impl<P: Platform, S: CommandSink> DawApp<P, S> {
 
     pub fn set_project_root(&mut self, root: &str) {
         self.project_root = String::from(root);
+    }
+
+    pub fn window_size(&self) -> WindowSize {
+        self.window
+    }
+
+    /// Lay out for a window of `size` from the next frame on. Scroll offsets
+    /// whose range depends on the size are clamped to the new range, so that
+    /// a smaller window never leaves a view scrolled past its content.
+    pub fn set_window_size(&mut self, size: WindowSize) {
+        self.window = size;
+        self.scroll_y = self.scroll_y.clamp(0.0, self.max_scroll_y());
+        self.clamp_studio_scroll();
     }
 
     pub fn is_running(&self) -> bool {

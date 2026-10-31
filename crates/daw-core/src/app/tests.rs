@@ -204,3 +204,531 @@ fn configure_engine_applies_mute_and_volume() {
     assert!(!engine.channels[5].enabled);
     assert!(engine.channels[0].enabled);
 }
+
+/// One thing drawn, as a box. Text is recorded at its origin with no size,
+/// because its true size depends on the platform's font.
+#[derive(Debug, Clone, PartialEq)]
+enum Drawn {
+    Shape(Rect),
+    Text(String, f32, f32),
+}
+
+/// A renderer that records what is drawn instead of drawing it.
+#[derive(Default)]
+struct Recorder {
+    drawn: Vec<Drawn>,
+}
+
+impl Recorder {
+    fn text_x(&self, wanted: &str) -> Option<f32> {
+        self.drawn.iter().find_map(|d| match d {
+            Drawn::Text(t, x, _) if t == wanted => Some(*x),
+            _ => None,
+        })
+    }
+}
+
+impl Renderer for Recorder {
+    fn clear(&mut self, _: Color) {}
+    fn present(&mut self) {}
+    fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, _: Color) {
+        self.drawn.push(Drawn::Shape(Rect::new(x, y, w, h)));
+    }
+    fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, _: Color) {
+        self.drawn.push(Drawn::Shape(Rect::new(x, y, w, h)));
+    }
+    fn draw_hline(&mut self, x1: f32, x2: f32, y: f32, _: Color) {
+        self.drawn
+            .push(Drawn::Shape(Rect::new(x1.min(x2), y, (x2 - x1).abs(), 0.0)));
+    }
+    fn draw_vline(&mut self, x: f32, y1: f32, y2: f32, _: Color) {
+        self.drawn
+            .push(Drawn::Shape(Rect::new(x, y1.min(y2), 0.0, (y2 - y1).abs())));
+    }
+    fn draw_text(&mut self, text: &str, x: f32, y: f32, _: FontSize, _: Color) {
+        self.drawn.push(Drawn::Text(String::from(text), x, y));
+    }
+    /// A rough average glyph width, so that layout code that centres text
+    /// gets plausible figures. No assertion depends on it.
+    fn text_size(&mut self, text: &str, _: FontSize) -> (f32, f32) {
+        (text.chars().count() as f32 * 7.0, 16.0)
+    }
+    /// Deliberately wrong, so that a layout that read the renderer's size
+    /// instead of the app's would fail the tests below.
+    fn screen_width(&self) -> f32 {
+        1.0
+    }
+    fn screen_height(&self) -> f32 {
+        1.0
+    }
+}
+
+/// Sizes at both bounds, the default, and one that matches none of them.
+fn test_sizes() -> [WindowSize; 4] {
+    [
+        WindowSize::MIN,
+        WindowSize::DEFAULT,
+        WindowSize::new(1601, 1003).unwrap(),
+        WindowSize::MAX,
+    ]
+}
+
+fn sized_app(size: WindowSize) -> DawApp<MemoryPlatform, NullSink> {
+    let mut state = app();
+    state.set_window_size(size);
+    state
+}
+
+fn click_at(state: &mut DawApp<MemoryPlatform, NullSink>, x: f32, y: f32) {
+    state.handle_input(DawInput::MouseMove(x, y));
+    state.handle_input(DawInput::Click(x, y));
+    state.handle_input(DawInput::MouseUp(x, y));
+}
+
+#[test]
+fn every_page_draws_inside_the_window() {
+    for size in test_sizes() {
+        let mut state = sized_app(size);
+        for name in ["Overdrive", "Chorus", "Delay"] {
+            for chain in 0..3 {
+                state.add_pedal_to_chain(chain, name);
+            }
+        }
+        state.status_message = None;
+        let (w, h) = (size.width_f32(), size.height_f32());
+        let pages = DawPage::ALL.iter().map(|p| (*p, false));
+        for (page, picker) in pages.chain([(DawPage::Studio, true)]) {
+            state.current_page = page;
+            state.pedal_picker_open = picker;
+            let mut rec = Recorder::default();
+            state.render(&mut rec);
+            assert!(rec.drawn.len() > 50, "{page:?} drew almost nothing");
+            for d in &rec.drawn {
+                let inside = match d {
+                    Drawn::Shape(r) => r.x >= 0.0 && r.y >= 0.0 && r.x + r.w <= w && r.y + r.h <= h,
+                    Drawn::Text(_, x, y) => (0.0..w).contains(x) && (0.0..h).contains(y),
+                };
+                assert!(inside, "{size:?} {page:?} picker={picker}: {d:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_frame_spans_the_window() {
+    for size in test_sizes() {
+        let state = sized_app(size);
+        let mut rec = Recorder::default();
+        state.render(&mut rec);
+        // The toolbar background is drawn first, across the whole width.
+        assert_eq!(
+            rec.drawn[0],
+            Drawn::Shape(Rect::new(0.0, 0.0, size.width_f32(), TOOLBAR_HEIGHT)),
+            "{size:?}"
+        );
+    }
+}
+
+#[test]
+fn channel_tabs_divide_the_width() {
+    for size in test_sizes() {
+        let mut state = sized_app(size);
+        let tab_w = size.width_f32() / NUM_CHANNELS as f32;
+        let y = CHANNEL_BAR_Y + CHANNEL_BAR_HEIGHT / 2.0;
+        for ch in (0..NUM_CHANNELS).rev() {
+            click_at(&mut state, (ch as f32 + 0.5) * tab_w, y);
+            assert_eq!(state.selected_channel, ch, "{size:?}");
+        }
+    }
+}
+
+#[test]
+fn overview_lanes_divide_the_height() {
+    for size in test_sizes() {
+        let mut state = sized_app(size);
+        state.current_page = DawPage::Overview;
+        let lane_h = (size.height_f32() - CONTENT_Y) / NUM_CHANNELS as f32;
+        for ch in (0..NUM_CHANNELS).rev() {
+            click_at(&mut state, 400.0, CONTENT_Y + (ch as f32 + 0.5) * lane_h);
+            assert_eq!(state.selected_channel, ch, "{size:?}");
+        }
+    }
+}
+
+#[test]
+fn setup_navigation_follows_the_right_edge() {
+    for size in test_sizes() {
+        let mut state = sized_app(size);
+        state.current_page = DawPage::SynthSetup;
+        let y = CONTENT_Y + NAV_BAR_HEIGHT / 2.0;
+        // Just inside the right-hand target, which a fixed 1440 layout
+        // would miss in a wider window and misplace in a narrower one.
+        click_at(&mut state, size.width_f32() - 100.0, y);
+        assert_eq!(state.current_page, DawPage::MonoChain, "{size:?}");
+        click_at(&mut state, size.width_f32() / 2.0, y);
+        assert_eq!(state.current_page, DawPage::MonoChain, "{size:?}");
+    }
+}
+
+#[test]
+fn pedal_picker_is_centred() {
+    for size in test_sizes() {
+        let p = picker_rect(size);
+        assert_eq!(p.x + p.w / 2.0, size.width_f32() / 2.0, "{size:?}");
+        assert_eq!(p.y + p.h / 2.0, size.height_f32() / 2.0, "{size:?}");
+    }
+}
+
+#[test]
+fn piano_roll_fills_the_height() {
+    for size in test_sizes() {
+        let state = sized_app(size);
+        assert_eq!(
+            DawApp::<MemoryPlatform, NullSink>::roll_y() + state.roll_h() + VELOCITY_LANE_HEIGHT,
+            size.height_f32(),
+            "{size:?}"
+        );
+    }
+}
+
+#[test]
+fn a_new_app_uses_the_default_size() {
+    assert_eq!(app().window_size(), WindowSize::DEFAULT);
+    let size = WindowSize::new(1600, 1000).unwrap();
+    assert_eq!(sized_app(size).window_size(), size);
+}
+
+#[test]
+fn toolbar_status_never_starts_over_the_indicators() {
+    for size in test_sizes() {
+        let mut state = sized_app(size);
+        state.metronome_enabled = true;
+        state.transport.loop_enabled = true;
+        state.status_message = Some(String::from("status probe"));
+        let mut rec = Recorder::default();
+        state.render(&mut rec);
+        let met_x = rec.text_x("MET").expect("no MET indicator");
+        let met_w = rec.text_size("MET", FontSize::Medium).0;
+        let status_x = rec.text_x("status probe").expect("no status text");
+        assert!(status_x >= met_x + met_w, "{size:?}: {status_x}");
+        let anchored = size.width_f32() - TOOLBAR_HINT_W;
+        if anchored >= TOOLBAR_HINT_MIN_X {
+            assert_eq!(status_x, anchored, "{size:?}");
+        }
+    }
+}
+
+/// Note audition timing, kept in its own module so that other test
+/// modules can be added at the end of this file without conflict.
+mod audition {
+    use super::*;
+
+    /// A note event as the engine receives it. `EngineCommand` has no
+    /// `PartialEq`, so the sink keeps only the note events, in this form.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum NoteEvent {
+        On { channel: u8, freq: f64 },
+        OffFreq { channel: u8, freq: f64 },
+        Off { channel: u8 },
+    }
+
+    /// A sink that records every note event and discards other commands.
+    #[derive(Default)]
+    struct NoteLog {
+        events: Vec<NoteEvent>,
+    }
+
+    impl CommandSink for NoteLog {
+        fn send(&mut self, cmd: EngineCommand) -> Result<(), EngineCommand> {
+            let event = match cmd {
+                EngineCommand::NoteOn { channel, freq, .. } => NoteEvent::On { channel, freq },
+                EngineCommand::NoteOffFreq { channel, freq } => {
+                    NoteEvent::OffFreq { channel, freq }
+                }
+                EngineCommand::NoteOff { channel } => NoteEvent::Off { channel },
+                _ => return Ok(()),
+            };
+            self.events.push(event);
+            Ok(())
+        }
+    }
+
+    /// A Piano Roll app that records note events, and the y of the piano key
+    /// `keys_down` rows below the top of the visible roll with its frequency.
+    fn audition_app(keys_down: f32) -> (DawApp<MemoryPlatform, NoteLog>, f32, f64) {
+        let mut state = DawApp::new(MemoryPlatform::new(), NoteLog::default(), 48_000);
+        state.current_page = DawPage::PianoRoll;
+        let roll_y = DawApp::<MemoryPlatform, NoteLog>::roll_y();
+        let y = roll_y + (keys_down + 0.5) * NOTE_HEIGHT;
+        let freq = MidiTrack::note_to_freq(state.y_to_pitch(y, roll_y));
+        (state, y, freq)
+    }
+
+    fn click_key(state: &mut DawApp<MemoryPlatform, NoteLog>, y: f32) {
+        let x = PIANO_KEY_WIDTH / 2.0;
+        state.handle_input(DawInput::MouseMove(x, y));
+        state.handle_input(DawInput::Click(x, y));
+        state.handle_input(DawInput::MouseUp(x, y));
+    }
+
+    #[test]
+    fn piano_key_audition_lasts_preview_note_ms() {
+        let (mut state, y, freq) = audition_app(10.0);
+        let on = NoteEvent::On { channel: 0, freq };
+        let off = NoteEvent::OffFreq { channel: 0, freq };
+
+        click_key(&mut state, y);
+        assert_eq!(state.sink_mut().events, [on]);
+
+        // Still sounding one millisecond before the end, through the frame
+        // loop's own entry point.
+        state.platform().advance_ms(PREVIEW_NOTE_MS - 1);
+        state.update();
+        assert_eq!(state.sink_mut().events, [on]);
+
+        state.platform().advance_ms(1);
+        state.update();
+        assert_eq!(state.sink_mut().events, [on, off]);
+
+        // The note is ended once, not on every later frame.
+        state.platform().advance_ms(PREVIEW_NOTE_MS * 3);
+        state.update();
+        assert_eq!(state.sink_mut().events, [on, off]);
+    }
+
+    #[test]
+    fn a_second_audition_ends_the_first_and_restarts_the_duration() {
+        let (mut state, y1, f1) = audition_app(10.0);
+        let (_, y2, f2) = audition_app(20.0);
+        assert_ne!(f1, f2);
+
+        click_key(&mut state, y1);
+        let half = PREVIEW_NOTE_MS / 2;
+        state.platform().advance_ms(half);
+        state.update();
+        click_key(&mut state, y2);
+        let first = [
+            NoteEvent::On {
+                channel: 0,
+                freq: f1,
+            },
+            NoteEvent::OffFreq {
+                channel: 0,
+                freq: f1,
+            },
+            NoteEvent::On {
+                channel: 0,
+                freq: f2,
+            },
+        ];
+        assert_eq!(state.sink_mut().events, first);
+
+        // The first note's deadline passes without ending the second.
+        state.platform().advance_ms(PREVIEW_NOTE_MS - half);
+        state.update();
+        assert_eq!(state.sink_mut().events, first);
+
+        // The second note lasts its own full duration.
+        state.platform().advance_ms(half);
+        state.update();
+        let last = state.sink_mut().events.last().copied();
+        assert_eq!(
+            last,
+            Some(NoteEvent::OffFreq {
+                channel: 0,
+                freq: f2
+            })
+        );
+        assert_eq!(state.sink_mut().events.len(), first.len() + 1);
+    }
+}
+
+/// Layout checks for the Synth Setup and Stereo Chain pages. Each test reads
+/// positions from what was drawn, so it checks the drawing and the hit
+/// testing against each other rather than against pinned coordinates.
+mod layout {
+    use super::*;
+
+    /// The section panels drawn, each found as the border that
+    /// `draw_section_panel` draws just before its title.
+    fn section_panels(rec: &Recorder) -> Vec<(String, Rect)> {
+        rec.drawn
+            .windows(2)
+            .filter_map(|pair| match pair {
+                [Drawn::Shape(r), Drawn::Text(title, x, y)]
+                    if *x == r.x + 8.0 && *y == r.y + 5.0 =>
+                {
+                    Some((title.clone(), *r))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn overlaps(a: &Rect, b: &Rect) -> bool {
+        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    }
+
+    fn assert_disjoint(boxes: &[(String, Rect)], context: &str) {
+        for (i, (name_a, a)) in boxes.iter().enumerate() {
+            for (name_b, b) in &boxes[i + 1..] {
+                assert!(
+                    !overlaps(a, b),
+                    "{context}: {name_a} {a:?} overlaps {name_b} {b:?}"
+                );
+            }
+        }
+    }
+
+    /// Every origin at which `wanted` was drawn, in drawing order.
+    fn text_positions(rec: &Recorder, wanted: &str) -> Vec<(f32, f32)> {
+        rec.drawn
+            .iter()
+            .filter_map(|d| match d {
+                Drawn::Text(t, x, y) if t == wanted => Some((*x, *y)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn rendered(state: &DawApp<MemoryPlatform, NullSink>) -> Recorder {
+        let mut rec = Recorder::default();
+        state.render(&mut rec);
+        rec
+    }
+
+    #[test]
+    fn no_two_synth_setup_panels_overlap() {
+        for size in test_sizes() {
+            let mut state = sized_app(size);
+            state.current_page = DawPage::SynthSetup;
+            let panels = section_panels(&rendered(&state));
+            let titles: Vec<&str> = panels.iter().map(|(t, _)| t.as_str()).collect();
+            for wanted in ["LPF", "GLIDE", "VELOCITY", "MOD MATRIX"] {
+                assert!(titles.contains(&wanted), "{size:?}: {titles:?}");
+            }
+            assert_disjoint(&panels, &format!("{size:?}"));
+        }
+    }
+
+    #[test]
+    fn clicking_glide_enabled_toggles_glide_and_nothing_else() {
+        for size in test_sizes() {
+            let mut state = sized_app(size);
+            state.current_page = DawPage::SynthSetup;
+            let rec = rendered(&state);
+            let glide = section_panels(&rec)
+                .into_iter()
+                .find(|(t, _)| t == "GLIDE")
+                .map(|(_, r)| r)
+                .expect("no GLIDE panel");
+            let (x, y) = text_positions(&rec, "Enabled")
+                .into_iter()
+                .find(|&(x, y)| glide.contains(x, y))
+                .expect("no Enabled row in the GLIDE panel");
+            let before = state.patches[0].clone();
+
+            click_at(&mut state, x + 2.0, y + PARAM_ROW_H / 2.0);
+
+            let after = &state.patches[0];
+            assert_eq!(after.glide_enabled, !before.glide_enabled, "{size:?}");
+            assert_eq!(after.lpf_saturation, before.lpf_saturation, "{size:?}");
+            assert_eq!(after.lpf_resonance, before.lpf_resonance, "{size:?}");
+        }
+    }
+
+    /// A Stereo Chain app with `n` Overdrive pedals on the left chain and `n`
+    /// Chorus pedals on the right, so that each pedal's name says its chain.
+    fn stereo_app(size: WindowSize, n: usize) -> DawApp<MemoryPlatform, NullSink> {
+        let mut state = sized_app(size);
+        for _ in 0..n {
+            state.add_pedal_to_chain(1, "Overdrive");
+            state.add_pedal_to_chain(2, "Chorus");
+        }
+        state.status_message = None;
+        state.current_page = DawPage::StereoChain;
+        state
+    }
+
+    /// The box of each pedal drawn with display name `name`, found from the
+    /// name that `draw_pedal_box` draws 6 pixels in and 4 down.
+    fn pedal_boxes(rec: &Recorder, name: &str, pedals: &[PedalConfig]) -> Vec<(String, Rect)> {
+        text_positions(rec, name)
+            .into_iter()
+            .zip(pedals)
+            .map(|((x, y), p)| {
+                (
+                    String::from(name),
+                    Rect::new(x - 6.0, y - 4.0, PEDAL_W, pedal_h(p)),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn each_stereo_chain_stays_in_its_own_column() {
+        for size in test_sizes() {
+            let n = 5;
+            let state = stereo_app(size, n);
+            let rec = rendered(&state);
+            let cols = state.stereo_chain_columns(CONTENT_Y);
+            let fx = &state.effects[0];
+            let left_name = pedal_display_name(&fx.post_pedals_left[0].pedal_type);
+            let right_name = pedal_display_name(&fx.post_pedals_right[0].pedal_type);
+            let left = pedal_boxes(&rec, &left_name, &fx.post_pedals_left);
+            let right = pedal_boxes(&rec, &right_name, &fx.post_pedals_right);
+            assert_eq!((left.len(), right.len()), (n, n), "{size:?}");
+
+            let cards: Vec<(String, Rect)> = text_positions(&rec, "Add effect")
+                .into_iter()
+                .map(|(x, y)| {
+                    let card = Rect::new(x - 22.0, y - 40.0, ADD_CARD_W, ADD_CARD_H);
+                    (String::from("add card"), card)
+                })
+                .collect();
+            assert_eq!(cards.len(), 2, "{size:?}");
+
+            let columns = [
+                (cols.left_x, &left, &cards[0]),
+                (cols.right_x, &right, &cards[1]),
+            ];
+            for (x0, boxes, card) in columns {
+                let x1 = x0 + cols.width;
+                for (name, r) in boxes.iter().chain([card]) {
+                    assert!(
+                        r.x >= x0 && r.x + r.w <= x1 && r.y >= cols.pedals_y,
+                        "{size:?}: {name} {r:?} is outside {x0}..{x1}"
+                    );
+                }
+            }
+            let all: Vec<(String, Rect)> = left.into_iter().chain(right).chain(cards).collect();
+            assert_disjoint(&all, &format!("{size:?}"));
+        }
+    }
+
+    #[test]
+    fn a_wrapped_pedal_is_hit_where_it_is_drawn() {
+        let size = WindowSize::MIN;
+        let mut state = stereo_app(size, 5);
+        // Orbital mode makes the positional stage tallest, which parameter
+        // lookup once ignored.
+        state.effects[0].orbital_enabled = true;
+        let rec = rendered(&state);
+        let fx = &state.effects[0];
+        let name = pedal_display_name(&fx.post_pedals_left[0].pedal_type);
+        let boxes = pedal_boxes(&rec, &name, &fx.post_pedals_left);
+        let last = boxes.len() - 1;
+        let (_, first_box) = boxes[0];
+        let (_, wrapped) = boxes[last];
+        assert!(wrapped.y > first_box.y, "the chain did not wrap");
+
+        // A parameter bar of the wrapped pedal, then a click on its box.
+        let bar_y = wrapped.y + PEDAL_HEADER_H + PARAM_ROW_H / 2.0;
+        let mid_x = wrapped.x + PEDAL_W / 2.0;
+        let found = state.find_pedal_param_at(mid_x, bar_y, CONTENT_Y);
+        assert_eq!(found.map(|f| (f.0, f.1, f.2)), Some((1, last, 0)));
+
+        click_at(&mut state, wrapped.x + 2.0, wrapped.y + 2.0);
+        assert_eq!(state.selected_pedal, Some((1, last)));
+    }
+}

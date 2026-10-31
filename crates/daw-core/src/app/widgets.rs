@@ -220,9 +220,47 @@ pub(super) fn pedal_led(px: f32, py: f32) -> Rect {
     Rect::new(px + PEDAL_W - 20.0, py + 4.0, 16.0, 16.0)
 }
 
-/// The "Add effect" card after the last of `count` pedals.
-pub(super) fn add_card(start_x: f32, y: f32, count: usize) -> Rect {
-    Rect::new(pedal_x(start_x, count), y, ADD_CARD_W, ADD_CARD_H)
+/// Slots in one row of a chain `width` wide. Each slot holds a pedal and the
+/// connection arrow after it, so a full row never reaches past `width`. A
+/// chain narrower than one slot still gets one slot per row and overflows to
+/// the right. An infinite width saturates the conversion, which gives a
+/// single row, as the sideways scrolling Studio rack needs.
+pub(super) fn pedals_per_row(width: f32) -> usize {
+    ((width / (PEDAL_W + PEDAL_GAP)) as usize).max(1)
+}
+
+/// Top left corner of slot `idx` in a chain that starts at (`start_x`, `y`)
+/// and wraps into rows no wider than `width`. Slot `pedals.len()` holds the
+/// "Add effect" card. A row is as tall as its tallest pedal, so a tall pedal
+/// never runs into the row below.
+///
+/// The chain pages once laid every chain out in a single row, so on Stereo
+/// Chain the left chain ran into the right one from its third pedal on.
+/// Drawing and both hit tests use this, so they cannot disagree.
+pub(super) fn chain_slot(
+    start_x: f32,
+    y: f32,
+    width: f32,
+    pedals: &[PedalConfig],
+    idx: usize,
+) -> (f32, f32) {
+    let per_row = pedals_per_row(width);
+    let row = idx / per_row;
+    let mut row_y = y;
+    // Every row above slot `idx` is full, so each slice is in bounds, and the
+    // loop runs once per row.
+    for first in (0..row).map(|r| r * per_row) {
+        let last = (first + per_row).min(pedals.len());
+        let tallest = pedals[first..last].iter().map(pedal_h).fold(0.0, f32::max);
+        row_y += tallest + PEDAL_GAP;
+    }
+    (pedal_x(start_x, idx % per_row), row_y)
+}
+
+/// The "Add effect" card at the end of a chain laid out by `chain_slot`.
+pub(super) fn chain_add_card(start_x: f32, y: f32, width: f32, pedals: &[PedalConfig]) -> Rect {
+    let (x, y) = chain_slot(start_x, y, width, pedals, pedals.len());
+    Rect::new(x, y, ADD_CARD_W, ADD_CARD_H)
 }
 
 /// A pedal type name such as `PitchCorrector` with spaces between words.
@@ -243,29 +281,36 @@ pub(super) fn pedal_display_name(pedal_type: &str) -> String {
 /// an "Add effect" card.
 ///
 /// `selected_idx` is the index of the selected pedal within this chain, if any.
+/// The chain wraps into rows no wider than `width`, as `chain_slot` places them.
 pub(super) fn draw_pedal_chain<R: Renderer>(
     renderer: &mut R,
     x: f32,
     y: f32,
+    width: f32,
     pedals: &[PedalConfig],
     accent: Color,
     selected_idx: Option<usize>,
 ) {
+    let per_row = pedals_per_row(width);
     for (i, pedal) in pedals.iter().enumerate() {
-        let px = pedal_x(x, i);
+        let (px, py) = chain_slot(x, y, width, pedals, i);
         let h = pedal_h(pedal);
-        draw_pedal_box(renderer, px, y, h, pedal, accent, selected_idx == Some(i));
+        draw_pedal_box(renderer, px, py, h, pedal, accent, selected_idx == Some(i));
 
-        // Connection line to the next pedal, or to the add card.
-        let line_y = y + PEDAL_HEADER_H / 2.0;
-        let x1 = px + PEDAL_W;
-        let x2 = x1 + PEDAL_GAP;
-        renderer.draw_hline(x1, x2, line_y, accent);
-        renderer.draw_hline(x2 - 8.0, x2 - 4.0, line_y - 2.0, accent);
-        renderer.draw_hline(x2 - 8.0, x2 - 4.0, line_y + 2.0, accent);
+        // Connection line to the next pedal, or to the add card, when that
+        // is on the same row. A line at the end of a row would point at
+        // nothing.
+        if (i + 1) % per_row != 0 {
+            let line_y = py + PEDAL_HEADER_H / 2.0;
+            let x1 = px + PEDAL_W;
+            let x2 = x1 + PEDAL_GAP;
+            renderer.draw_hline(x1, x2, line_y, accent);
+            renderer.draw_hline(x2 - 8.0, x2 - 4.0, line_y - 2.0, accent);
+            renderer.draw_hline(x2 - 8.0, x2 - 4.0, line_y + 2.0, accent);
+        }
     }
 
-    let card = add_card(x, y, pedals.len());
+    let card = chain_add_card(x, y, width, pedals);
     renderer.fill_rect(card.x, card.y, card.w, card.h, colors::NAV_BUTTON);
     renderer.draw_rect(card.x, card.y, card.w, card.h, accent);
     renderer.draw_text("+", card.x + 52.0, card.y + 6.0, FontSize::Large, accent);
@@ -356,35 +401,32 @@ pub(super) fn draw_pedal_box<R: Renderer>(
     }
 }
 
-/// Map pedal parameter names to reasonable display ranges.
-/// Find a pedal parameter bar at the given mouse position within a single chain.
-#[allow(clippy::too_many_arguments)]
+/// Find a pedal parameter bar at the given mouse position within a single
+/// chain laid out by `chain_slot`.
 pub(super) fn find_pedal_param_in_chain(
     mx: f32,
     my: f32,
     pedals_y: f32,
     start_x: f32,
+    width: f32,
     pedals: &[PedalConfig],
-    pedal_w: f32,
-    pedal_gap: f32,
-    header_h: f32,
     chain_id: u8,
 ) -> Option<(u8, usize, usize, f64, f64)> {
-    let mut px = start_x;
     for (pedal_idx, pedal) in pedals.iter().enumerate() {
-        let param_start_y = pedals_y + header_h;
+        let (px, top) = chain_slot(start_x, pedals_y, width, pedals, pedal_idx);
+        let param_start_y = top + PEDAL_HEADER_H;
         for (param_idx, param) in pedal.params.iter().enumerate() {
             let py = param_start_y + param_idx as f32 * PARAM_ROW_H;
-            if hit_row(mx, my, px, py, pedal_w) {
+            if hit_row(mx, my, px, py, PEDAL_W) {
                 let (min, max) = pedal_param_range(&param.name);
                 return Some((chain_id, pedal_idx, param_idx, min, max));
             }
         }
-        px += pedal_w + pedal_gap;
     }
     None
 }
 
+/// Map pedal parameter names to reasonable display ranges.
 pub(super) fn pedal_param_range(name: &str) -> (f64, f64) {
     match name {
         "mix" | "tone" | "depth" | "sensitivity" | "warmth" | "position" | "threshold"
@@ -612,10 +654,10 @@ const PICKER_CATEGORY_H: f32 = 26.0;
 pub(super) const PICKER_ITEM_H: f32 = 40.0;
 
 /// The pedal picker overlay, centred in the window.
-pub(super) fn picker_rect() -> Rect {
+pub(super) fn picker_rect(window: WindowSize) -> Rect {
     Rect::new(
-        (WINDOW_WIDTH as f32 - PICKER_W) / 2.0,
-        (WINDOW_HEIGHT as f32 - PICKER_H) / 2.0,
+        (window.width_f32() - PICKER_W) / 2.0,
+        (window.height_f32() - PICKER_H) / 2.0,
         PICKER_W,
         PICKER_H,
     )
@@ -632,8 +674,8 @@ fn picker_row_h() -> f32 {
 }
 
 /// Header of category `cat` in the picker grid.
-pub(super) fn picker_category_rect(cat: usize) -> Rect {
-    let p = picker_rect();
+pub(super) fn picker_category_rect(window: WindowSize, cat: usize) -> Rect {
+    let p = picker_rect(window);
     let col = cat % PICKER_COLUMNS;
     let row = cat / PICKER_COLUMNS;
     Rect::new(
@@ -645,8 +687,8 @@ pub(super) fn picker_category_rect(cat: usize) -> Rect {
 }
 
 /// Item `item` of category `cat` in the picker grid.
-pub(super) fn picker_item_rect(cat: usize, item: usize) -> Rect {
-    let c = picker_category_rect(cat);
+pub(super) fn picker_item_rect(window: WindowSize, cat: usize, item: usize) -> Rect {
+    let c = picker_category_rect(window, cat);
     Rect::new(
         c.x,
         c.y + PICKER_CATEGORY_H + item as f32 * PICKER_ITEM_H,
@@ -656,7 +698,7 @@ pub(super) fn picker_item_rect(cat: usize, item: usize) -> Rect {
 }
 
 /// The pedal type under the mouse in the picker, if any.
-pub(super) fn picker_item_at(mx: f32, my: f32) -> Option<&'static str> {
+pub(super) fn picker_item_at(window: WindowSize, mx: f32, my: f32) -> Option<&'static str> {
     PEDAL_TYPES
         .iter()
         .enumerate()
@@ -664,7 +706,7 @@ pub(super) fn picker_item_at(mx: f32, my: f32) -> Option<&'static str> {
             types
                 .iter()
                 .enumerate()
-                .find(|(item, _)| picker_item_rect(cat, *item).contains(mx, my))
+                .find(|(item, _)| picker_item_rect(window, cat, *item).contains(mx, my))
                 .map(|(_, name)| *name)
         })
 }

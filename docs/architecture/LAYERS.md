@@ -73,11 +73,15 @@ binary configures the engine from the loaded project before starting it, and kee
 - **Playback of composed songs is not shared.** `volaw-audio` exposes the engine and its
   command queue. Scheduling a saved project's notes lives in `DawApp`, so the game
   cannot yet play a DAW project without reimplementing it.
-- **`DawApp` is split by concern, but two modules are still large.** On 2026-10-30 the
-  former `app.rs` became the `app` module, with `mod.rs` for state and playback,
-  `handlers.rs` for input and editing, `render.rs` for drawing, `widgets.rs` for shared
-  drawing and layout helpers, and `studio.rs` for the Studio page. `handlers.rs` holds
-  about 2,500 lines and `render.rs` about 1,600, and splitting them per page is
-  technical debt.
-- **The layout assumes a 1440 by 900 window.** `WINDOW_WIDTH` and `WINDOW_HEIGHT` are
-  constants in `daw-core`, as they were in the binary.
+- **`DawApp` is split by page.** The `app` module keeps state and playback in `mod.rs`,
+  shared drawing and layout helpers in `widgets.rs`, and one module per page, which
+  holds that page's drawing and input handling. These are `studio.rs`, `piano_roll.rs`,
+  `overview.rs`, `synth_setup.rs` and `chains.rs`, which serves both chain pages.
+  `handlers.rs` and `render.rs` keep only the dispatch and what several pages share.
+  `mod.rs` is still about 1,200 lines.
+- **The layout follows a window size fixed at startup.** `DawApp` holds a `WindowSize`
+  that drawing and hit testing both read, bounded from 1280 by 800 to 7680 by 4320, and
+  the binary takes it from `--window-size`. Resizing a running window is not supported,
+  because the window is created without the resizable flag and no resize event reaches
+  `DawApp`. Many controls sit at fixed offsets from the left, so a wider window adds
+  room on the right rather than scaling the controls.
